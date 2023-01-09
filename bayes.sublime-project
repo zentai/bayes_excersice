@@ -1,0 +1,24 @@
+{
+	"settings": {
+     "python_interpreter": "/opt/anaconda3/envs/fintech/bin/python",
+ 	},
+	"folders": [
+		{
+			"path": ".",
+		},
+	],
+	"debugger_configurations": [
+		{
+			"name": "Python",
+			"type": "python",
+			"request": "launch",
+			"program": "${project_path}/bayes_excercise.py",
+		},
+		{
+			"name": "Python (multiprocess)",
+			"type": "python",
+			"request": "launch",
+			"program": "${project_path}/multiprocess.py",
+		},
+	],
+}
