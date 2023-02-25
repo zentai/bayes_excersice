@@ -4,10 +4,97 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 import functools
-from bayes import conditional, prob
+from bayes import conditional, prob, odd, prob_odd
 
 
-def enricment_turtle(df, upper_sample=20, lower_sample=10, ATR_sample=20):
+def build_bollinger_band(df, mv):
+    bollinger_config = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    def boll_statis(df, col_name, bollinger_config, mv):
+        boll_df = pd.DataFrame()
+        for std_ratio in bollinger_config:
+            if col_name == 'BBL':
+                shifted = df.Close.shift(1).rolling(mv)
+                boll_df[str(std_ratio)] = df.Close <= (shifted.mean() - (shifted.std() * std_ratio))
+            elif col_name == 'BBH':
+                shifted = df.Close.shift(1).rolling(mv)
+                boll_df[str(std_ratio)] = df.Close >= (shifted.mean() + (shifted.std() * std_ratio))
+        df[col_name] = boll_df.sum(axis=1)
+        return df
+
+    boll_statis(df, 'BBL', bollinger_config, mv)
+    boll_statis(df, 'BBH', bollinger_config, mv)
+    return df
+
+
+def calc_likelihood(s_profit, s_loss, s_signal):
+
+    s_profit = s_profit & s_signal
+    s_loss = s_loss & s_signal
+
+    # _proft_count = (s_profit & s_signal).sum()
+    # _loss_count = (s_loss & s_signal).sum()
+    # _signal_count = len(s_signal)
+    # w = (_proft_count+_loss_count)/_signal_count
+
+    _p_prof_v_signal = conditional(s_profit, s_signal)
+    _p_loss_v_signal = conditional(s_loss, s_signal)
+
+
+    if not (_p_prof_v_signal or _p_loss_v_signal):
+        # print(f'0/0 = {_p_prof_v_signal} / {_p_loss_v_signal}')
+        return 1, _p_prof_v_signal, _p_loss_v_signal
+    if _p_prof_v_signal and not _p_loss_v_signal:    # x/0
+        # print(f'{_p_prof_v_signal+0.1} / 1 = {(_p_prof_v_signal+0.1) / 1}')
+        return (_p_prof_v_signal+0.1) / 1, _p_prof_v_signal, _p_loss_v_signal
+
+    if not _p_prof_v_signal and _p_loss_v_signal:    # 0/x
+        # print(f'1 / {_p_loss_v_signal+0.1} = {1/(_p_loss_v_signal+0.1)}')
+        return 1 / (_p_loss_v_signal+0.1), _p_prof_v_signal, _p_loss_v_signal
+
+    return _p_prof_v_signal / _p_loss_v_signal, _p_prof_v_signal, _p_loss_v_signal
+
+
+class BuySignalCenter:
+    def __init__(self, df):
+        self._df = df.copy()
+        self._book = {}
+        self._signals = {}
+
+    def register_signal(self, name, s_signal):
+        self._signals[name] = s_signal
+        for d in self._df[s_signal].Date.values:
+            if d not in self._book:
+                self._book[d] = []
+            self._book[d].append((name, s_signal))
+
+
+    def signals(self, date):
+        return self._book.get(date, [])
+
+
+    def plot_performance(self):
+        self._df['Date'] = pd.to_datetime(self._df.Date)
+        plt.plot(self._df.Date, self._df.Close)
+        for name, s_signal in self._signals.items():
+            buy_dates = self._df.loc[s_signal, 'Date']
+            sell_date = self._df.loc[s_signal, 'Matured']
+            plt.scatter(buy_dates, self._df.loc[s_signal, 'buy'], marker='^', s=100, color='green', label='B')
+            plt.scatter(sell_date, self._df.loc[s_signal, 'sell'], marker='v', s=100, color='red', label='S')
+        plt.legend(loc='best')
+        plt.xlabel('Date')
+        plt.show()
+
+
+def kelly_formular(pwin, loss_margin, profit_margin):
+    if loss_margin and profit_margin:
+        _pwin = pwin / loss_margin
+        _ploss = (1 - pwin) / profit_margin
+        return (_pwin - _ploss) / _pwin if _pwin > _ploss else 0
+    return 0
+
+
+def enrich_turtle(df, upper_sample=20, lower_sample=10, ATR_sample=20):
     # print(upper_sample, lower_sample, ATR_sample)
     tt_df = pd.DataFrame()
     tt_df.loc[:, 'Date'] = df.Date
@@ -25,26 +112,27 @@ def enricment_turtle(df, upper_sample=20, lower_sample=10, ATR_sample=20):
     return df
 
 
-def turtle_sell_strategy(df, upper_sample=20, lower_sample=10, ATR_sample=20):
-    df = enricment_turtle(df, upper_sample, lower_sample, ATR_sample)
+def turtle_sell_strategy(df, upper_sample=20, lower_sample=10, ATR_sample=20, stop_loss=0.95):
+    df = enrich_turtle(df, upper_sample, lower_sample, ATR_sample)
 
     sell = []
     time_cost = []
     for i, _v in enumerate(zip(df.buy.values, df.ATR.values)):
         buy, buy_atr = _v
         buy_atr = buy_atr * 2
+        _stop_loss = buy * stop_loss
 
         sell_point = None
         days = None
         for j, v in enumerate(zip(df.Close.values[i+1:], df.turtle_l.values[i+1:], df.ATR.values[i+1:])):
             _close, _turtle_low, _atr = v
-            sell_point, days = (_close, j) if (_atr > buy_atr) or (_close < _turtle_low) else (None, None)
+            sell_point, days = (_close, j) if (_atr > buy_atr) or (_close < _turtle_low) or (_close <= _stop_loss)else (None, None)
             if sell_point:
                 break
 
         if sell_point:
             sell.append(sell_point)
-            time_cost.append(max(days, 0.5))
+            time_cost.append(days+1)
         else:
             sell.append(None)
             time_cost.append(None)
@@ -82,27 +170,36 @@ def enrichment_daily_profit(df, func_sell_strategy):
     sell, time_cost = func_sell_strategy(df)
     df.loc[:, 'sell'] = sell
     df.loc[:, 'time_cost'] = time_cost
+    df.loc[:, 'Matured'] = pd.to_datetime(df.Date) + pd.to_timedelta(df.time_cost, 'd')
     df.loc[:, 'profit'] = (df.sell / df.buy) - 1
-    return df
 
+    # vol_rank = df['Volume'].rolling(window=vol_level).apply(lambda x: list(pd.Series(x).rank(pct=False))[-1], raw=False)
+    # df.loc[:, 'vol_rank'] = vol_rank
+    return df
 
 
 class Strategy(object):
 
 
-    def __init__(self, df, func_sell_strategy=None):
+    def __init__(self, df, mv, func_sell_strategy=None):
         func_sell_strategy = (func_sell_strategy
                                 or functools.partial(turtle_sell_strategy,
-                                                     upper_sample=14,
-                                                     lower_sample=7,
-                                                     ATR_sample=14))
+                                                     upper_sample=34,
+                                                     lower_sample=6,
+                                                     ATR_sample=60))
         # func_sell_strategy = (func_sell_strategy
         #                         or functools.partial(grid_sell_strategy,
         #                                              stop_loss=1-loss_margin,
         #                                              take_profit=1+profit_margin)
         self.df = enrichment_daily_profit(df, func_sell_strategy)
-        self.profit = df.profit > 0
-        self.tt_buy = (df.Close > df.turtle_h)
+        self.df = build_bollinger_band(self.df, mv)
+
+        # create SignalCenter to backtest
+        self._signal_center = BuySignalCenter(self.df)
+
+
+    def register_signal(self, name, s_signal):
+        self._signal_center.register_signal(name, s_signal)
 
 
     def dataset(self, name):
@@ -147,132 +244,201 @@ class Strategy(object):
         df_sub.to_csv('df_%s.csv'%name, index=False)
 
 
-    def bayes_table(self):
-        r = []
-        profit = self.profit
-        for name in self.names():
-            r.append([name, conditional(self.cond(name), profit), prob(self.cond(name)), prob(profit)])
+    def kelly_table(self, prior=0.5, rolling=180, debug_winrate=False):
+        df = self.df
 
-        rx = pd.DataFrame(r, columns=['Key', 'P(D|profit)', 'P(D)', 'prior'])
-        rx['likelihood'] = rx['P(D|profit)']/rx['P(D)']
-        rx['posterior'] = prob(profit) * rx['likelihood']
-        return rx
+        _prior = odd(prior)
+
+        _rs = []
+        _desc = []
+        for today in sorted(self._signal_center._book.keys()):
+            _i = max(df.loc[df.Date==today].index)
+
+            _start_day = df.Date > df.iloc[max(_i-rolling, 0)].Date
 
 
-    def kelly_table(self, fund):
-        rx = self.bayes_table()
-        pwin = rx['posterior']
-        plose = 1 - pwin    
-        loss = loss_margin
-        profit = profit_margin
-        rx['kelly(f)'] = ((pwin/loss - plose/profit)+20)/40
-        rx['Invest'] = fund * rx['kelly(f)']
-        # print('Stop loss/Take profit: (%s, %s)' % (loss, profit))
-        # print('--' * 30)
-        return rx
+            _fundamental = list(df.loc[_i, ['Close', 'buy', 'sell', 'time_cost', 'profit', 'Matured']].values)
+
+            s_matured = (df.Matured <= today) & _start_day
+            s_eod = (df.Date <= today) & _start_day
+            s_profit = s_matured & (df.profit > 0)
+            s_loss = s_eod & ~s_profit
+
+            _likelihood = 1
+            _max_drawdown = []
+            _mean_profit = []
+            a = [''] * 12
+            # mix strategys likelihood
+            for name, s_signal in self._signal_center.signals(today):
+                _like, _p_prof_v_signal, _p_loss_v_signal = calc_likelihood(s_profit, s_loss, s_signal & s_eod)
+
+                # please consider migrate into calc_likelihood
+                _proft_count = (s_profit & s_signal & s_eod).sum()
+                _loss_count = (s_loss & s_signal & s_eod).sum()
+                _signal_count = s_eod.sum()
+                w = (_proft_count+_loss_count)/100
+
+                # weight = min(_like, 1)
+                # # print(f'[calc_likelihood] Like: {_like}, W:{weight}, Prior: {_prior} -> {_prior * weight + (1 - weight) * 0.05} ')
+                # _prior = _prior * weight + (1 - weight) * 0.05            # Bayesian smoothing # 权重，越接近 1 表示越相信后验概率，越接近 0 表示越相信先验概率
+
+                _estimate_profit = np.nanmin([df[s_profit & s_signal].profit.mean(), df[s_profit].profit.mean()])
+                _mean_profit.append(_estimate_profit)
+
+                _estimate_loss = _estimate_profit = np.nanmin([df[s_loss & s_signal].profit.min(), df[s_loss].profit.min()])
+                _max_drawdown.append(_estimate_loss)
+                _desc.append([name, _like, _p_prof_v_signal, _p_loss_v_signal])
+                print(f'==>>{name}')
+                if name == 'Turtle Trading':
+                    a[0] = name
+                    a[1] = _like
+                    a[2] = _p_prof_v_signal
+                    a[3] = _p_loss_v_signal
+                elif name == 'Hit':
+                    a[4] = _like
+                    a[5] = w
+                    a[6] = _like * w
+                    a[7] = (s_profit & s_signal & s_eod).sum()
+                    a[8] = (s_loss & s_signal & s_eod).sum()
+                    a[9] = (s_signal).sum()
+                    a[10] = (s_signal & s_matured).sum()
+
+
+                else:
+                    # a[8] = 'Winning Count'
+                    # a[9] = _like
+                    # a[10] = (s_profit & s_signal & s_eod).sum()
+                    a[11] = (s_loss & s_signal & s_eod).sum()
+                # print(f'[likelihood update] Like: {_likelihood} * {_like} -> {_likelihood * _like}  [{_p_prof_v_signal:.2f}/{_p_loss_v_signal:.2f}]')
+                # _likelihood *= _like * w
+                _posterior = _prior * _like * w
+
+            # print(f'[_posterior update] Posterior: {_prior} * {_likelihood} = {_prior * _likelihood}')
+            # _posterior = _prior * _likelihood
+
+            _max_drawdown = abs(np.min(_max_drawdown)) if _max_drawdown else 1
+            _mean_profit = np.mean(_mean_profit) if _mean_profit else 1
+
+            _kelly_f = kelly_formular(pwin=prob_odd(_posterior), loss_margin=_max_drawdown, profit_margin=_mean_profit)
+            # print(f'[{today}] kelly(pwin={prob_odd(_posterior)}, loss={_max_drawdown}, porifit={_mean_profit}) = {_kelly_f}')
+
+
+            # log
+            _rs.append([today] + _fundamental + [prob_odd(_prior), _likelihood, prob_odd(_posterior), _kelly_f] + a)
+
+            # update
+            _prior = _posterior
+
+        _kelly_df = pd.DataFrame(_rs, columns=['Date', 'Close', 'buy', 'sell', 'time_cost', 'profit', 'Matured', 'Prior', 'Likelihood', 'Posterior', 'kelly(f)', 'ttl_name', 'ttl_like', 'ttl_p_prof_v_signal', 'ttl_p_loss_v_signal','lit_name', 'lit_like', 'lit_p_prof_v_signal', 'lit_p_loss_v_signal','hit_name', 'hit_like', 'hit_p_prof_v_signal', 'hit_p_loss_v_signal'])
+        if debug_winrate:
+            pd.DataFrame(_desc, columns=['s_signal', 'likelihood', 'win', 'loss']).to_csv('win_rate.csv', index=False)
+            _kelly_df.to_csv('dynamic_kelly.csv', index=False)
+            print('Build: dynamic_kelly.csv')
+            print('Build: win_rate.csv')
+            self._signal_center.plot_performance()
+        return _kelly_df
 
 
 def split_train_test(df, ratio):
     train_df = df.index < int(len(df) * ratio)
     test_df = ~train_df
-    return df[train_df], df[test_df]
+    return df[train_df].reset_index(drop=True), df[test_df].reset_index(drop=True)
 
 
 def weighted_daily_return(df_subset):
-    total_time_cost = df_subset['time_cost'].sum()
+    total_time_cost = df_subset['time_cost'].sum() or 1
     weighted_return = np.sum((1 + df_subset['profit']) ** (1 / df_subset['time_cost']) * df_subset['time_cost'])
     wd_return = (weighted_return / total_time_cost) - 1
-    return wd_return
+    return total_time_cost, wd_return
 
 
-def back_test(test_name, strategy_obj, kelly_df, initial_fund=1000, breakdown=[]):
+def back_test(test_name, strategy_obj, prior, rolling=180, initial_fund=1000, breakdown=False):
     s = strategy_obj
-    total_profit = 0
     total_cost = 0
     total_sample = 0
+    total_profit = 0
+
+    kelly_df = s.kelly_table(prior=prior, rolling=rolling, debug_winrate=breakdown)
     kelly_df.fillna(0, inplace=True)
-    funding_distribution = dict(zip(kelly_df.Key, kelly_df['kelly(f)']))
+
     r = []
 
     annualized_returns = 0
     w_daily_return = 0
-    for name, pct in funding_distribution.items():
-        if name == 'profit':
-            continue
-        if not pct:
-            continue
 
-        total_fund = initial_fund
-        df_subset = s.dataset(name)
+    total_fund = initial_fund
+    breakdown_rows = []
+    future_profits = {}
 
-        df_subset = df_subset[df_subset.sell > 0]
-        breakdown_rows = []
-        future_profits = {}
-        total_profit = 0
-        for d, _profit, _time_cost in zip(df_subset.Date.values, df_subset.profit.values, df_subset.time_cost.values):
+    for d, _close, _profit, _time_cost, pct in kelly_df[['Date', 'Close', 'profit', 'time_cost', 'kelly(f)']].values:
+        d = pd.to_datetime(d)
+        # fetch profit for Matured date deals.
+        matured_date = [ fd for fd in future_profits.keys() if fd <= d ]
+        today_profit = sum([sum(future_profits.pop(d)) for d in matured_date])
 
-            d = pd.to_datetime(d)
-
-            # fetch profit for Matured date deals.
-            matured_date = [ fd for fd in future_profits.keys() if fd <= d ]
-            today_profit = sum([sum(future_profits.pop(d)) for d in matured_date])
-
-            total_fund = total_fund + today_profit
-            investable_fund = total_fund
-            # Only invest when we have enough fund.
-            if total_fund >= 10:
-
-                # Calculate bet amount
-                _invest, _keep = total_fund * pct, total_fund * (1-pct)
-
+        total_fund = total_fund + today_profit
+        investable_fund = total_fund
+        # Only invest when we have enough fund.
+        if total_fund >= 10:
+            # Calculate bet amount
+            _invest, _keep = total_fund * pct, total_fund * (1-pct)
+            if _invest:
                 # register future profit
                 future_date = d + pd.DateOffset(days=_time_cost)
                 if future_date not in future_profits:
                     future_profits[future_date] = []
                 future_profit = _invest * (1 + _profit)
                 future_profits[future_date].append(future_profit)
+            else:
+                # No invest due to no confidence
+                _invest = 0
+                future_date = None
+                future_profit = None
+                _profit = None
+        else:
+            # No invest due to out of money
+            _invest = 0
+            future_date = None
+            future_profit = None
+            _profit = None
 
-            total_fund = _keep
-            future_date = future_date or "No Invest"
-            future_profit = future_profit or 0
-            breakdown_rows.append([d, today_profit, investable_fund, _invest,
-                                   _profit, future_profit, future_date,
-                                   total_fund])
+        total_fund = _keep
+        future_date = future_date
+        future_profit = future_profit
+        breakdown_rows.append([d, _close, today_profit, investable_fund, _invest,
+                               _profit, future_profit, future_date,
+                               total_fund])
 
+    # added unclaim Matured profit back if any.
+    if future_profits:
+        profit_date = [ fd for fd in future_profits.keys() ]
 
-        # added unclaim Matured profit back if any.
-        if future_profits:
-            profit_date = [ fd for fd in future_profits.keys() ]
+        today_profit = 0
+        d = None
+        for fd in profit_date:
+            d = fd
+            f_profit = sum(future_profits.pop(fd))
+            today_profit += f_profit
+        total_fund = total_fund + today_profit
+        breakdown_rows.append([d, None, today_profit, None, None, None, None, None, total_fund])
 
-            today_profit = 0
-            d = None
-            for fd in profit_date:
-                d = fd
-                f_profit = sum(future_profits.pop(fd))
-                today_profit += f_profit
-            total_fund = total_fund + today_profit
-            breakdown_rows.append([d, today_profit, None, None, None, None, None, total_fund])
+    if breakdown:
+        bdown_df = pd.DataFrame(breakdown_rows, columns=['Date', 'Close', 'Paid', 'Investable Fund', 'Invest', 'F.Profit', 'F.ProfitAmount', 'F.paydate', 'Total_fund'])
+        bdown_df.to_csv(f'simulate_transaction.csv', index=False)
+        print(f'Build: simulate_transaction.csv')
 
-        if name in breakdown:
-            bdown_df = pd.DataFrame(breakdown_rows, columns=['Date', 'Paid', 'Investable Fund', 'Invest', 'F.Profit', 'F.ProfitAmount', 'F.paydate', 'Total_fund'])
-            bdown_df.to_csv(f'breakdown_{name}.csv', index=False)
-
-        sample = len(df_subset)
-        cost = initial_fund
-        profit = total_fund - cost
-        profit_ratio = profit/initial_fund
-
-        w_daily_return = weighted_daily_return(df_subset)
-        time_cost = df_subset.time_cost.sum()
-        total_profit += profit
-        total_cost += cost
-        total_sample += sample
-        avg_time_cost = time_cost/sample if sample else 0
-        avg_profit = profit/sample if sample else 0
-        drawdown = df_subset.profit.min()
-        upper_sample, lower_sample, ATR_sample = test_name.split('_')[1:]
-        r.append([test_name, upper_sample, lower_sample, ATR_sample, profit, cost, profit/cost if cost != 0 else 0, time_cost, sample, avg_time_cost, avg_profit, drawdown])
-    profit_table = pd.DataFrame(r, columns=['Cond', 'upper_sample', 'lower_sample', 'ATR_sample', 'Profit', 'Cost', 'ProfitRatio', 'Timecost', 'Sample', 'Avg.Timecost', 'Avg.Profit', 'Drawdown'])
+    sample = len(kelly_df)
+    profit_sample = len(kelly_df[kelly_df.profit > 0])
+    cost = initial_fund
+    profit = total_fund - cost
+    profit_ratio = profit/initial_fund
+    time_cost, w_daily_return = weighted_daily_return(kelly_df)
+    avg_time_cost = time_cost/sample if sample else 0
+    avg_profit = profit/sample if sample else 0
+    drawdown = kelly_df.profit.min()
+    upper_sample, lower_sample, ATR_sample = test_name.split('_')[1:]
+    r.append([test_name, upper_sample, lower_sample, ATR_sample, profit, cost, profit/cost if cost != 0 else 0, time_cost, sample, profit_sample, avg_time_cost, avg_profit, drawdown])
+    profit_table = pd.DataFrame(r, columns=['Cond', 'upper_sample', 'lower_sample', 'ATR_sample', 'Profit', 'Cost', 'ProfitRatio', 'Timecost', 'Sample', 'ProfitSample', 'Avg.Timecost', 'Avg.Profit', 'Drawdown'])
 
 
 
@@ -282,46 +448,8 @@ def back_test(test_name, strategy_obj, kelly_df, initial_fund=1000, breakdown=[]
     # print('=' * 100)
     return profit_table, w_daily_return
 
-
 loss_margin = 0.05
 profit_margin = 0.05
-
-if __name__ == '__main__':
-    pd.set_option('display.max_columns', None)
-    pd.set_option('display.float_format', lambda x: '%.5f' % x) 
-    pd.set_option('display.width', 300)
-
-    df = pd.read_csv('data/NEAR-USD.csv')
-    # df = pd.read_csv('data/BTC-USD.csv')
-    # df = pd.read_csv('data/7113.KL.csv')
-
-    df = df.dropna()
-    train, test = split_train_test(df, 0.2)
-    print(f"Train range: {train.Date.values[0]} - {train.Date.values[-1]}")
-
-    # Best params: {'ATR_sample': 60.97992422245601, 'lower_sample': 6.657677183757127, 'upper_sample': 34.10890856894943}
-    upper_sample = 34
-    lower_sample = 7
-    ATR_sample = 61
-
-    turtle_sell = functools.partial(turtle_sell_strategy, upper_sample=upper_sample,
-                                    lower_sample=lower_sample, ATR_sample=ATR_sample)
-    s = Strategy(train, turtle_sell)
-    kelly_df = s.kelly_table(fund=100)
-
-    test_strategy = Strategy(test, turtle_sell)
-    test_name = f'TTS_{upper_sample}_{lower_sample}_{ATR_sample}'
-    # back test
-    profit_table, w_daily_return = back_test(test_name, test_strategy, kelly_df, breakdown=['tt_buy'])
-    performance_table = pd.DataFrame(profit_table, columns=['Cond', 'upper_sample', 'lower_sample', 'ATR_sample', 'Profit', 'Cost', 'ProfitRatio', 'Timecost', 'Sample', 'Avg.Timecost', 'Avg.Profit', 'Drawdown'])
-    print(f"{upper_sample}|{lower_sample}|{ATR_sample}={w_daily_return}")
-    # print('-'*100)
-    # print(performance_table)
-    performance_table.to_csv('performance.csv', index=False)
-    print(performance_table)
-
-
-
 
 
 
