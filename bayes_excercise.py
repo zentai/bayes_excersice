@@ -5,6 +5,21 @@ import numpy as np
 import matplotlib.pyplot as plt
 import functools
 from bayes import conditional, prob, odd, prob_odd
+from collections import deque
+
+
+def enrich_mean_reversion(df, mv_a, mv_b, mv_zscor):
+    ma_1 = df.Close.rolling(window=mv_a).mean()
+    ma_2 = df.Close.rolling(window=mv_b).mean()
+    ma_mix = ma_1 - ma_2
+
+    ma = ma_mix.rolling(window=mv_zscor).mean()
+    std = df.Close.rolling(window=mv_zscor).std()
+    df['ma_1'] = ma_1
+    df['ma_2'] = ma_2
+    df['ma_mix'] = ma_mix
+    df['mr'] = (ma_mix - ma) / std
+    return df
 
 
 def build_bollinger_band(df, mv):
@@ -181,7 +196,7 @@ def enrichment_daily_profit(df, func_sell_strategy):
 class Strategy(object):
 
 
-    def __init__(self, df, mv, func_sell_strategy=None):
+    def __init__(self, df, mv, mr, func_sell_strategy=None):
         func_sell_strategy = (func_sell_strategy
                                 or functools.partial(turtle_sell_strategy,
                                                      upper_sample=34,
@@ -193,6 +208,7 @@ class Strategy(object):
         #                                              take_profit=1+profit_margin)
         self.df = enrichment_daily_profit(df, func_sell_strategy)
         self.df = build_bollinger_band(self.df, mv)
+        self.df = enrich_mean_reversion(self.df, *mr)
 
         # create SignalCenter to backtest
         self._signal_center = BuySignalCenter(self.df)
@@ -276,52 +292,59 @@ class Strategy(object):
                 _proft_count = (s_profit & s_signal & s_eod).sum()
                 _loss_count = (s_loss & s_signal & s_eod).sum()
                 _signal_count = s_eod.sum()
-                w = (_proft_count+_loss_count)/100
-
-                # weight = min(_like, 1)
-                # # print(f'[calc_likelihood] Like: {_like}, W:{weight}, Prior: {_prior} -> {_prior * weight + (1 - weight) * 0.05} ')
-                # _prior = _prior * weight + (1 - weight) * 0.05            # Bayesian smoothing # 权重，越接近 1 表示越相信后验概率，越接近 0 表示越相信先验概率
-
+                w = (_proft_count+_loss_count)/30
+                print(df[s_signal])
                 _estimate_profit = np.nanmin([df[s_profit & s_signal].profit.mean(), df[s_profit].profit.mean()])
                 _mean_profit.append(_estimate_profit)
 
                 _estimate_loss = _estimate_profit = np.nanmin([df[s_loss & s_signal].profit.min(), df[s_loss].profit.min()])
                 _max_drawdown.append(_estimate_loss)
                 _desc.append([name, _like, _p_prof_v_signal, _p_loss_v_signal])
-                print(f'==>>{name}')
+
+                def adjust_like(w, _like):
+                    # adjust trust level when data point not engouh
+                    if w >= 1:
+                        pass
+                    elif w < 1 and _like > 1:
+                        _like = (_like - 1) * w + 1
+                    elif w < 1 and _like < 1:
+                        _like = 1-((1 - _like) * w)
+                    elif w < 1 and _like == 1:
+                        pass
+                    return _like
+
                 if name == 'Turtle Trading':
-                    a[0] = name
-                    a[1] = _like
-                    a[2] = _p_prof_v_signal
-                    a[3] = _p_loss_v_signal
-                elif name == 'Hit':
+                    a[0] = 'TTL'
+                    a[1] = f'{_p_prof_v_signal} ({(s_profit & s_signal & s_eod).sum()})'
+                    a[2] = f'{_p_loss_v_signal} ({(s_loss & s_signal & s_eod).sum()})'
+                    a[3] = w
                     a[4] = _like
-                    a[5] = w
-                    a[6] = _like * w
-                    a[7] = (s_profit & s_signal & s_eod).sum()
-                    a[8] = (s_loss & s_signal & s_eod).sum()
-                    a[9] = (s_signal).sum()
-                    a[10] = (s_signal & s_matured).sum()
+                    a[5] = adjust_like(w, _like)
+                elif name == 'MR':
+                    print(rolling, today)
+                    print(df[s_signal & s_eod])
+                    a[6] = 'MR'
+                    a[7] = f'{_p_prof_v_signal} ({(s_profit & s_signal & s_eod).sum()})'
+                    a[8] = f'{_p_loss_v_signal} ({(s_loss & s_signal & s_eod).sum()})'
+                    a[9] = w
+                    a[10] = _like
+                    a[11] = adjust_like(w, _like)
 
 
-                else:
-                    # a[8] = 'Winning Count'
-                    # a[9] = _like
-                    # a[10] = (s_profit & s_signal & s_eod).sum()
-                    a[11] = (s_loss & s_signal & s_eod).sum()
                 # print(f'[likelihood update] Like: {_likelihood} * {_like} -> {_likelihood * _like}  [{_p_prof_v_signal:.2f}/{_p_loss_v_signal:.2f}]')
-                # _likelihood *= _like * w
-                _posterior = _prior * _like * w
+
+
+
+                _likelihood = _likelihood * adjust_like(w, _like)
 
             # print(f'[_posterior update] Posterior: {_prior} * {_likelihood} = {_prior * _likelihood}')
-            # _posterior = _prior * _likelihood
+            _posterior = _prior * _likelihood
 
             _max_drawdown = abs(np.min(_max_drawdown)) if _max_drawdown else 1
             _mean_profit = np.mean(_mean_profit) if _mean_profit else 1
 
             _kelly_f = kelly_formular(pwin=prob_odd(_posterior), loss_margin=_max_drawdown, profit_margin=_mean_profit)
             # print(f'[{today}] kelly(pwin={prob_odd(_posterior)}, loss={_max_drawdown}, porifit={_mean_profit}) = {_kelly_f}')
-
 
             # log
             _rs.append([today] + _fundamental + [prob_odd(_prior), _likelihood, prob_odd(_posterior), _kelly_f] + a)
@@ -335,7 +358,7 @@ class Strategy(object):
             _kelly_df.to_csv('dynamic_kelly.csv', index=False)
             print('Build: dynamic_kelly.csv')
             print('Build: win_rate.csv')
-            self._signal_center.plot_performance()
+            # self._signal_center.plot_performance()
         return _kelly_df
 
 
@@ -413,7 +436,7 @@ def back_test(test_name, strategy_obj, prior, rolling=180, initial_fund=1000, br
     if future_profits:
         profit_date = [ fd for fd in future_profits.keys() ]
 
-        today_profit = 0
+        today_profit = 1
         d = None
         for fd in profit_date:
             d = fd
@@ -450,6 +473,3 @@ def back_test(test_name, strategy_obj, prior, rolling=180, initial_fund=1000, br
 
 loss_margin = 0.05
 profit_margin = 0.05
-
-
-
