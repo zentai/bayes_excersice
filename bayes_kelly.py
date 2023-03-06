@@ -52,11 +52,16 @@ def enrichment_temp_close(df, today):
 
 
 def calc_likelihood(s_profit, s_loss, s_signal):
+    # within the window, how many profit/loss sample (not consider signal)
+    _proft_count = max(s_profit.sum(), 0.001)
+    _loss_count = max(s_loss.sum(), 0.001)
+    w = min((_proft_count + _loss_count)/30, 1)
+
+    # signal within the window, win rate.
     s_profit = s_profit & s_signal
     s_loss = s_loss & s_signal
     _proft_count = max(s_profit.sum(), 0.001)
     _loss_count = max(s_loss.sum(), 0.001)
-    w = min((_proft_count + _loss_count)/30, 1)
     _like = _proft_count / _loss_count
     debug_list = [w, _like, _proft_count, _loss_count]
     if w >= 1 or _like == 1:    # w >= 1 means sample enough, _like == 1 mean nothing change.
@@ -111,7 +116,9 @@ class BayesKelly:
             s_matured, s_eod, s_eod_yet_matured = pick_dates(df, today, windows)
             sub_df = enrichment_temp_close(df[s_eod_yet_matured], today)
             df.loc[sub_df.index, ['sell', 'time_cost', 'Matured', 'profit']] = sub_df[['sell', 'time_cost', 'Matured', 'profit']]
-            s_profit = s_matured & (df.profit > 0)
+            # Noted. after using temp close solution, we should calculate all eod trades instead of matured.
+            s_profit = s_eod & (df.profit > 0)
+            # s_profit = s_matured & (df.profit > 0)
 
             s_loss = s_eod & ~s_profit
             _max_drawdown = []
@@ -128,10 +135,14 @@ class BayesKelly:
                 _signal_kelly = kelly_formular(pwin=prob_odd(_signal_posterior), loss_margin=abs(_signal_max_drawdown), profit_margin=_signal_mean_profit)
                 self._signals_prior[name] = _signal_posterior
 
+                # self._df.loc[self._df.Date == today, 'Signal'] = True
+                a[0], a[1], a[2], a[3], a[4], a[5] = ['TurtleBuy'] + debug_list + [prob_odd(_signal_posterior)]
                 # only take valueable buy signal.
-                if _signal_kelly > 0.5:
+                if _signal_kelly > 0:
+                    # print(f'add {today} signal: {name} due to Kelly: {_signal_kelly}')
                     self._df.loc[self._df.Date == today, 'Signal'] = True
-                    break
+                # else:
+                #     print(f'Skip {today} signal: {name} due to Kelly: {_signal_kelly}')
                 # _mean_profit.append(0 if np.isnan(df[s_profit & s_signal].profit.mean()) else df[s_profit & s_signal].profit.mean())
                 # _max_drawdown.append(-1 if np.isnan(df[s_loss & s_signal].profit.min()) else df[s_loss & s_signal].profit.min())
                 # if name == 'VegasBuy':
@@ -339,11 +350,11 @@ def back_test(kelly_df, prior, initial_fund=1000, breakdown=False):
 
 
 tparam = {
-    'ATR_sample': 101.08803849157258,
-    'atr_loss_margin': 1.5386300167345448,
-    'bayes_windows': 321.4652950165451,
-    'lower_sample': 117.06455058942629,
-    'upper_sample': 24.275487528510602,
+    'ATR_sample': 103.89132589563566,
+    'atr_loss_margin': 1.0,
+    'bayes_windows': 319.98743007603184,
+    'lower_sample': 114.9123328195044,
+    'upper_sample': 18.844437858438106,
     'max_invest': np.nan,
 }
 
@@ -356,10 +367,12 @@ if __name__ == '__main__':
     # df = pd.read_csv('data/NEAR-USD.csv')
     df = pd.read_csv('data/BTC-USD.csv')
     # df = pd.read_csv('data/7113.KL.csv')
+    # df = pd.read_csv('data/NVDA.csv')
+
 
     df = df.dropna()
     bkf = BayesKelly(df)
-    # bkf.register_signal('TurtleBuy', s_turtle_buy)
+    bkf.register_signal('TurtleBuy', s_turtle_buy)
     bkf.register_signal('VegasBuy', s_vegas_tunnel_buy)
     # bkf.register_signal('BollingerBuy', s_bollinger_band)
     kelly_df = bkf.bayes_update(prior=0.5, debug=True)
