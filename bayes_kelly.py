@@ -50,6 +50,10 @@ def enrichment_temp_close(df, today):
     df.loc[:, 'profit'] = (df.sell / df.buy) - 1
     return df
 
+def adjust_like(w, _like):
+    if w >= 1 or _like == 1:    # w >= 1 means sample enough, _like == 1 mean nothing change.
+        return _like
+    return (_like - 1) * w + 1 if (_like > 1) else 1-((1 - _like) * w)    # adjust _like size by w.
 
 def calc_likelihood(s_profit, s_loss, s_signal):
     # within the window, how many profit/loss sample (not consider signal)
@@ -58,15 +62,13 @@ def calc_likelihood(s_profit, s_loss, s_signal):
     w = min((_proft_count + _loss_count)/30, 1)
 
     # signal within the window, win rate.
-    s_profit = s_profit & s_signal
-    s_loss = s_loss & s_signal
-    _proft_count = max(s_profit.sum(), 0.001)
-    _loss_count = max(s_loss.sum(), 0.001)
-    _like = _proft_count / _loss_count
-    debug_list = [w, _like, _proft_count, _loss_count]
-    if w >= 1 or _like == 1:    # w >= 1 means sample enough, _like == 1 mean nothing change.
-        return (_like, debug_list)
-    return ((_like - 1) * w + 1, debug_list) if (_like > 1) else (1-((1 - _like) * w), debug_list)    # adjust _like size by w.
+    s_signal_profit = s_profit & s_signal
+    s_signal_loss = s_loss & s_signal
+    _signal_proft_count = max(s_signal_profit.sum(), 0.99999)
+    _signal_loss_count = max(s_signal_loss.sum(), 0.99999)
+    _like = _signal_proft_count / _signal_loss_count
+    debug_list = [w, _like, _signal_proft_count, _signal_loss_count]
+    return adjust_like(w, _like), [adjust_like(w, _like)]+debug_list    # adjust _like size by w.
 
 
 def pick_dates(df, today, windows):
@@ -92,18 +94,46 @@ class BayesKelly:
     def __init__(self, df, name='default'):
         self._df = enrichment_daily_profit(df)
         self._book = {}
+        self._signals = {}
         self._signals_prior = {}
         self._latest_prior = 0.5
         self._name = name
 
     def register_signal(self, name, preproccess_func):
         s_signal = preproccess_func(self._df)
+        self._signals[name] = s_signal
         self._signals_prior[name] = 1  #odd, mean 0.5 properbility
         dates = self._df[s_signal].Date.values
         for d in dates:
             if d not in self._book:
                 self._book[d] = []
             self._book[d].append((name, s_signal))
+
+    def sub_signal(self, name, today):
+        windows = int(tparam.get('bayes_windows', 120))
+
+        # clone df, we are going to using temp close solution
+        df = self._df.copy()
+        s_matured, s_eod, s_eod_yet_matured = pick_dates(df, today, windows)
+        sub_df = enrichment_temp_close(df[s_eod_yet_matured], today)
+
+        # full settlement df
+        df.loc[sub_df.index, ['sell', 'time_cost', 'Matured', 'profit']] = sub_df[['sell', 'time_cost', 'Matured', 'profit']]
+
+        # s_profit/s_loss in rolling window
+        s_profit = s_eod & (df.profit > 0)
+        s_loss = s_eod & ~s_profit
+
+        #  keep independence posterior calculation
+        s_signal = self._signals[name]
+        _signal_prior = self._signals_prior.get(name)
+        _like, debug_list = calc_likelihood(s_profit, s_loss, s_signal)
+        _signal_posterior = _signal_prior * _like
+        _signal_mean_profit = 0 if np.isnan(df[s_profit].profit.mean()) else df[s_profit].profit.mean()
+        _signal_max_drawdown = -1 if np.isnan(df[s_loss].profit.min()) else df[s_loss].profit.min()
+        _signal_kelly = kelly_formular(pwin=prob_odd(_signal_posterior), loss_margin=abs(_signal_max_drawdown), profit_margin=_signal_mean_profit)
+        self._signals_prior[name] = _signal_posterior
+        return prob_odd(_signal_posterior), _signal_kelly, debug_list
 
     def bayes_update(self, prior=0.5, debug=False):
         windows = int(tparam.get('bayes_windows', 120))
@@ -121,43 +151,33 @@ class BayesKelly:
             # s_profit = s_matured & (df.profit > 0)
 
             s_loss = s_eod & ~s_profit
-            _max_drawdown = []
-            _mean_profit = []
-            a = [''] * 10
-
+            w_sub_signal = []
             for name, s_signal in self._book.get(today):
-                #  keep independence posterior calculation
-                _signal_prior = self._signals_prior.get(name)
-                _like, debug_list = calc_likelihood(s_profit, s_loss, s_signal)
-                _signal_posterior = _signal_prior * _like
-                _signal_mean_profit = 0 if np.isnan(df[s_profit & s_signal].profit.mean()) else df[s_profit & s_signal].profit.mean()
-                _signal_max_drawdown = -1 if np.isnan(df[s_loss & s_signal].profit.min()) else df[s_loss & s_signal].profit.min()
-                _signal_kelly = kelly_formular(pwin=prob_odd(_signal_posterior), loss_margin=abs(_signal_max_drawdown), profit_margin=_signal_mean_profit)
-                self._signals_prior[name] = _signal_posterior
 
-                # self._df.loc[self._df.Date == today, 'Signal'] = True
-                a[0], a[1], a[2], a[3], a[4], a[5] = ['TurtleBuy'] + debug_list + [prob_odd(_signal_posterior)]
+                _signal_posterior, _signal_kelly, debug_list = self.sub_signal(name, today)
+                w_sub_signal.append(0.9 if name == 'TurtleBuy' else 0.1)
                 # only take valueable buy signal.
-                if _signal_kelly > 0:
-                    # print(f'add {today} signal: {name} due to Kelly: {_signal_kelly}')
-                    self._df.loc[self._df.Date == today, 'Signal'] = True
-                # else:
-                #     print(f'Skip {today} signal: {name} due to Kelly: {_signal_kelly}')
-                # _mean_profit.append(0 if np.isnan(df[s_profit & s_signal].profit.mean()) else df[s_profit & s_signal].profit.mean())
-                # _max_drawdown.append(-1 if np.isnan(df[s_loss & s_signal].profit.min()) else df[s_loss & s_signal].profit.min())
-                # if name == 'VegasBuy':
-                #     a[0], a[1], a[2], a[3], a[4] = ['VegasBuy'] + debug_list
-                # elif name == 'TurtleBuy':
-                #     a[5], a[6], a[7], a[8], a[9] = ['TurtleBuy'] + debug_list
+                # if _signal_kelly > 0:
+                #     # print(f'add {today} signal: {name} due to Kelly: {_signal_kelly}')
+                #     self._df.loc[self._df.Date == today, 'Signal'] = True
+                self._df.loc[self._df.Date == today, 'Signal'] = True
+                self._df.loc[self._df.Date == today, 'Source'] = name
+                self._df.loc[self._df.Date == today, 'SignalW'] = _signal_kelly
+                self._df.loc[self._df.Date == today, 'SignalDebug'] = str(debug_list)
+                self._df.loc[self._df.Date == today, 'SignalCnt'] = len(self._book.get(today))
+
 
             # ok, start to recalce new signal
             s_mix_signal = self._df.Signal
             _like, debug_list = calc_likelihood(s_profit, s_loss, s_mix_signal)
-            a[0], a[1], a[2], a[3], a[4] = ['MixBuy'] + debug_list
-            _posterior = _prior * _like
 
-            _max_drawdown = abs(-1) if np.isnan(df[s_loss & s_signal].profit.min()) else abs(df[s_loss & s_signal].profit.min())
-            _mean_profit = 0 if np.isnan(df[s_profit & s_signal].profit.mean()) else df[s_profit & s_signal].profit.mean()
+            a = [''] * 10
+            a[0], a[1], a[2], a[3], a[4], a[5] = ['MixBuy'] + debug_list
+            _posterior = _prior * adjust_like(sum(w_sub_signal), _like)
+            # _posterior = _prior * _like * np.mean(w_sub_signal)
+
+            _max_drawdown = abs(-1) if np.isnan(df[s_loss].profit.min()) else abs(df[s_loss].profit.min())
+            _mean_profit = 0 if np.isnan(df[s_profit].profit.mean()) else df[s_profit].profit.mean()
 
             _kelly_f = kelly_formular(pwin=prob_odd(_posterior), loss_margin=_max_drawdown, profit_margin=_mean_profit)
             # print(f'[{today}] kelly(pwin={prob_odd(_posterior)}, loss={_max_drawdown}, porifit={_mean_profit}) = {_kelly_f}')
@@ -201,6 +221,11 @@ def turtle_trading(base_df):
 def s_turtle_buy(base_df):
     df = turtle_trading(base_df)
     return df.Close > df.turtle_h
+
+
+def s_monthly_buy(base_df):
+    return base_df.Date.apply(lambda x: x.split('-')[-1]=='01' or x.split('-')[-1]=='05')
+    # return base_df.Date.apply(lambda x: True)
 
 
 def s_bollinger_band(base_df):
@@ -342,19 +367,31 @@ def back_test(kelly_df, prior, initial_fund=1000, breakdown=False):
     profit_table = pd.DataFrame(r, columns=['Profit', 'Cost', 'ProfitLossRatio', 'Sample', 'ProfitSample', 'Avg.Timecost', 'Avg.Profit', 'Drawdown'])
     bdown_df = pd.DataFrame(breakdown_rows, columns=['Date', 'Close', 'Income', 'Investable Fund', 'Invest', 'F.Profit', 'F.ProfitAmount', 'F.paydate', 'Total_fund'])
     bdown_df = pd.merge(kelly_df[['Date', 'Posterior', 'kelly(f)', 'Max.Drawdown', 'Mean.Profit']], bdown_df, how='outer', on=['Date'])
+    bdown_df['Profit.kelly(f)'] = (bdown_df['F.Profit'] > 0) & (bdown_df['kelly(f)'] > 0)
     if breakdown:
         bdown_df.to_csv(f'simulate_transaction.csv', index=False)
         print(f'Build: simulate_transaction.csv')
 
-    return profit_table, w_daily_return, bdown_df[['Date', 'Posterior', 'kelly(f)', 'Max.Drawdown', 'Mean.Profit', 'Invest', 'F.ProfitAmount', 'F.paydate', 'Income', 'Total_fund']]
+    return profit_table, w_daily_return, bdown_df[['Date', 'Posterior', 'kelly(f)', 'Profit.kelly(f)', 'Max.Drawdown', 'Mean.Profit', 'Invest', 'F.ProfitAmount', 'F.paydate', 'Income', 'Total_fund']]
 
+#           Name  best_score  upper_sample  lower_sample  ATR_sample  atr_loss_margin  bayes_windows  max_invest
+# 0  5148.KL.csv     0.99868       7.63271      96.51857    62.20580          3.00000       30.00000         NaN
+# 1  1368.KL.csv     0.99654      39.77143      56.50795    25.71005          2.92029       42.69075         NaN
+# tparam = {
+# 'ATR_sample': 62.20580,
+#  'atr_loss_margin': 3.00000,
+#  'bayes_windows': 30,
+#  'lower_sample': 96.51857,
+#  'upper_sample': 7.63271,
+#     'max_invest': np.nan,
+# }
 
 tparam = {
-    'ATR_sample': 103.89132589563566,
-    'atr_loss_margin': 1.0,
-    'bayes_windows': 319.98743007603184,
-    'lower_sample': 114.9123328195044,
-    'upper_sample': 18.844437858438106,
+'ATR_sample': 3,
+ 'atr_loss_margin': 2.00000,
+ 'bayes_windows': 310,
+ 'lower_sample': 59,
+ 'upper_sample': 83.77143,
     'max_invest': np.nan,
 }
 
@@ -368,12 +405,17 @@ if __name__ == '__main__':
     df = pd.read_csv('data/BTC-USD.csv')
     # df = pd.read_csv('data/7113.KL.csv')
     # df = pd.read_csv('data/NVDA.csv')
+    # df = pd.read_csv('data/5148.KL.csv')    #UEMS
+    # df = pd.read_csv('data/1368.KL.csv')    #UEM Edgenta Bhd (Highway)
+
 
 
     df = df.dropna()
     bkf = BayesKelly(df)
+
+    # bkf.register_signal('s_monthly_buy', s_monthly_buy)
     bkf.register_signal('TurtleBuy', s_turtle_buy)
-    bkf.register_signal('VegasBuy', s_vegas_tunnel_buy)
+    # bkf.register_signal('VegasBuy', s_vegas_tunnel_buy)
     # bkf.register_signal('BollingerBuy', s_bollinger_band)
     kelly_df = bkf.bayes_update(prior=0.5, debug=True)
     profit_table, w_daily_return, simulate_transaction_df = back_test(kelly_df, prior=0.5, breakdown=True)
