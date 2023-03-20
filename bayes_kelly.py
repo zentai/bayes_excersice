@@ -11,11 +11,11 @@ def calc_annual_return_and_sortino_ratio(cost, profit, df):
     _yield_curve_1yr = 0.0419
     _start_date = df.iloc[0].Date
     _end_date = df.iloc[-1].Date
-    _trade_count = len(kelly_df)
+    _trade_count = len(df)
     _trade_days = (pd.to_datetime(_end_date) - pd.to_datetime(_start_date)).days
 
     _annual_trade_count = (_trade_count / _trade_days) * 365
-    _downside_risk_stdv = kelly_df[kelly_df.profit < _yield_curve_1yr].profit.std(ddof=1)
+    _downside_risk_stdv = df[df.profit < _yield_curve_1yr].profit.std(ddof=1)
     _annual_downside_risk_stdv = _downside_risk_stdv * np.sqrt(_annual_trade_count)
 
     t = _trade_days / 365

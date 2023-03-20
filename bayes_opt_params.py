@@ -34,7 +34,7 @@ def optimize_func(csv_path, **kwargs):
     # profit_loss_ratio = s_summary.ProfitLossRatio
     # profit_loss_ratio = (simulate_transaction_df['kelly(f)'] > 0 & simulate_transaction_df['F.ProfitAmount'] > 0).mean() / (simulate_transaction_df['kelly(f)'] > 0 & simulate_transaction_df['F.ProfitAmount'] < 0).mean()
     # sample_weight = len(simulate_transaction_df) / (len(df) + 2)
-    score = s_summary.SharpeRatio
+    score = s_summary.SortinoRatio
     # print(f'{win_rate} * {sample_weight} * {profit_loss_ratio} * {sample_weight} ')
     '''
     # weight
@@ -799,8 +799,8 @@ def run():
 def portfolio():
     run_optimize = 0
     #
-    best_params_df = pd.read_csv('scanning_30.csv')
-    best_params_df = best_params_df[best_params_df.best_score > 0]
+    best_params_df = pd.read_csv('reports/watching_list.csv')
+    best_params_df = best_params_df.sort_values(by=['best_score'])
 
 
     metas = { name: name.replace('.csv', '') for name in best_params_df['Name'].values}
@@ -809,7 +809,7 @@ def portfolio():
     for tname in test_cases:
         # try:
             best_params = best_params_df[best_params_df.Name == tname].to_dict('records')[0]
-            optimize_func_wrapper = functools.partial(optimize_func, csv_path=f'/Users/zen/Documents/code/FinRPG/data/history_price/{tname}')
+            optimize_func_wrapper = functools.partial(optimize_func, csv_path=f'data/{tname}')
             print('--' * 100)
             best_params['debug'] = True
             optimize_func_wrapper(**best_params)
@@ -824,5 +824,5 @@ if __name__ == '__main__':
     pd.set_option('display.max_columns', None)
     pd.set_option('display.float_format', lambda x: '%.5f' % x)
     pd.set_option('display.width', 300)
-    run()
-    # portfolio()
+    # run()
+    portfolio()
