@@ -16,14 +16,9 @@ def optimize_func(csv_path, **kwargs):
 
     df = pd.read_csv(csv_path)
     df = df.dropna()
-    bkf = BayesKelly(df, name=csv_path.split('/')[-1])
-    # bkf.register_signal('s_monthly_buy', s_monthly_buy)
-    bkf.register_signal('TurtleBuy', s_turtle_buy)
-    # bkf.register_signal('VegasBuy', s_vegas_tunnel_buy)
-    # bkf.register_signal('BBL', s_bollinger_band)
-    kelly_df = bkf.bayes_update(prior=0.5, debug=debug)
-    profit_table, w_daily_return, simulate_transaction_df = back_test(kelly_df, prior=0.5, breakdown=debug)
-
+    base_df = df.copy()
+    base_df = calc_confidence_betratio(base_df, s_turtle_buy)
+    profit_table, w_daily_return, simulate_transaction_df = back_test(base_df, breakdown=False)
     s_summary = profit_table.iloc[0]
 
     # 胜率 = 获利交易数 / 总交易数
@@ -34,7 +29,7 @@ def optimize_func(csv_path, **kwargs):
     # profit_loss_ratio = s_summary.ProfitLossRatio
     # profit_loss_ratio = (simulate_transaction_df['kelly(f)'] > 0 & simulate_transaction_df['F.ProfitAmount'] > 0).mean() / (simulate_transaction_df['kelly(f)'] > 0 & simulate_transaction_df['F.ProfitAmount'] < 0).mean()
     # sample_weight = len(simulate_transaction_df) / (len(df) + 2)
-    score = s_summary.SortinoRatio
+    score = s_summary.Profit
     # print(f'{win_rate} * {sample_weight} * {profit_loss_ratio} * {sample_weight} ')
     '''
     # weight
@@ -754,9 +749,9 @@ def run():
     #          "1368.KL.csv": "1368.KL",
     #         }
 
-    test_cases = metas.keys()
+    # test_cases = metas.keys()
     # test_cases = ['data/S35.SI.csv', 'data/NEAR-USD.csv']
-    # test_cases = ['BTC-USD.csv']
+    test_cases = ['btcusdt_backtest.csv']
 
     scanning_df = pd.DataFrame([], columns=['Name', 'best_score', 'upper_sample', 'lower_sample', 'ATR_sample', 'atr_loss_margin', 'bayes_windows', 'max_invest'])
     for tname in test_cases:
@@ -768,11 +763,11 @@ def run():
             if run_optimize:
             # 定義參數空間
                 params = {
-                    'upper_sample': (2, 120),
-                    'lower_sample': (2, 120),
-                    'ATR_sample': (2, 120),
-                    'atr_loss_margin': (1, 3),
-                    'bayes_windows': (30, 720),
+                    'upper_sample': (2, 2000),
+                    'lower_sample': (2, 2000),
+                    'ATR_sample': (2, 2000),
+                    'atr_loss_margin': (1, 5),
+                    'bayes_windows': (30, 2000),
                     # 'max_invest': (100, 1500),
                 }
 
@@ -824,5 +819,5 @@ if __name__ == '__main__':
     pd.set_option('display.max_columns', None)
     pd.set_option('display.float_format', lambda x: '%.5f' % x)
     pd.set_option('display.width', 300)
-    # run()
-    portfolio()
+    run()
+    # portfolio()
