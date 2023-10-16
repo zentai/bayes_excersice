@@ -32,85 +32,45 @@ def s_turtle_buy(base_df):
     return df.Close > df.turtle_h
 
 
-def enrichment_daily_profit(base_df):
-    _loss_margin = tparam.get('atr_loss_margin', 1.5)
-    base_df = turtle_trading(base_df)
+def enrichment_daily_profit(base_df, params):
+    _loss_margin = params.atr_loss_margin or 1.5
+    base_df = turtle_trading(base_df, params)
 
-    sell = []
-    time_cost = []
+    # Initialize columns if they don't exist
+    for col in ["buy", "sell", "profit", "time_cost", "Matured"]:
+        base_df[col] = base_df.get(col, pd.NaT if col == "Matured" else np.nan)
 
-    is_scratch = 'buy' not in base_df.columns
-    if is_scratch:
-        base_df = base_df.assign(buy=np.nan)
-        base_df = base_df.assign(sell=np.nan)
-        base_df = base_df.assign(time_cost=np.nan)
+    resume_idx = base_df.sell.isna().idxmax()
+    df = base_df.loc[resume_idx:].copy()
 
-    sell_idx = base_df[np.isnan(base_df['sell'])].index
-    windows = -len(base_df) if is_scratch else sell_idx[0]
+    # Buy daily basic when the market price is higher than Stop profit
+    buy_condition = (
+        df.buy.isna() & df.Stop_profit.notna() & (df.Stop_profit < df.Open.shift(-1))
+    )
+    df.loc[buy_condition, "buy"] = df.Open.shift(-1)
 
-    df = base_df.loc[windows:].copy()
-    buy_idx = df.index if is_scratch else df[np.isnan(df['buy'])].index
-    
-    # Stop_profit > Open(tomorrow), we buy
-    df.loc[buy_idx, 'buy'] = df.Open.shift(-1).where(df['Stop_profit'].notna() & (df['Stop_profit'] < df.Open.shift(-1)), np.nan)
-    
-    # Close(tomorrow) < Stop_profit(today) | Close(tomorrow) < turtle low (tomorrow). we sell 
-    sell_point = df.Stop_profit.where((df.Close.shift(-1) < df.Stop_profit) | (df.Close.shift(-1) < df.turtle_l.shift(-1)), np.nan)
-    df.loc[sell_point.index, 'sell'] = sell_point
+    # Sell condition:
+    sell_condition = df.buy.notna() & (
+        (df.Close.shift(-1) < df.Stop_profit) | (df.Close.shift(-1) < df.turtle_l)
+    )
 
-    ic(sell_point.index)
-    
-    df.sell.fillna(method='bfill', inplace=True)
-    df.loc[df['buy'].isna(), 'sell'] = np.nan
+    df.loc[sell_condition, "sell"] = df.Stop_profit.where(sell_condition)
+    df.loc[sell_condition, "Matured"] = pd.to_datetime(
+        df.Date.shift(-1).where(sell_condition)
+    )
 
-    
-    ic(df[sell_point.notna()])
-    ic(df.loc[100:159])
+    # Backfill sell and Matured columns
+    df.sell.bfill(inplace=True)
+    df.Matured.bfill(inplace=True)
 
-    
-    stop_profits = []
-    for i, _v in enumerate(df.loc[sell_idx][['buy', 'sell', 'time_cost', 'ATR', 'Stop_profit']].values):
-        _buy, _sell, _time_cost, _buy_atr, stop_profit = _v
-        _pre_atr = _buy_atr
-        _pre_close = _buy
-        if np.isnan(_buy):
-            sell.append(_sell)
-            time_cost.append(_time_cost)
-            continue
-        if not np.isnan(_sell):
-            sell.append(_sell)
-            time_cost.append(_time_cost)
-            continue
+    # Compute profit and time_cost columns
+    profit_condition = df.buy.notna() & df.sell.notna() & df.profit.isna()
+    df.loc[profit_condition, "profit"] = (df.sell / df.buy) - 1
+    df.loc[profit_condition, "time_cost"] = pd.to_datetime(df.Matured) - pd.to_datetime(
+        df.Date
+    )
 
-        sell_point = None
-        days = 0
-        for j, v in enumerate(df[['Close', 'turtle_l', 'ATR']].iloc[i+1:].values):
-            _close, _turtle_low, _atr = v
-            sell_point, days = (_close, j) if (_close < stop_profit) or (_close < _turtle_low) else (None, None)
-            if sell_point:
-                break
-            _pre_close = _close
-            _pre_atr = _atr
-        if sell_point:
-            sell.append(sell_point)
-            stop_profits.append(stop_profit)
-            time_cost.append(days+1)
-        else:
-            sell.append(np.nan)
-            stop_profits.append(stop_profit)
-            time_cost.append(np.nan)
-
-    # print(f'{i} - {len(buy_idx)} - {len(sell_idx)} - {len(sell)}')
-    df.loc[sell_idx, 'sell'] = sell
-    df.loc[sell_idx, 'time_cost'] = time_cost
-    df.loc[sell_idx, 'Stop_profit'] = stop_profits
-    df.loc[sell_idx, 'Matured'] = pd.to_datetime(df.loc[sell_idx, 'Date']) + pd.to_timedelta(df.loc[sell_idx, 'time_cost'], 'm')
-    df.loc[sell_idx, 'profit'] = (df.loc[sell_idx, 'sell'] / df.loc[sell_idx, 'buy']) - 1
-
-    base_df.loc[buy_idx, 'buy'] = df.loc[buy_idx, 'buy']
-    base_df.loc[sell_idx, 'sell'] = df.loc[sell_idx, 'sell']
-    base_df.loc[sell_idx, 'time_cost'] = df.loc[sell_idx, 'time_cost']
-    base_df.loc[sell_idx, 'Matured'] = df.loc[sell_idx, 'Matured']
-    base_df.loc[sell_idx, 'Stop_profit'] = df.loc[sell_idx, 'Stop_profit']
-    base_df.loc[sell_idx, 'profit'] = df.loc[sell_idx, 'profit']
+    # Clear sell and Matured values where buy is NaN
+    df.loc[df.buy.isna(), ["sell", "Matured"]] = np.nan
+    base_df.update(df)
     return base_df
