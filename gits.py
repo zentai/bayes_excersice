@@ -1,29 +1,36 @@
-def turtle_trading(base_df):
-    upper_sample = int(tparam.get('upper_sample', 20) )
-    lower_sample = int(tparam.get('lower_sample', 10) )
-    ATR_sample = int(tparam.get('ATR_sample', 20) )
-    loss_margin = tparam.get('atr_loss_margin', 1.5)
-
-    is_scratch = 'ATR' not in base_df.columns
-    windows = len(base_df) if is_scratch else np.max([upper_sample, lower_sample, ATR_sample]) + 1
+def turtle_trading(base_df, params):
+    # Initialize columns if they don't exist
+    for col in ["ATR", "turtle_h", "turtle_l", "Stop_profit"]:
+        base_df[col] = base_df.get(col, np.nan)
 
     # performance: only re-calc nessasary part.
-    df = base_df.iloc[-windows:].copy()
-    idx = df.index if is_scratch else df[np.isnan(df['ATR'])].index
-    df = df.assign(turtle_h = df.Close.shift(1).rolling(upper_sample).max())
-    df = df.assign(turtle_l = df.Close.shift(1).rolling(lower_sample).min())
-    df = df.assign(h_l = df.High - df.Low)
-    df = df.assign(c_h = (df.Close.shift(1)-df.High).abs())
-    df = df.assign(c_l = (df.Close.shift(1)-df.Low).abs())
-    df = df.assign(TR = df[['h_l', 'c_h', 'c_l']].max(axis=1))
-    df = df.assign(ATR = (df.TR.rolling(ATR_sample).sum()/ATR_sample))
-    
+    # start_idx = base_df.ATR.isna().idxmax()
+    idx = (
+        base_df.index
+        if base_df.ATR.isna().all()
+        else base_df.ATR.iloc[params.ATR_sample :].isna().index
+    )
 
+    ic("---> before turtle trading ", base_df[:59])
+    base_df.loc[idx, "turtle_h"] = (
+        base_df.Close.shift(1).rolling(params.upper_sample).max()
+    )
+    base_df.loc[idx, "turtle_l"] = (
+        base_df.Close.shift(1).rolling(params.lower_sample).min()
+    )
+    base_df.loc[idx, "h_l"] = base_df.High - base_df.Low
+    base_df.loc[idx, "c_h"] = (base_df.Close.shift(1) - base_df.High).abs()
+    base_df.loc[idx, "c_l"] = (base_df.Close.shift(1) - base_df.Low).abs()
+    base_df.loc[idx, "TR"] = base_df[["h_l", "c_h", "c_l"]].max(axis=1)
+    base_df.loc[idx, "ATR"] = base_df["TR"].rolling(params.ATR_sample).mean()
+    base_df.loc[idx, "Stop_profit"] = (
+        base_df.Close.shift(1) - base_df.ATR.shift(1) * params.atr_loss_margin
+    )
+    ic("---> after turtle trading ", base_df[:59])
     # copy value to base_df
-    base_df.loc[idx, 'turtle_h'] = df.loc[idx, 'turtle_h']
-    base_df.loc[idx, 'turtle_l'] = df.loc[idx, 'turtle_l']
-    base_df.loc[idx, 'ATR'] = df.loc[idx, 'ATR']
-    base_df.loc[idx, 'Stop_profit'] = df.Close.shift(1) - df.ATR.shift(1) * loss_margin
+    # columns_to_update = ["turtle_h", "turtle_l", "ATR", "Stop_profit"]
+    # base_base_df.loc[idx, columns_to_update] = base_df.loc[idx, columns_to_update]
+
     return base_df
 
 
