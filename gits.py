@@ -1,3 +1,54 @@
+# Function to calculate the likelihood of profit > 0.5 within a window
+def calculate_likelihood(window):
+    sorted_profits = np.sort(window)
+    total_count = len(sorted_profits)
+    count_greater_than_05 = np.sum(sorted_profits > 0.1)
+    likelihood = count_greater_than_05 / float(total_count-count_greater_than_05+epsilon)
+    print(f'{likelihood} = {count_greater_than_05} / {float(total_count-count_greater_than_05+epsilon)}')
+    return likelihood
+
+
+def calc_confidence_betratio(base_df, signal_func, prior=0.5, debug=False):
+    params = StrategyParams(ATR_sample=20, atr_loss_margin=2, bayes_windows=20, lower_sample=20, upper_sample=20, max_invest=100)
+    base_df = enrichment_daily_profit(base_df, params)
+    df = enrichment_temp_close(base_df)
+    df = df[s_turtle_buy]
+
+    # Use rolling window to calculate the likelihood and create a new column
+    df['likelihood'] = df.profit.rolling(window=params.bayes_windows).apply(calculate_likelihood, raw=True)
+
+    # Initialize a new column for storing posterior odds
+    df['posterior_odds'] = np.nan
+
+    # Initialize the first odds as 1
+    initial_odds = 1.0
+    forgetting_factor = 0.1
+
+    # Update the posterior odds based on the likelihood where it's not NaN
+    for idx, row in df.loc[df['likelihood'].notna()].iterrows():
+        # Update the odds
+        new_odds = forgetting_factor * initial_odds + (1 - forgetting_factor) * row['likelihood']
+        
+        # Store the new posterior odds in the DataFrame
+        df.loc[idx, 'posterior_odds'] = new_odds
+        
+        # Update the initial odds for the next iteration
+        initial_odds = new_odds
+
+    # Convert updated odds back to probability and store in a new column
+    df['posterior'] = df['posterior_odds'] / (1 + df['posterior_odds'])
+
+    print(df[-60:])
+    df.to_csv('C:\\Users\\Zen\\Documents\\GitHub\\bayes_excersice\\reports\\dump.csv')
+    plt.figure(figsize=(12, 6))
+    plt.plot(df.index, df['posterior'], marker='o', linestyle='-')
+    plt.plot(df.index, df['profit'], marker='^', linestyle=':')
+    plt.xlabel('Index')
+    plt.ylabel('Likelihood of Profit > 0')
+    plt.title('Likelihood of Profit > 0 Over Time')
+    plt.grid(True)
+    plt.show()
+
 def turtle_trading(base_df, params):
     # Initialize columns if they don't exist
     for col in ["ATR", "turtle_h", "turtle_l", "Stop_profit"]:
