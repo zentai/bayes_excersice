@@ -1,3 +1,58 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from huobi.client.market import MarketClient
+from huobi.utils import *
+from empiricaldist import Pmf
+
+def callback(price_depth_event: 'PriceDepthEvent'):
+    price_depth = price_depth_event.tick
+    bids = price_depth.bids
+    asks = price_depth.asks
+    bids_dict = { e.price: e.amount for e in bids }
+    asks_dict = { e.price: e.amount for e in asks }
+    bids_cdf = pmf_idxmax(bids_dict.keys(), bids_dict.values())
+    asks_cdf = pmf_idxmax(asks_dict.keys(), asks_dict.values())
+    # bids_cdf = to_cdf(bids_dict.keys(), bids_dict.values())
+    # asks_cdf = to_cdf(asks_dict.keys(), asks_dict.values())
+    print(f'Hot area: {bids_cdf} - {asks_cdf}')
+    # print(f'Hot area: {bids_cdf.quantile(0.2)} - {asks_cdf.quantile(0.5)}')
+
+def error(e: 'HuobiApiException'):
+    print(e.error_code + e.error_message)
+
+def decorate_cdf(title):
+    """Labels the axes.
+    
+    title: string
+    """
+    plt.xlabel('Quantity')
+    plt.ylabel('CDF')
+    plt.title(title)
+
+def fetch_price_depth(symbol, depth_step, depth_size):
+    market_client = MarketClient()
+    depth = market_client.get_pricedepth(symbol, depth_step, depth_size=depth_size)
+    return depth.bids, depth.asks
+
+def to_cdf(prices, amount):
+    pmf = Pmf(amount, prices)
+    pmf.normalize()
+    cdf = pmf.make_cdf()
+    return cdf
+
+def pmf_idxmax(prices, amount):
+    pmf = Pmf(amount, prices)
+    pmf.normalize()
+    return pmf.idxmax()
+
+if __name__ == '__main__':
+    symbol = "zelixusdt"
+    market_client = MarketClient()
+    market_client.sub_pricedepth(symbol, DepthStep.STEP1, callback, error)
+    # bids, asks = fetch_price_depth(symbol, depth_step="step0", depth_size=20)
+
+
+###############################
 # Function to calculate the likelihood of profit > 0.5 within a window
 def calculate_likelihood(window):
     sorted_profits = np.sort(window)
