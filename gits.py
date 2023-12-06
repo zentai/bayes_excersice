@@ -4,6 +4,45 @@ from huobi.client.market import MarketClient
 from huobi.utils import *
 from empiricaldist import Pmf
 
+def bollinger_band(df):
+    mv = 30
+
+    idx = df.index
+    df = df.assign(avg_close=df.Close.shift(1).rolling(mv).mean())
+    df = df.assign(std3=df.avg_close - df.Close.shift(1).rolling(mv).std() * 3)
+    df = df.assign(std5=df.avg_close - df.Close.shift(1).rolling(mv).std() * 5)
+    df = df.assign(std7=df.avg_close - df.Close.shift(1).rolling(mv).std() * 7)
+    df = df.assign(std9=df.avg_close - df.Close.shift(1).rolling(mv).std() * 9)
+
+    payment_std3 = np.where(df["Low"] <= df["std3"], 12.5, 0)
+    df["btc_std3"] = payment_std3 / df["std3"]
+
+    payment_std5 = np.where(df["Low"] <= df["std5"], 12.5, 0)
+    df["btc_std5"] = payment_std5 / df["std5"]
+
+    payment_std7 = np.where(df["Low"] <= df["std7"], 25.0, 0)
+    df["btc_std7"] = payment_std7 / df["std7"]
+
+    payment_std9 = np.where(df["Low"] <= df["std9"], 50.0, 0)
+    df["btc_std9"] = payment_std9 / df["std9"]
+
+    # 计算总共购买的比特币数量
+    df["total_btc"] = df["btc_std3"] + df["btc_std5"] + df["btc_std7"] + df["btc_std9"]
+
+    # 汇总所有支付金额
+    df["total_payment"] = payment_std3 + payment_std5 + payment_std7 + payment_std9
+
+    # 计算平均成本
+    df["average_cost"] = df["total_payment"] / df["total_btc"]
+
+    # 显示结果
+    print(
+        df[["Date", "Low", "total_btc", "total_payment", "average_cost"]][
+            df.Low < df.std5
+        ]
+    )
+    return df
+
 def callback(price_depth_event: 'PriceDepthEvent'):
     price_depth = price_depth_event.tick
     bids = price_depth.bids
