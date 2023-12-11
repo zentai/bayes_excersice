@@ -12,13 +12,19 @@
 			"name": "Python",
 			"type": "python",
 			"request": "launch",
-			"program": "${project_path}/bayes_excercise.py",
+			"program": "${project_path}/src/main.py",
 		},
 		{
 			"name": "Python (multiprocess)",
 			"type": "python",
 			"request": "launch",
 			"program": "${project_path}/multiprocess.py",
+		},
+		{
+			"name": "Python(Bayes Optimize)",
+			"type": "python",
+			"request": "launch",
+			"program": "${project_path}/src/bayes_opt_params.py",
 		},
 	],
 }
