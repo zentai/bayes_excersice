@@ -53,7 +53,7 @@ class TurtleScout(IStrategyScout):
             & (df.Stop_profit < df.Open.shift(-1))
         )
         df.loc[s_buy, "buy"] = df.Open.shift(-1)
-        df.loc[s_buy, "BuySignal"] = df.Close > df.turtle_h
+        df.loc[:, "BuySignal"] = df.Close > df.turtle_h
         # Sell condition:
         s_sell = df.buy.notna() & (
             (df.Close.shift(-1) < df.Stop_profit) | (df.Close.shift(-1) < df.turtle_l)
@@ -69,12 +69,17 @@ class TurtleScout(IStrategyScout):
         # Compute profit and time_cost columns
         s_profit = df.buy.notna() & df.sell.notna() & df.profit.isna()
         df.loc[s_profit, "profit"] = (df.sell / df.buy) - 1
-        df.loc[s_profit, "time_cost"] = pd.to_datetime(df.Matured) - pd.to_datetime(
-            df.Date
-        )
+        df.loc[s_profit, "time_cost"] = [
+            x.days
+            for x in (
+                pd.to_datetime(df.loc[s_profit, "Matured"])
+                - pd.to_datetime(df.loc[s_profit, "Date"])
+            )
+        ]
 
         # Clear sell and Matured values where buy is NaN
-        df.loc[df.buy.isna(), ["sell", "Matured"]] = np.nan
+        df.loc[df.buy.isna(), "sell"] = np.nan
+        df.loc[df.buy.isna(), "Matured"] = pd.NaT
         base_df.update(df)
         return base_df
 

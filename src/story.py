@@ -31,9 +31,32 @@ class HuntingStory:
 
     def start(self):
         recon_report = self.scout.market_recon()
-        print(recon_report[-60:])
+
         hunt_plan = self.engine.generate_hunt_plan(recon_report)
-        print(hunt_plan)
+        print(
+            hunt_plan[
+                [
+                    "Date",
+                    "Open",
+                    "High",
+                    "Low",
+                    "Close",
+                    "BuySignal",
+                    "Stop_profit",
+                    "exit_price",
+                    "buy",
+                    "sell",
+                    "profit",
+                    "turtle_l",
+                    "turtle_h",
+                    "Matured",
+                    "time_cost",
+                    "SignalW",
+                    "SignalExpectProfit",
+                ]
+            ][-60:]
+        )
+        # print(hunt_plan)
         # self.hunter.execute_trade(hunt_plan, self.capital_trap)
         # trade_result = self.capital_trap.monitor_trade()
         # self.gains_bag.update(trade_result)
@@ -67,7 +90,7 @@ if __name__ == "__main__":
     params = {
         "ATR_sample": 10,
         "atr_loss_margin": 1,
-        "bayes_windows": 10,
+        "bayes_windows": 365,
         "lower_sample": 10,
         "upper_sample": 10,
     }

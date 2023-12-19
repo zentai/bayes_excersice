@@ -5,6 +5,7 @@ from utils import pandas_util
 import numpy as np
 import pandas as pd
 from bayes import conditional, prob, odd, prob_odd, sigmoid, pmf_n_cdf
+from settings import ZERO
 
 
 def pick_dates(df, today, windows):
@@ -24,7 +25,6 @@ def enrichment_temp_close(df):
     last_day = df.iloc[-1]
     close = last_day.Close
     last_index = df.index[-1]
-
     # Create a dictionary to hold new column values
     new_columns = {
         "buy": close,
@@ -43,6 +43,14 @@ def enrichment_temp_close(df):
     df["profit"] = (df["sell"] / df["buy"]) - 1
 
     return df
+
+
+def kelly_formular(pwin, loss_margin, profit_margin):
+    loss_margin = loss_margin or 0.00001
+    profit_margin = profit_margin or 0.00001
+    _pwin = pwin / loss_margin
+    _ploss = (1 - pwin) / profit_margin
+    return (_pwin - _ploss) / _pwin if _pwin > _ploss else 0
 
 
 def calc_likelihood(profits, n_mid):
@@ -77,7 +85,7 @@ class BayesianEngine(IEngine):
         _prior = odd(prior)
         _rs = []
         _desc = []
-        _posterior
+        _posterior = prior
         for idx, row in df[df.BuySignal == True].iterrows():
             today = row.Date
             # print(idx, today, row.BuySignal)
@@ -85,8 +93,10 @@ class BayesianEngine(IEngine):
 
             sub_df = enrichment_temp_close(df[s_eod_yet_matured])
             df_clone = df.loc[s_eod].copy()
-            df_clone.update(sub_df[["sell", "time_cost", "Matured", "profit"]])
-
+            # df_clone.update(sub_df[["sell", "time_cost", "Matured", "profit"]])
+            df_clone.loc[
+                sub_df.index, ["sell", "time_cost", "Matured", "profit"]
+            ] = sub_df[["sell", "time_cost", "Matured", "profit"]]
             profits = df_clone.profit
             N_mid = max(windows * 0.01, 3)
             _like, p_win, profit_margin, loss_margin = calc_likelihood(profits, N_mid)
@@ -99,30 +109,34 @@ class BayesianEngine(IEngine):
                 "loss_margin": loss_margin,
                 "profit_margin": profit_margin,
             }
-
             _signal_kelly = kelly_formular(**kelly_args)
-            self._signals_posterior[name] = _signal_posterior
-            return _signal_posterior, _signal_kelly, profit_margin * _signal_posterior
+            _posterior = _signal_posterior
 
-            # Noted. after using temp close solution, we should calculate all eod trades instead of matured.
-            s_profit = s_eod & (df.profit > 0)
-            s_loss = s_eod & ~s_profit
+            df_clone.loc[df_clone.Date == today, "SignalW"] = _signal_kelly
+            df_clone.loc[df_clone.Date == today, "SignalExpectProfit"] = (
+                profit_margin * _signal_posterior
+            )
+        return df_clone
 
-            # Single Strategy
-            a = [""] * 10
-            for name, s_signal in self._book.get(today):
-                _signal_posterior, _signal_kelly, exp_profit = self.sub_signal(
-                    name, today
-                )
-                _posterior = _signal_posterior
+        # # Noted. after using temp close solution, we should calculate all eod trades instead of matured.
+        # s_profit = s_eod & (df.profit > 0)
+        # s_loss = s_eod & ~s_profit
 
-                self._df.loc[self._df.Date == today, "Signal"] = True
-                self._df.loc[self._df.Date == today, "Source"] = name
-                self._df.loc[self._df.Date == today, "SignalW"] = _signal_kelly
-                self._df.loc[self._df.Date == today, "SignalExpectProfit"] = exp_profit
-                self._df.loc[self._df.Date == today, "SignalCnt"] = len(
-                    self._book.get(today)
-                )
+        # # Single Strategy
+        # a = [""] * 10
+        # for name, s_signal in self._book.get(today):
+        #     _signal_posterior, _signal_kelly, exp_profit = self.sub_signal(
+        #         name, today
+        #     )
+        #     _posterior = _signal_posterior
+
+        #     self._df.loc[self._df.Date == today, "Signal"] = True
+        #     self._df.loc[self._df.Date == today, "Source"] = name
+        #     self._df.loc[self._df.Date == today, "SignalW"] = _signal_kelly
+        #     self._df.loc[self._df.Date == today, "SignalExpectProfit"] = exp_profit
+        #     self._df.loc[self._df.Date == today, "SignalCnt"] = len(
+        #         self._book.get(today)
+        #     )
 
     def sub_signal(self, name, today):
         windows = self._params.bayes_windows or 120
