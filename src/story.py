@@ -53,8 +53,9 @@ class HuntingStory:
                     "time_cost",
                     "SignalW",
                     "SignalExpectProfit",
+                    "Postrior",
                 ]
-            ][-60:]
+            ]
         )
         # print(hunt_plan)
         # self.hunter.execute_trade(hunt_plan, self.capital_trap)
@@ -89,8 +90,8 @@ if __name__ == "__main__":
 
     params = {
         "ATR_sample": 10,
-        "atr_loss_margin": 1,
-        "bayes_windows": 365,
+        "atr_loss_margin": 2,
+        "bayes_windows": 50,
         "lower_sample": 10,
         "upper_sample": 10,
     }

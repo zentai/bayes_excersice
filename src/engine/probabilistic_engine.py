@@ -50,6 +50,13 @@ def kelly_formular(pwin, loss_margin, profit_margin):
     profit_margin = profit_margin or 0.00001
     _pwin = pwin / loss_margin
     _ploss = (1 - pwin) / profit_margin
+    # print(
+    #     f"{_pwin:.6f} = {pwin:.6f}/{loss_margin:.6f} | {_ploss:.6f} = {(1 - pwin):.6f} / {profit_margin:.6f}"
+    # )
+    # if _pwin > _ploss:
+    #     print(
+    #         f"{(_pwin - _ploss) / _pwin if _pwin > _ploss else 0} = {_pwin } > {_ploss}"
+    #     )
     return (_pwin - _ploss) / _pwin if _pwin > _ploss else 0
 
 
@@ -67,7 +74,6 @@ def calc_likelihood(profits, n_mid):
     # Calc likelihood
     _like = prob_win / max(prob_loss, ZERO)
     w = sigmoid(len(profits), n_mid)
-
     return w * _like, prob_win, profit_margin, loss_margin
 
 
@@ -103,6 +109,9 @@ class BayesianEngine(IEngine):
 
             _signal_prior = odd(_posterior)
             _signal_posterior = prob_odd(_signal_prior * _like)
+            print(
+                f"[{today}] {_signal_prior:.6f} * {_like:.6f} = {_signal_posterior:.10f}"
+            )
 
             kelly_args = {
                 "pwin": _signal_posterior,
@@ -112,10 +121,12 @@ class BayesianEngine(IEngine):
             _signal_kelly = kelly_formular(**kelly_args)
             _posterior = _signal_posterior
 
-            df_clone.loc[df_clone.Date == today, "SignalW"] = _signal_kelly
-            df_clone.loc[df_clone.Date == today, "SignalExpectProfit"] = (
+            df.loc[df.Date == today, "Postrior"] = _posterior
+            df.loc[df.Date == today, "SignalW"] = _signal_kelly
+            df.loc[df.Date == today, "SignalExpectProfit"] = (
                 profit_margin * _signal_posterior
             )
+            # print(f"{today} - {_signal_posterior} - {_signal_kelly}")
         return df_clone
 
         # # Noted. after using temp close solution, we should calculate all eod trades instead of matured.
