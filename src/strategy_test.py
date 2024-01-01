@@ -3,6 +3,7 @@ from datetime import datetime
 import pandas as pd
 import sys
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def monte_carlo_simulation(dataframe, num_simulations, num_trades_per_simulation):
@@ -10,7 +11,7 @@ def monte_carlo_simulation(dataframe, num_simulations, num_trades_per_simulation
     Perform Monte Carlo simulations on a trading strategy.
 
     Parameters:
-    - dataframe: DataFrame containing 'profit' and 'kelly(f)' columns.
+    - dataframe: DataFrame containing 'profit' and 'Kelly' columns.
     - num_simulations: Number of simulations to perform.
     - num_trades_per_simulation: Number of trades in each simulation.
 
@@ -20,6 +21,7 @@ def monte_carlo_simulation(dataframe, num_simulations, num_trades_per_simulation
     - Statistics including average profit-loss ratio, win rate, average capital growth, best and worst capital growth.
     """
     print(dataframe)
+    dataframe = dataframe[dataframe.buy.notna()]
 
     initial_capital = 1000  # Initial capital
     stats = {"average_profit_loss_ratio": [], "win_rate": [], "final_capital": []}
@@ -32,7 +34,7 @@ def monte_carlo_simulation(dataframe, num_simulations, num_trades_per_simulation
     # Run the simulations
     for i in range(num_simulations):
         shuffled_data = (
-            dataframe[["profit", "kelly(f)"]]
+            dataframe[["profit", "Kelly"]]
             .sample(n=num_trades_per_simulation, replace=True)
             .reset_index(drop=True)
         )
@@ -40,8 +42,9 @@ def monte_carlo_simulation(dataframe, num_simulations, num_trades_per_simulation
         capital_trajectory = [capital]
 
         for _, row in shuffled_data.iterrows():
-            bet_amount = capital * row["kelly(f)"]
+            bet_amount = capital * row["Kelly"]
             capital += bet_amount * row["profit"]
+            # print(f'capital: {capital}, {_}-{row}')
             capital_trajectory.append(capital)
 
             if capital <= 0:  # Stop simulation if capital falls to zero
@@ -105,11 +108,11 @@ if __name__ == "__main__":
     from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
 
     code = "BTC-USD"
-    df = pd.read_csv(f"{REPORTS_DIR}/backup/ZKS-USD.csv_best_kelly.csv")
+    df = pd.read_csv(f"{REPORTS_DIR}/huobi_btcusdt_kelly.csv")
     size = len(df)
 
     results = monte_carlo_simulation(
-        dataframe=df, num_simulations=2000, num_trades_per_simulation=100
+        dataframe=df, num_simulations=2000, num_trades_per_simulation=1000
     )
     from pprint import pprint as pp
 

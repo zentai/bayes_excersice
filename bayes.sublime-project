@@ -1,6 +1,6 @@
 {
 	"settings": {
-     "python_interpreter": "/opt/anaconda3/envs/fintech/bin/python",
+     "python_interpreter": "/opt/anaconda3/bin/python3",
  	},
 	"folders": [
 		{
@@ -12,7 +12,7 @@
 			"name": "Python",
 			"type": "python",
 			"request": "launch",
-			"program": "${project_path}/src/main.py",
+			"program": "${project_path}/src/story.py",
 		},
 		{
 			"name": "Python (multiprocess)",

@@ -43,7 +43,7 @@ def sigmoid(x, N_mid=50):
 
 
 def pmf_n_cdf(data_list):
-    data_list = [round(x, 2) for x in data_list]
+    data_list = [round(x, 5) for x in data_list]
     pmf = Pmf.from_seq(data_list)
     pmf.normalize()
     cdf = pmf.make_cdf()

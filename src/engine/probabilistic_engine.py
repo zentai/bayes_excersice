@@ -27,27 +27,22 @@ def enrichment_temp_close(df):
     last_index = df.index[-1]
     # Create a dictionary to hold new column values
     new_columns = {
-        "buy": close,
+        # "buy": close,
         "sell": close,
         "time_cost": list(reversed(range(len(df)))),
         "Matured": pd.to_datetime(last_day.Date),
     }
-
     # Update DataFrame in one go
     for col, value in new_columns.items():
-        if isinstance(value, list):
-            df[col] = value
-        else:
-            df.at[last_index, col] = value
+        df[col] = value
 
     df["profit"] = (df["sell"] / df["buy"]) - 1
-
     return df
 
 
 def kelly_formular(pwin, loss_margin, profit_margin):
-    loss_margin = loss_margin or 0.00001
-    profit_margin = profit_margin or 0.00001
+    loss_margin = loss_margin or 1/(10**30)
+    profit_margin = profit_margin or 1/(10**30)
     _pwin = pwin / loss_margin
     _ploss = (1 - pwin) / profit_margin
     # print(
@@ -60,21 +55,32 @@ def kelly_formular(pwin, loss_margin, profit_margin):
     return (_pwin - _ploss) / _pwin if _pwin > _ploss else 0
 
 
-def calc_likelihood(profits, n_mid):
-    pmf, cdf = pmf_n_cdf(profits)
-    lower, upper = cdf.credible_interval(0.9)
-    positive_profits = {x: pmf[x] for x in pmf.qs if x > 0}
-    profit_margin = (
-        max(positive_profits, key=positive_profits.get) if positive_profits else ZERO
-    )
-    loss_margin = abs(lower)
-    prob_loss = cdf(0)
-    prob_win = 1 - prob_loss
+def calc_likelihood(signal_pnl, daily_pnl, n_mid):
+    if len(daily_pnl) < n_mid:
+        _like = 1
+        p_win = 0.5
+        profit_margin = 0
+        loss_margin = 0
+        return _like, p_win, profit_margin, loss_margin
+ 
+    pmf, cdf = pmf_n_cdf(daily_pnl)
+    profit_margin = pmf.loc[0:].idxmax() if pmf.loc[0:].any() else 0
+    loss_margin = pmf.loc[:0].idxmax() if pmf.loc[:0].any() else 0
+
+    _zero = 1/(10**n_mid)
+    # signal_profit = max(len([i for i in signal_pnl if i > 0]), _zero)
+    # signal_loss = max(len(signal_pnl) - signal_profit, _zero)
+    # print(f' ==> P: {signal_profit}/{signal_loss} = {signal_profit/signal_loss}')
 
     # Calc likelihood
-    _like = prob_win / max(prob_loss, ZERO)
-    w = sigmoid(len(profits), n_mid)
-    return w * _like, prob_win, profit_margin, loss_margin
+    # _, signal_cdf = pmf_n_cdf(signal_pnl)
+    # _like = 1/signal_cdf(0) - 1   # profit_count/loss_count
+    # w = sigmoid(len(signal_pnl), n_mid)
+    # _pwin = 1 - signal_cdf(0)
+    _like = 1/(cdf(0) or 0.1) - (1-_zero)   # profit_count/loss_count
+    w = sigmoid(len(daily_pnl), n_mid)
+    _pwin = 1 - cdf(0)
+    return w * _like, _pwin, profit_margin, loss_margin
 
 
 class BayesianEngine(IEngine):
@@ -86,287 +92,45 @@ class BayesianEngine(IEngine):
     def generate_hunt_plan(self, recon_report):
         windows = self._params.bayes_windows or 120
         df = recon_report
-        df.loc[:, "Signal"] = False
-        prior = 0.5
-        _prior = odd(prior)
-        _rs = []
-        _desc = []
-        _posterior = prior
+        posterior =self._latest_prior
+        # s_buysignal = (df.BuySignal == True) & (df.sell.isna())
         for idx, row in df[df.BuySignal == True].iterrows():
             today = row.Date
-            # print(idx, today, row.BuySignal)
             s_matured, s_eod, s_eod_yet_matured = pick_dates(df, today, windows)
 
             sub_df = enrichment_temp_close(df[s_eod_yet_matured])
             df_clone = df.loc[s_eod].copy()
-            # df_clone.update(sub_df[["sell", "time_cost", "Matured", "profit"]])
+            # df_clone = df
             df_clone.loc[
                 sub_df.index, ["sell", "time_cost", "Matured", "profit"]
             ] = sub_df[["sell", "time_cost", "Matured", "profit"]]
-            profits = df_clone.profit
-            N_mid = max(windows * 0.01, 3)
-            _like, p_win, profit_margin, loss_margin = calc_likelihood(profits, N_mid)
+            daily_pnl = df_clone.profit
+            # print(f"daily pnl count: {len(daily_pnl)}")
+            # signal_pnl = df[(df.BuySignal == True) & (df.Date < today)][-windows:].profit
+            signal_pnl = daily_pnl
+            _like, p_win, profit_margin, loss_margin = calc_likelihood(signal_pnl, daily_pnl, windows/2)
 
-            _signal_prior = odd(_posterior)
-            _signal_posterior = prob_odd(_signal_prior * _like)
-            print(
-                f"[{today}] {_signal_prior:.6f} * {_like:.6f} = {_signal_posterior:.10f}"
-            )
+            posterior = prob_odd(odd(posterior) * _like)
 
             kelly_args = {
-                "pwin": _signal_posterior,
-                "loss_margin": loss_margin,
+                "pwin": posterior,
+                "loss_margin": abs(loss_margin),
                 "profit_margin": profit_margin,
             }
             _signal_kelly = kelly_formular(**kelly_args)
-            _posterior = _signal_posterior
-
-            df.loc[df.Date == today, "Postrior"] = _posterior
-            df.loc[df.Date == today, "SignalW"] = _signal_kelly
-            df.loc[df.Date == today, "SignalExpectProfit"] = (
-                profit_margin * _signal_posterior
-            )
+            
+            if df.loc[df.Date == today, 'Kelly'].isna().any():
+                self._latest_prior = posterior
+                # print(
+                #     f"[{today}] {self._latest_prior}! {odd(posterior):.6f} * {_like:.6f} = {prob_odd(odd(posterior) * _like):.10f}"
+                # )
+                df.loc[df.Date == today, "Postrior"] = self._latest_prior
+                df.loc[df.Date == today, "Kelly"] = _signal_kelly
+                df.loc[df.Date == today, "p_win"] = p_win
+                df.loc[df.Date == today, "Sig P/L"] = f"{signal_pnl[signal_pnl>0].count()}/{signal_pnl[signal_pnl<=0].count()}"
+                df.loc[df.Date == today, "D P/L"] = f"{daily_pnl[daily_pnl>0].count()}/{daily_pnl[daily_pnl<=0].count()}"
+                df.loc[df.Date == today, "likelihood"] = _like
+                df.loc[df.Date == today, "profit_margin"] = profit_margin
+                df.loc[df.Date == today, "loss_margin"] = loss_margin
             # print(f"{today} - {_signal_posterior} - {_signal_kelly}")
-        return df_clone
-
-        # # Noted. after using temp close solution, we should calculate all eod trades instead of matured.
-        # s_profit = s_eod & (df.profit > 0)
-        # s_loss = s_eod & ~s_profit
-
-        # # Single Strategy
-        # a = [""] * 10
-        # for name, s_signal in self._book.get(today):
-        #     _signal_posterior, _signal_kelly, exp_profit = self.sub_signal(
-        #         name, today
-        #     )
-        #     _posterior = _signal_posterior
-
-        #     self._df.loc[self._df.Date == today, "Signal"] = True
-        #     self._df.loc[self._df.Date == today, "Source"] = name
-        #     self._df.loc[self._df.Date == today, "SignalW"] = _signal_kelly
-        #     self._df.loc[self._df.Date == today, "SignalExpectProfit"] = exp_profit
-        #     self._df.loc[self._df.Date == today, "SignalCnt"] = len(
-        #         self._book.get(today)
-        #     )
-
-    def sub_signal(self, name, today):
-        windows = self._params.bayes_windows or 120
-
-        # We are going to using temp close solution
-        s_matured, s_eod, s_eod_yet_matured = pick_dates(self._df, today, windows)
-
-        df, sub_df = self._df.loc[s_eod].copy(), enrichment_temp_close(
-            self._df.loc[s_eod_yet_matured]
-        )
-
-        df.update(sub_df[["sell", "time_cost", "Matured", "profit"]])
-
-        profits = df["profit"]
-        N_mid = max(windows * 0.01, 3)
-        _like, p_win, profit_margin, loss_margin = calc_likelihood(profits, N_mid)
-
-        _signal_prior = odd(self._signals_posterior.get(name, 0))
-        _signal_posterior = prob_odd(_signal_prior * _like)
-
-        kelly_args = {
-            "pwin": _signal_posterior,
-            "loss_margin": loss_margin,
-            "profit_margin": profit_margin,
-        }
-
-        _signal_kelly = kelly_formular(**kelly_args)
-        self._signals_posterior[name] = _signal_posterior
-        return _signal_posterior, _signal_kelly, profit_margin * _signal_posterior
-
-    #         s_mix_signal = self._df.Signal
-    #         profits = df["profit"]
-    #         N_mid = max(windows * 0.01, 3)
-    #         _like, p_win, profit_margin, loss_margin = calc_likelihood(profits, N_mid)
-
-    #         _max_drawdown = (
-    #             abs(-1)
-    #             if np.isnan(df[s_loss].profit.min())
-    #             else abs(df[s_loss].profit.min())
-    #         )
-    #         _mean_profit = (
-    #             0
-    #             if np.isnan(df[s_profit].profit.mean())
-    #             else df[s_profit].profit.mean()
-    #         )
-
-    #         _kelly_f = kelly_formular(
-    #             pwin=prob_odd(_posterior),
-    #             loss_margin=_max_drawdown,
-    #             profit_margin=_mean_profit,
-    #         )
-    #         # print(f'[{today}] kelly(pwin={prob_odd(_posterior)}, loss={_max_drawdown}, porifit={_mean_profit}) = {_kelly_f}')
-
-    #         # log
-    #         _i = max(df.loc[df.Date == today].index)
-    #         # we should using self._df instead of df, because df using T close for temp close position price. that should be update daily.
-    #         _fundamental = list(
-    #             self._df.loc[
-    #                 _i, ["Close", "buy", "sell", "time_cost", "profit", "Matured"]
-    #             ].values
-    #         )
-    #         _rs.append(
-    #             [today]
-    #             + _fundamental
-    #             + [prob_odd(_prior)]
-    #             + a
-    #             + [_like, prob_odd(_posterior), _kelly_f, _max_drawdown, _mean_profit]
-    #         )
-
-    #         # update
-    #         _prior = _posterior
-
-    #     _kelly_df = pd.DataFrame(
-    #         _rs,
-    #         columns=[
-    #             "Date",
-    #             "Close",
-    #             "buy",
-    #             "sell",
-    #             "time_cost",
-    #             "profit",
-    #             "Matured",
-    #             "Prior",
-    #             "ttl_name",
-    #             "ttl_w",
-    #             "ttl_like",
-    #             "ttl_profit_count",
-    #             "ttl_loss_count",
-    #             "bbl_name",
-    #             "bbl_w",
-    #             "bbl_like",
-    #             "bbl_profit_count",
-    #             "bbl_loss_count",
-    #             "Likelihood",
-    #             "Posterior",
-    #             "kelly_f",
-    #             "MaxDrawdown",
-    #             "MeanProfit",
-    #         ],
-    #     )
-    #     if debug:
-    #         # _kelly_df.to_csv(f'{REPORTS_DIR}/{self._name}_dynamic_kelly.csv', index=False)
-    #         # print(f'Build: {REPORTS_DIR}/{self._name}_dynamic_kelly.csv')
-    #         # self._signal_center.plot_performance()
-    #         pass
-
-    #     # migrate to original history table
-    #     # full_df = pd.merge(df, _bk_df[['Date', 'Posterior', 'kelly_f']], how='left', on=['Date'])
-    #     return _kelly_df
-
-    # def bayes_update(self, prior=0.5, debug=False):
-    #     windows = self._params.bayes_windows or 120
-    #     self._df.loc[:, "Signal"] = False
-    #     _prior = odd(prior)
-    #     _rs = []
-    #     _desc = []
-    #     for today in sorted(self._book.keys()):
-    #         df = self._df.copy()
-    #         s_matured, s_eod, s_eod_yet_matured = pick_dates(df, today, windows)
-    #         sub_df = enrichment_temp_close(df[s_eod_yet_matured])
-    #         df.loc[sub_df.index, ["sell", "time_cost", "Matured", "profit"]] = sub_df[
-    #             ["sell", "time_cost", "Matured", "profit"]
-    #         ]
-    #         # Noted. after using temp close solution, we should calculate all eod trades instead of matured.
-    #         s_profit = s_eod & (df.profit > 0)
-    #         s_loss = s_eod & ~s_profit
-
-    #         # Single Strategy
-    #         a = [""] * 10
-    #         for name, s_signal in self._book.get(today):
-    #             _signal_posterior, _signal_kelly, exp_profit = self.sub_signal(
-    #                 name, today
-    #             )
-    #             _posterior = _signal_posterior
-
-    #             self._df.loc[self._df.Date == today, "Signal"] = True
-    #             self._df.loc[self._df.Date == today, "Source"] = name
-    #             self._df.loc[self._df.Date == today, "SignalW"] = _signal_kelly
-    #             self._df.loc[self._df.Date == today, "SignalExpectProfit"] = exp_profit
-    #             self._df.loc[self._df.Date == today, "SignalCnt"] = len(
-    #                 self._book.get(today)
-    #             )
-
-    #         s_mix_signal = self._df.Signal
-    #         profits = df["profit"]
-    #         N_mid = max(windows * 0.01, 3)
-    #         _like, p_win, profit_margin, loss_margin = calc_likelihood(profits, N_mid)
-
-    #         _max_drawdown = (
-    #             abs(-1)
-    #             if np.isnan(df[s_loss].profit.min())
-    #             else abs(df[s_loss].profit.min())
-    #         )
-    #         _mean_profit = (
-    #             0
-    #             if np.isnan(df[s_profit].profit.mean())
-    #             else df[s_profit].profit.mean()
-    #         )
-
-    #         _kelly_f = kelly_formular(
-    #             pwin=prob_odd(_posterior),
-    #             loss_margin=_max_drawdown,
-    #             profit_margin=_mean_profit,
-    #         )
-    #         # print(f'[{today}] kelly(pwin={prob_odd(_posterior)}, loss={_max_drawdown}, porifit={_mean_profit}) = {_kelly_f}')
-
-    #         # log
-    #         _i = max(df.loc[df.Date == today].index)
-    #         # we should using self._df instead of df, because df using T close for temp close position price. that should be update daily.
-    #         _fundamental = list(
-    #             self._df.loc[
-    #                 _i, ["Close", "buy", "sell", "time_cost", "profit", "Matured"]
-    #             ].values
-    #         )
-    #         _rs.append(
-    #             [today]
-    #             + _fundamental
-    #             + [prob_odd(_prior)]
-    #             + a
-    #             + [_like, prob_odd(_posterior), _kelly_f, _max_drawdown, _mean_profit]
-    #         )
-
-    #         # update
-    #         _prior = _posterior
-
-    #     _kelly_df = pd.DataFrame(
-    #         _rs,
-    #         columns=[
-    #             "Date",
-    #             "Close",
-    #             "buy",
-    #             "sell",
-    #             "time_cost",
-    #             "profit",
-    #             "Matured",
-    #             "Prior",
-    #             "ttl_name",
-    #             "ttl_w",
-    #             "ttl_like",
-    #             "ttl_profit_count",
-    #             "ttl_loss_count",
-    #             "bbl_name",
-    #             "bbl_w",
-    #             "bbl_like",
-    #             "bbl_profit_count",
-    #             "bbl_loss_count",
-    #             "Likelihood",
-    #             "Posterior",
-    #             "kelly_f",
-    #             "MaxDrawdown",
-    #             "MeanProfit",
-    #         ],
-    #     )
-    #     if debug:
-    #         # _kelly_df.to_csv(f'{REPORTS_DIR}/{self._name}_dynamic_kelly.csv', index=False)
-    #         # print(f'Build: {REPORTS_DIR}/{self._name}_dynamic_kelly.csv')
-    #         # self._signal_center.plot_performance()
-    #         pass
-
-    #     # migrate to original history table
-    #     # full_df = pd.merge(df, _bk_df[['Date', 'Posterior', 'kelly_f']], how='left', on=['Date'])
-    #     return _kelly_df
+        return df

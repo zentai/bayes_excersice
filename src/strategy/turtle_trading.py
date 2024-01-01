@@ -18,6 +18,12 @@ def pre_process_data(df):
         "time_cost",
         "Matured",
         "BuySignal",
+        "Postrior",
+        "Kelly",
+        "p_win",
+        "likelihood",
+        "profit_margin",
+        "loss_margin",
     ]
     missing_columns = set(COLUMNS) - set(df.columns)
     new_cols = {col: np.nan for col in missing_columns}
@@ -31,8 +37,22 @@ class TurtleScout(IStrategyScout):
     def __init__(self, params, symbols, history_data=None):
         self.params = params
         self.symbols = symbols
-        self.base_df = history_data or pandas_util.load_symbols(self.symbols)
+        self.interval = "1min"
+        self.base_df = history_data or pandas_util.load_symbols_from_huobi(self.symbols, self.interval)
         self.base_df = pre_process_data(self.base_df)
+
+        self.update_idx = 0
+
+    def update(self):
+        new_data = pandas_util.get_history_stick(self.symbols, sample=1, interval=self.interval).iloc[-1]
+        # new_data = self.test_df.iloc[self.update_idx].copy()
+        new_data["Matured"] = pd.NaT
+        self.base_df = pd.concat(
+            [self.base_df, pd.DataFrame([new_data], columns=self.base_df.columns)],
+            ignore_index=True
+        )
+        print(self.base_df)
+        self.update_idx += 1
 
     def market_recon(self):
         self._calc_ATR()
@@ -49,17 +69,14 @@ class TurtleScout(IStrategyScout):
         # Buy daily basic when the market price is higher than Stop profit
         s_buy = (
             df.buy.isna()
-            & df.Stop_profit.notna()
-            & (df.Stop_profit < df.Open.shift(-1))
+            & df.exit_price.notna()
+            & (df.exit_price < df.Open.shift(-1))
         )
         df.loc[s_buy, "buy"] = df.Open.shift(-1)
-        df.loc[:, "BuySignal"] = df.Close > df.turtle_h
+        df.loc[:, "BuySignal"] = df.High > df.turtle_h
         # Sell condition:
-        s_sell = df.buy.notna() & (
-            (df.Close.shift(-1) < df.Stop_profit) | (df.Close.shift(-1) < df.turtle_l)
-        )
-
-        df.loc[s_sell, "sell"] = df.Stop_profit.where(s_sell)
+        s_sell = df.buy.notna() & (df.Low.shift(-1) < df.exit_price)
+        df.loc[s_sell, "sell"] = df.exit_price.where(s_sell)
         df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.shift(-1).where(s_sell))
 
         # Backfill sell and Matured columns
