@@ -21,7 +21,7 @@ def monte_carlo_simulation(dataframe, num_simulations, num_trades_per_simulation
     - Statistics including average profit-loss ratio, win rate, average capital growth, best and worst capital growth.
     """
     print(dataframe)
-    dataframe = dataframe[dataframe.buy.notna()]
+    dataframe = dataframe[(dataframe.Kelly.notna() & dataframe.profit.notna())]
 
     initial_capital = 1000  # Initial capital
     stats = {"average_profit_loss_ratio": [], "win_rate": [], "final_capital": []}
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
 
     code = "BTC-USD"
-    df = pd.read_csv(f"{REPORTS_DIR}/huobi_btcusdt_kelly.csv")
+    df = pd.read_csv(f"{REPORTS_DIR}/../hunt.csv")
     size = len(df)
 
     results = monte_carlo_simulation(

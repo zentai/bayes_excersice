@@ -5,72 +5,48 @@ from utils import pandas_util
 import numpy as np
 import pandas as pd
 
+# FIXME: move some columns to IEngine
+TURTLE_COLUMNS = [
+    "ATR",
+    "turtle_h",
+    "turtle_l",
+    "Stop_profit",
+    "buy",
+    "sell",
+    "profit",
+    "time_cost",
+    "Matured",
+    "BuySignal",
+    "Postrior",
+    "Kelly",
+    "p_win",
+    "likelihood",
+    "profit_margin",
+    "loss_margin",
+]
+
 
 def pre_process_data(df):
-    COLUMNS = [
-        "ATR",
-        "turtle_h",
-        "turtle_l",
-        "Stop_profit",
-        "buy",
-        "sell",
-        "profit",
-        "time_cost",
-        "Matured",
-        "BuySignal",
-        "Postrior",
-        "Kelly",
-        "p_win",
-        "likelihood",
-        "profit_margin",
-        "loss_margin",
-    ]
-    missing_columns = set(COLUMNS) - set(df.columns)
-    new_cols = {col: np.nan for col in missing_columns}
-    if "Matured" in new_cols:
-        new_cols["Matured"] = pd.NaT
-
-    return df.assign(**new_cols)
+    missing_columns = set(TURTLE_COLUMNS) - set(df.columns)
+    if missing_columns:
+        new_cols = {col: np.nan for col in missing_columns}
+        if "Matured" in new_cols:
+            new_cols["Matured"] = pd.NaT
+        return df.assign(**new_cols)
+    return df
 
 
 class TurtleScout(IStrategyScout):
-    def __init__(self, params, symbols, history_data=None):
+    def __init__(self, params):
         self.params = params
-        self.symbols = symbols
-        self.interval = "1min"
-        self.base_df = history_data or pandas_util.load_symbols_from_huobi(self.symbols, self.interval)
-        self.base_df = pre_process_data(self.base_df)
 
-        self.update_idx = 0
-
-    def update(self):
-        new_data = pandas_util.get_history_stick(self.symbols, sample=1, interval=self.interval).iloc[-1]
-        # new_data = self.test_df.iloc[self.update_idx].copy()
-        new_data["Matured"] = pd.NaT
-        self.base_df = pd.concat(
-            [self.base_df, pd.DataFrame([new_data], columns=self.base_df.columns)],
-            ignore_index=True
-        )
-        print(self.base_df)
-        self.update_idx += 1
-
-    def market_recon(self):
-        self._calc_ATR()
-        self._calc_profit()
-        return self.base_df
-
-    def _calc_profit(self):
-        base_df = self.base_df
-        _loss_margin = self.params.atr_loss_margin or 1.5
-
+    def _calc_profit(self, base_df):
         resume_idx = base_df.sell.isna().idxmax()
         df = base_df.loc[resume_idx:].copy()
 
         # Buy daily basic when the market price is higher than Stop profit
         s_buy = (
-            df.buy.isna()
-            & df.exit_price.notna()
-            & (df.exit_price < df.Open.shift(-1))
+            df.buy.isna() & df.exit_price.notna() & (df.exit_price < df.Open.shift(-1))
         )
         df.loc[s_buy, "buy"] = df.Open.shift(-1)
         df.loc[:, "BuySignal"] = df.High > df.turtle_h
@@ -87,48 +63,57 @@ class TurtleScout(IStrategyScout):
         s_profit = df.buy.notna() & df.sell.notna() & df.profit.isna()
         df.loc[s_profit, "profit"] = (df.sell / df.buy) - 1
         df.loc[s_profit, "time_cost"] = [
-            x.days
+            int(x.seconds/60/pandas_util.INTERVAL_TO_MIN.get(self.params.interval))
             for x in (
                 pd.to_datetime(df.loc[s_profit, "Matured"])
                 - pd.to_datetime(df.loc[s_profit, "Date"])
             )
         ]
-
+        # df.loc[s_profit, "time_cost"] = df[s_profit].apply(
+        #     lambda row: df[df["Matured"] == row["Matured"]].index[0]
+        #     - df[df["Date"] == row["Date"]].index[0],
+        #     axis=1,
+        # )
         # Clear sell and Matured values where buy is NaN
         df.loc[df.buy.isna(), "sell"] = np.nan
         df.loc[df.buy.isna(), "Matured"] = pd.NaT
         base_df.update(df)
         return base_df
 
-    def _calc_ATR(self):
-        params = self.params
-        base_df = self.base_df
+    def _calc_ATR(self, base_df):
+        ATR_sample = self.params.ATR_sample
+        upper_sample = self.params.upper_sample
+        lower_sample = self.params.lower_sample
+        ATR_sample = self.params.ATR_sample
+        atr_loss_margin = self.params.atr_loss_margin
 
         # performance: only re-calc nessasary part.
         idx = (
             base_df.index
             if base_df.ATR.isna().all()
-            else base_df.ATR.iloc[params.ATR_sample :].isna().index
+            else base_df.ATR.iloc[ATR_sample:].isna().index
         )
         base_df.loc[idx, "turtle_h"] = (
-            base_df.Close.shift(1).rolling(params.upper_sample).max()
+            base_df.Close.shift(1).rolling(upper_sample).max()
         )
         base_df.loc[idx, "turtle_l"] = (
-            base_df.Close.shift(1).rolling(params.lower_sample).min()
+            base_df.Close.shift(1).rolling(lower_sample).min()
         )
         base_df.loc[idx, "h_l"] = base_df.High - base_df.Low
         base_df.loc[idx, "c_h"] = (base_df.Close.shift(1) - base_df.High).abs()
         base_df.loc[idx, "c_l"] = (base_df.Close.shift(1) - base_df.Low).abs()
         base_df.loc[idx, "TR"] = base_df[["h_l", "c_h", "c_l"]].max(axis=1)
-        base_df.loc[idx, "ATR"] = base_df["TR"].rolling(params.ATR_sample).mean()
+        base_df.loc[idx, "ATR"] = base_df["TR"].rolling(ATR_sample).mean()
         base_df.loc[idx, "Stop_profit"] = (
-            base_df.Close.shift(1) - base_df.ATR.shift(1) * params.atr_loss_margin
+            base_df.Close.shift(1) - base_df.ATR.shift(1) * atr_loss_margin
         )
         base_df.loc[idx, "exit_price"] = base_df[["turtle_l", "Stop_profit"]].max(
             axis=1
         )
         return base_df
 
-    # def s_turtle_buy(base_df, params):
-    #     df = _calc_ATR(base_df, params)
-    #     return df.Close > df.turtle_h
+    def market_recon(self, base_df):
+        base_df = pre_process_data(base_df)
+        base_df = self._calc_ATR(base_df)
+        base_df = self._calc_profit(base_df)
+        return base_df

@@ -11,6 +11,16 @@ from dataclasses import dataclass
 from datetime import datetime
 import pandas as pd
 
+INTERVAL_TO_MIN = {
+    "1min": 1,
+    "5min": 5,
+    "15min": 15,
+    "30min": 30,
+    "60min": 1 * 60,
+    "4hour": 4 * 60,
+    "1day": 24 * 60,
+}
+
 
 @dataclass
 class Candlestick:
@@ -26,24 +36,26 @@ class Candlestick:
     def __post_init__(self):
         self.Date = datetime.fromtimestamp(self.Date)
 
+
 g_api_key = "uymylwhfeg-eb0f1107-98ea054c-ad39b"
 g_secret_key = "6fc09731-0b3fde88-b83e1f10-2dc2f"
 
+huobi_interval = {
+    "1min": CandlestickInterval.MIN1,
+    "5min": CandlestickInterval.MIN5,
+    "15min": CandlestickInterval.MIN15,
+    "30min": CandlestickInterval.MIN30,
+    "60min": CandlestickInterval.MIN60,
+    "4hour": CandlestickInterval.HOUR4,
+    "1day": CandlestickInterval.DAY1,
+    "1mon": CandlestickInterval.MON1,
+    "1week": CandlestickInterval.WEEK1,
+    "1year": CandlestickInterval.YEAR1,
+}
+
+
 def get_history_stick(symbol, sample=20, interval="1min"):
-    symbol = symbol.replace('-', '').lower()
-    print(symbol)
-    huobi_interval = {
-        "1min": CandlestickInterval.MIN1,
-        "5min": CandlestickInterval.MIN5,
-        "15min": CandlestickInterval.MIN15,
-        "30min": CandlestickInterval.MIN30,
-        "60min": CandlestickInterval.MIN60,
-        "4hour": CandlestickInterval.HOUR4,
-        "1day": CandlestickInterval.DAY1,
-        "1mon": CandlestickInterval.MON1,
-        "1week": CandlestickInterval.WEEK1,
-        "1year": CandlestickInterval.YEAR1,
-    }
+    symbol = symbol.replace("-", "").lower()
 
     interval = huobi_interval.get(interval)
     market_client = MarketClient(init_log=True, timeout=10)
@@ -72,6 +84,7 @@ def load_symbols(symbols):
     df = df.dropna()
     return df
 
-def load_symbols_from_huobi(symbols, interval):
-    df = get_history_stick(symbols, sample=2000, interval=interval)
+
+def load_symbols_from_huobi(symbols, limits, interval):
+    df = get_history_stick(symbols, sample=limits, interval=interval)
     return df
