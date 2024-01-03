@@ -89,7 +89,7 @@ class BayesianEngine(IEngine):
         self._name = name
         self._params = params
 
-    def generate_hunt_plan(self, recon_report):
+    def hunt_plan(self, recon_report):
         windows = self._params.bayes_windows or 120
         df = recon_report
         posterior =self._latest_prior

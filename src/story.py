@@ -79,7 +79,13 @@ class IStrategyScout(ABC):
 
 class IEngine(ABC):
     @abstractmethod
-    def generate_hunt_plan(self, recon_report):
+    def hunt_plan(self, base_df):
+        pass
+
+
+class IHunter(ABC):
+    @abstractmethod
+    def strike_phase(self, base_df):
         pass
 
 
@@ -88,14 +94,16 @@ class HuntingStory:
     sensor: IMarketSensor
     scout: IStrategyScout
     engine: IEngine
-    # hunter: "xHunter"
+    hunter: IHunter
     # gains_bag: "GainsBag"
     # mission_blueprint: "MissionBlueprint"
     # capital_trap: "CapitalTrap"
 
     def start(self, base_df):
         base_df = self.scout.market_recon(base_df)
-        base_df = self.engine.generate_hunt_plan(base_df)
+        base_df = self.engine.hunt_plan(base_df)
+        base_df = self.hunter.strike_phase(base_df)
+
         print(base_df[DEBUG_COL][-50:])
         base_df[DUMP_COL].to_csv("hunt.csv")
         print("hunt.csv")
@@ -137,6 +145,7 @@ if __name__ == "__main__":
     from engine.probabilistic_engine import BayesianEngine
     from sensor.market_sensor import LocalMarketSensor
     from sensor.market_sensor import HuobiMarketSensor
+    from tradingfirm.trader import xHunter
 
     params = {
         "ATR_sample": 60,
@@ -152,10 +161,10 @@ if __name__ == "__main__":
 
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
-    # hunter = xHunter()
+    hunter = xHunter(params=sp)
     # gains_bag = GainsBags(init_fund=100, position=0)
 
-    story = HuntingStory(sensor, scout, engine)
+    story = HuntingStory(sensor, scout, engine, hunter)
     base_df = sensor.scan(2000)
     for i in range(2000):
         base_df = story.start(base_df)
