@@ -2,6 +2,7 @@ import pandas as pd
 from empiricaldist import Pmf
 import numpy as np
 from settings import ZERO
+from scipy.stats import gaussian_kde
 
 
 def update(table):
@@ -66,3 +67,12 @@ def profit_dist_by_CDF(data_list, n_mid):
     w = sigmoid(len(data_list), n_mid)
 
     return w * _like, prob_win, profit_margin, loss_margin
+
+
+def kde_top(profits):
+    values = profits.to_numpy()
+    kde = gaussian_kde(values)
+    x = np.linspace(min(values), max(values), 1000)
+    pdf = kde.evaluate(x)
+    max_density_value = x[np.argmax(pdf)]
+    return max_density_value

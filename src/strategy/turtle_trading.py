@@ -17,23 +17,7 @@ TURTLE_COLUMNS = [
     "time_cost",
     "Matured",
     "BuySignal",
-    "Postrior",
-    "Kelly",
-    "p_win",
-    "likelihood",
-    "profit_margin",
-    "loss_margin",
 ]
-
-
-def pre_process_data(df):
-    missing_columns = set(TURTLE_COLUMNS) - set(df.columns)
-    if missing_columns:
-        new_cols = {col: np.nan for col in missing_columns}
-        if "Matured" in new_cols:
-            new_cols["Matured"] = pd.NaT
-        return df.assign(**new_cols)
-    return df
 
 
 class TurtleScout(IStrategyScout):
@@ -46,14 +30,20 @@ class TurtleScout(IStrategyScout):
 
         # Buy daily basic when the market price is higher than Stop profit
         s_buy = (
-            df.buy.isna() & df.exit_price.notna() & (df.exit_price < df.Open.shift(-1))
+            # df.buy.isna() & df.exit_price.notna() & (df.exit_price < df.Open.shift(-1))
+            # df.buy.isna() & df.exit_price.notna() & (df.exit_price < df.Close)
+            df.buy.isna()
+            & df.exit_price.notna()
         )
-        df.loc[s_buy, "buy"] = df.Open.shift(-1)
+        # df.loc[s_buy, "buy"] = df.Open.shift(-1)
+        df.loc[s_buy, "buy"] = df.Close
         df.loc[:, "BuySignal"] = df.High > df.turtle_h
         # Sell condition:
-        s_sell = df.buy.notna() & (df.Low.shift(-1) < df.exit_price)
+        # s_sell = df.buy.notna() & (df.Low.shift(-1) < df.exit_price)
+        s_sell = df.buy.notna() & (df.Low < df.exit_price)
         df.loc[s_sell, "sell"] = df.exit_price.where(s_sell)
-        df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.shift(-1).where(s_sell))
+        # df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.shift(-1).where(s_sell))
+        df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.where(s_sell))
 
         # Backfill sell and Matured columns
         df.sell.bfill(inplace=True)
@@ -63,17 +53,13 @@ class TurtleScout(IStrategyScout):
         s_profit = df.buy.notna() & df.sell.notna() & df.profit.isna()
         df.loc[s_profit, "profit"] = (df.sell / df.buy) - 1
         df.loc[s_profit, "time_cost"] = [
-            int(x.seconds/60/pandas_util.INTERVAL_TO_MIN.get(self.params.interval))
+            int(x.seconds / 60 / pandas_util.INTERVAL_TO_MIN.get(self.params.interval))
             for x in (
                 pd.to_datetime(df.loc[s_profit, "Matured"])
                 - pd.to_datetime(df.loc[s_profit, "Date"])
             )
         ]
-        # df.loc[s_profit, "time_cost"] = df[s_profit].apply(
-        #     lambda row: df[df["Matured"] == row["Matured"]].index[0]
-        #     - df[df["Date"] == row["Date"]].index[0],
-        #     axis=1,
-        # )
+
         # Clear sell and Matured values where buy is NaN
         df.loc[df.buy.isna(), "sell"] = np.nan
         df.loc[df.buy.isna(), "Matured"] = pd.NaT
@@ -93,12 +79,8 @@ class TurtleScout(IStrategyScout):
             if base_df.ATR.isna().all()
             else base_df.ATR.iloc[ATR_sample:].isna().index
         )
-        base_df.loc[idx, "turtle_h"] = (
-            base_df.Close.shift(1).rolling(upper_sample).max()
-        )
-        base_df.loc[idx, "turtle_l"] = (
-            base_df.Close.shift(1).rolling(lower_sample).min()
-        )
+        base_df.loc[idx, "turtle_h"] = base_df.High.shift(1).rolling(upper_sample).max()
+        base_df.loc[idx, "turtle_l"] = base_df.Low.shift(1).rolling(lower_sample).min()
         base_df.loc[idx, "h_l"] = base_df.High - base_df.Low
         base_df.loc[idx, "c_h"] = (base_df.Close.shift(1) - base_df.High).abs()
         base_df.loc[idx, "c_l"] = (base_df.Close.shift(1) - base_df.Low).abs()
@@ -113,7 +95,7 @@ class TurtleScout(IStrategyScout):
         return base_df
 
     def market_recon(self, base_df):
-        base_df = pre_process_data(base_df)
+        base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_profit(base_df)
         return base_df

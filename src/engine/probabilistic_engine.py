@@ -4,8 +4,17 @@ from story import IEngine
 from utils import pandas_util
 import numpy as np
 import pandas as pd
-from bayes import conditional, prob, odd, prob_odd, sigmoid, pmf_n_cdf
+from bayes import conditional, prob, odd, prob_odd, sigmoid, pmf_n_cdf, kde_top
 from settings import ZERO
+
+BAYESIAN_ENGINE_COLUMNS = [
+    "Postrior",
+    "Kelly",
+    "p_win",
+    "likelihood",
+    "profit_margin",
+    "loss_margin",
+]
 
 
 def pick_dates(df, today, windows):
@@ -25,6 +34,29 @@ def enrichment_temp_close(df):
     last_day = df.iloc[-1]
     close = last_day.Close
     last_index = df.index[-1]
+    s_sell_na = df.sell.isna()
+    # # Create a dictionary to hold new column values
+    # new_columns = {
+    #     # "buy": close,
+    #     "sell": close,
+    #     "time_cost": list(reversed(range(len(df)))),
+    #     "Matured": pd.to_datetime(last_day.Date),
+    # }
+    # # Update DataFrame in one go
+    # for col, value in new_columns.items():
+    #     df.loc[s_sell_na, col] = value
+    df.loc[s_sell_na, "sell"] = close
+
+    df["profit"] = (df["sell"] / df["buy"]) - 1
+    return df
+
+
+def enrichment_full_close(df):
+    df = df.copy()
+    last_day = df.iloc[-1]
+    close = last_day.Close
+    last_index = df.index[-1]
+    df["buy"] = df["Close"]
     # Create a dictionary to hold new column values
     new_columns = {
         # "buy": close,
@@ -41,8 +73,8 @@ def enrichment_temp_close(df):
 
 
 def kelly_formular(pwin, loss_margin, profit_margin):
-    loss_margin = loss_margin or 1/(10**30)
-    profit_margin = profit_margin or 1/(10**30)
+    loss_margin = loss_margin or 1 / (10**30)
+    profit_margin = profit_margin or 1 / (10**30)
     _pwin = pwin / loss_margin
     _ploss = (1 - pwin) / profit_margin
     # print(
@@ -62,12 +94,14 @@ def calc_likelihood(signal_pnl, daily_pnl, n_mid):
         profit_margin = 0
         loss_margin = 0
         return _like, p_win, profit_margin, loss_margin
- 
-    pmf, cdf = pmf_n_cdf(daily_pnl)
-    profit_margin = pmf.loc[0:].idxmax() if pmf.loc[0:].any() else 0
-    loss_margin = pmf.loc[:0].idxmax() if pmf.loc[:0].any() else 0
 
-    _zero = 1/(10**n_mid)
+    pmf, cdf = pmf_n_cdf(daily_pnl)
+    profits = daily_pnl[daily_pnl > 0]
+    loss = daily_pnl[daily_pnl <= 0]
+    profit_margin = 0 if len(set(profits)) <= 1 else kde_top(profits)
+    loss_margin = 0 if len(set(loss)) <= 1 else abs(loss.min())
+
+    _zero = 1 / (10**n_mid)
     # signal_profit = max(len([i for i in signal_pnl if i > 0]), _zero)
     # signal_loss = max(len(signal_pnl) - signal_profit, _zero)
     # print(f' ==> P: {signal_profit}/{signal_loss} = {signal_profit/signal_loss}')
@@ -77,7 +111,7 @@ def calc_likelihood(signal_pnl, daily_pnl, n_mid):
     # _like = 1/signal_cdf(0) - 1   # profit_count/loss_count
     # w = sigmoid(len(signal_pnl), n_mid)
     # _pwin = 1 - signal_cdf(0)
-    _like = 1/(cdf(0) or 0.1) - (1-_zero)   # profit_count/loss_count
+    _like = 1 / (cdf(0) or 0.1) - (1 - _zero)  # profit_count/loss_count
     w = sigmoid(len(daily_pnl), n_mid)
     _pwin = 1 - cdf(0)
     return w * _like, _pwin, profit_margin, loss_margin
@@ -89,37 +123,41 @@ class BayesianEngine(IEngine):
         self._name = name
         self._params = params
 
-    def hunt_plan(self, recon_report):
+    def hunt_plan(self, base_df):
+        base_df = pandas_util.equip_fields(base_df, BAYESIAN_ENGINE_COLUMNS)
         windows = self._params.bayes_windows or 120
-        df = recon_report
-        posterior =self._latest_prior
+        df = base_df
+        posterior = self._latest_prior
         # s_buysignal = (df.BuySignal == True) & (df.sell.isna())
         for idx, row in df[df.BuySignal == True].iterrows():
             today = row.Date
             s_matured, s_eod, s_eod_yet_matured = pick_dates(df, today, windows)
-
-            sub_df = enrichment_temp_close(df[s_eod_yet_matured])
             df_clone = df.loc[s_eod].copy()
             # df_clone = df
-            df_clone.loc[
-                sub_df.index, ["sell", "time_cost", "Matured", "profit"]
-            ] = sub_df[["sell", "time_cost", "Matured", "profit"]]
+
+            if s_eod_yet_matured.sum() > 0:
+                sub_df = enrichment_temp_close(df[s_eod_yet_matured])
+                df_clone.loc[
+                    sub_df.index, ["sell", "time_cost", "Matured", "profit"]
+                ] = sub_df[["sell", "time_cost", "Matured", "profit"]]
             daily_pnl = df_clone.profit
             # print(f"daily pnl count: {len(daily_pnl)}")
             # signal_pnl = df[(df.BuySignal == True) & (df.Date < today)][-windows:].profit
             signal_pnl = daily_pnl
-            _like, p_win, profit_margin, loss_margin = calc_likelihood(signal_pnl, daily_pnl, windows/2)
+            _like, p_win, profit_margin, loss_margin = calc_likelihood(
+                signal_pnl, daily_pnl, windows / 2
+            )
 
             posterior = prob_odd(odd(posterior) * _like)
 
             kelly_args = {
-                "pwin": posterior,
+                "pwin": (_like / (_like * 2)),  # posterior,
                 "loss_margin": abs(loss_margin),
                 "profit_margin": profit_margin,
             }
             _signal_kelly = kelly_formular(**kelly_args)
-            
-            if df.loc[df.Date == today, 'Kelly'].isna().any():
+
+            if df.loc[df.Date == today, "Kelly"].isna().any():
                 self._latest_prior = posterior
                 # print(
                 #     f"[{today}] {self._latest_prior}! {odd(posterior):.6f} * {_like:.6f} = {prob_odd(odd(posterior) * _like):.10f}"
@@ -127,7 +165,9 @@ class BayesianEngine(IEngine):
                 df.loc[df.Date == today, "Postrior"] = self._latest_prior
                 df.loc[df.Date == today, "Kelly"] = _signal_kelly
                 df.loc[df.Date == today, "p_win"] = p_win
-                df.loc[df.Date == today, "P/L"] = f"{daily_pnl[daily_pnl>0].count()}/{daily_pnl[daily_pnl<=0].count()}"
+                df.loc[
+                    df.Date == today, "P/L"
+                ] = f"{daily_pnl[daily_pnl>0].count()}/{daily_pnl[daily_pnl<=0].count()}"
                 df.loc[df.Date == today, "likelihood"] = _like
                 df.loc[df.Date == today, "profit_margin"] = profit_margin
                 df.loc[df.Date == today, "loss_margin"] = loss_margin

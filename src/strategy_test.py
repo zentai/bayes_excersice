@@ -108,11 +108,11 @@ if __name__ == "__main__":
     from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
 
     code = "BTC-USD"
-    df = pd.read_csv(f"{REPORTS_DIR}/../hunt.csv")
+    df = pd.read_csv(f"hunt.csv")
     size = len(df)
 
     results = monte_carlo_simulation(
-        dataframe=df, num_simulations=2000, num_trades_per_simulation=1000
+        dataframe=df, num_simulations=100, num_trades_per_simulation=100
     )
     from pprint import pprint as pp
 

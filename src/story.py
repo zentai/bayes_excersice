@@ -8,21 +8,27 @@ from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
 from utils import pandas_util
+from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
 
 DEBUG_COL = [
     "Date",
     # "Open",
     # "High",
-    # "Low",
+    "Low",
     "Close",
     # "BuySignal",
     # "Stop_profit",
     "exit_price",
-    "Matured",
-    "time_cost",
+    # "Matured",
+    # "time_cost",
     "buy",
     "sell",
     "profit",
+    "xBuy",
+    "xSell",
+    "xProfit",
+    "xPosition",
+    "xCash",
     "Kelly",
     "Postrior",
     "P/L",
@@ -47,6 +53,11 @@ DUMP_COL = [
     "profit",
     # "turtle_l",
     # "turtle_h",
+    "xBuy",
+    "xSell",
+    "xProfit",
+    "xPosition",
+    "xCash",
     "Kelly",
     "Postrior",
     "P/L",
@@ -105,8 +116,10 @@ class HuntingStory:
         base_df = self.hunter.strike_phase(base_df)
 
         print(base_df[DEBUG_COL][-50:])
-        base_df[DUMP_COL].to_csv("hunt.csv")
-        print("hunt.csv")
+        base_df[DUMP_COL].to_csv(
+            f"{REPORTS_DIR}/{scout.params.symbol.name}.csv", index=False
+        )
+        print(f"{REPORTS_DIR}/{scout.params.symbol.name}.csv")
         print(f"Sleep: {self.sensor.interval_min} min")
         time.sleep(self.sensor.interval_min * 60)
         base_df = self.sensor.fetch(base_df)
@@ -121,13 +134,38 @@ class HuntingStory:
 
 
 @dataclass
+class Symbol:
+    name: str
+    amount_prec: float = 4
+    price_prec: float = 4
+
+    def __post_init__(self):
+        from huobi.client.generic import GenericClient
+
+        client = GenericClient()
+        for item in client.get_exchange_symbols():
+            if item.symbol == self.name:
+                self.amount_prec = item.amount_precision
+                self.price_prec = item.price_precision
+
+    def __str__(self):
+        return self.__repr__()
+
+    def __repr__(self):
+        return self.name
+
+
+@dataclass
 class StrategyParam:
+    symbol: str
     ATR_sample: int = 7
     atr_loss_margin: float = 1.5
     bayes_windows: int = 30
     lower_sample: int = 7
     upper_sample: int = 7
     interval: str = "1min"
+    fetch_huobi: bool = False
+    simulate: bool = False
 
     def __post_init__(self):
         self.ATR_sample = int(self.ATR_sample)
@@ -148,16 +186,19 @@ if __name__ == "__main__":
     from tradingfirm.trader import xHunter
 
     params = {
-        "ATR_sample": 60,
+        "ATR_sample": 30,
         "atr_loss_margin": 1.5,
         "bayes_windows": 30,
         "lower_sample": 30,
         "upper_sample": 30,
         "interval": "1min",
+        "symbol": Symbol("seiusdt"),
+        "fetch_huobi": True,
+        "simulate": True,
     }
     sp = StrategyParam(**params)
-    # sensor = LocalMarketSensor(symbol="btcusdt", interval="1min")
-    sensor = HuobiMarketSensor(symbol="btcusdt", interval=sp.interval)
+    # sensor = LocalMarketSensor(symbol=sp.symbol, interval='local')
+    sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
 
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
@@ -168,3 +209,8 @@ if __name__ == "__main__":
     base_df = sensor.scan(2000)
     for i in range(2000):
         base_df = story.start(base_df)
+    # try:
+    #     base_df = story.start(base_df)
+    # except Exception as e:
+    #     print(e)
+    #     time.sleep(3)
