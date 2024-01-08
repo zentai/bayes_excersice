@@ -29,6 +29,7 @@ DEBUG_COL = [
     "xProfit",
     "xPosition",
     "xCash",
+    "xAvgCost",
     "Kelly",
     "Postrior",
     "P/L",
@@ -58,6 +59,7 @@ DUMP_COL = [
     "xProfit",
     "xPosition",
     "xCash",
+    "xAvgCost",
     "Kelly",
     "Postrior",
     "P/L",
@@ -192,13 +194,13 @@ if __name__ == "__main__":
         "lower_sample": 30,
         "upper_sample": 30,
         "interval": "1min",
-        "symbol": Symbol("seiusdt"),
-        "fetch_huobi": True,
+        "symbol": Symbol("btcusdt"),
+        "fetch_huobi": False,
         "simulate": True,
     }
     sp = StrategyParam(**params)
-    # sensor = LocalMarketSensor(symbol=sp.symbol, interval='local')
-    sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
+    sensor = LocalMarketSensor(symbol=sp.symbol, interval='local')
+    # sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
 
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)

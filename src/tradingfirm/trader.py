@@ -9,6 +9,7 @@ HUNTER_COLUMNS = [
     "xProfit",
     "xPosition",
     "xCash",
+    "xAvgCost",
 ]
 
 
@@ -104,6 +105,7 @@ class xHunter(IHunter):
                     base_df.loc[s_buy, "xBuy"] = price
                     base_df.loc[s_buy, "xPosition"] = self.gains_bag.position
                     base_df.loc[s_buy, "xCash"] = self.gains_bag.cash
+                    base_df.loc[s_buy, "xAvgCost"] = self.gains_bag.avg_cost
                 else:
                     # TODO: call huobi client, using market price to buy
                     # base_df.loc[base_df.Date==lastest_candlestick.Date, 'xBuy'] = pandas_util.sim_trade(self.params.symbol, action='buy')
