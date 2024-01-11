@@ -1,6 +1,7 @@
 from story import IHunter, DEBUG_COL
 from utils import pandas_util
 import pandas as pd
+import numpy as np
 import logging
 
 HUNTER_COLUMNS = [
@@ -11,6 +12,35 @@ HUNTER_COLUMNS = [
     "xCash",
     "xAvgCost",
 ]
+
+
+def weighted_daily_return(df_subset):
+    total_time_cost = df_subset["time_cost"].sum() or 1
+    weighted_return = np.sum(
+        (1 + df_subset["xProfit"]) ** (1 / df_subset["time_cost"])
+        * df_subset["time_cost"]
+    )
+    wd_return = (weighted_return / total_time_cost) - 1
+    return total_time_cost, wd_return
+
+
+def calc_annual_return_and_sortino_ratio(cost, profit, df):
+    _yield_curve_1yr = 0.0419
+    _start_date = df.iloc[0].Date
+    _end_date = df.iloc[-1].Date
+    _trade_count = len(df[df.Kelly > 0])
+    _trade_minutes = (
+        pd.to_datetime(_end_date) - pd.to_datetime(_start_date)
+    ).total_seconds() / 60
+    _annual_trade_count = (_trade_count / _trade_minutes) * 365 * 24 * 60
+    _downside_risk_stdv = df[
+        (df.Kelly > 0) & (df.xProfit < _yield_curve_1yr)
+    ].xProfit.std(ddof=1)
+    _annual_downside_risk_stdv = _downside_risk_stdv * np.sqrt(_annual_trade_count)
+    t = _trade_minutes / (365 * 24 * 60)
+    _annual_return = (profit / cost) ** (1 / t) - 1 if (profit / cost > 0) else 0
+    _sortino_ratio = (_annual_return - _yield_curve_1yr) / _annual_downside_risk_stdv
+    return _annual_return, _sortino_ratio
 
 
 class GainsBag:
@@ -131,3 +161,50 @@ class xHunter(IHunter):
                     # base_df.loc[base_df.Date==lastest_candlestick.Date, 'xBuy'] = pandas_util.sim_trade(self.params.symbol, action='buy')
                     pass
         return base_df
+
+    def review_mission(self, base_df):
+        df = base_df[base_df.BuySignal == 1]
+        sample = len(df)
+        profit_sample = len(df[df.xProfit > 0])
+        profit_mean = (df.xProfit > 0).mean()
+        loss_mean = (df.xProfit <= 0).mean()
+        profit_loss_ratio = profit_mean / loss_mean
+        cost = self.gains_bag.init_funds
+        strike = base_df.iloc[-1].Close
+        profit = self.gains_bag.cash + (self.gains_bag.position * strike) - cost
+        time_cost, w_daily_return = weighted_daily_return(df)
+        avg_time_cost = time_cost / sample if sample else 0
+        avg_profit = profit / sample if sample else 0
+        drawdown = df.xProfit.min()
+
+        _annual_return, _sortino_ratio = calc_annual_return_and_sortino_ratio(
+            cost, profit, df
+        )
+        return pd.DataFrame(
+            [
+                [
+                    profit,
+                    cost,
+                    profit_loss_ratio,
+                    sample,
+                    profit_sample,
+                    avg_time_cost,
+                    avg_profit,
+                    drawdown,
+                    _annual_return,
+                    _sortino_ratio,
+                ]
+            ],
+            columns=[
+                "Profit",
+                "Cost",
+                "ProfitLossRatio",
+                "Sample",
+                "ProfitSample",
+                "Avg.Timecost",
+                "Avg.Profit",
+                "Drawdown",
+                "Annual.Return",
+                "SortinoRatio",
+            ],
+        )
