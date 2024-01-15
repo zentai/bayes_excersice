@@ -1,6 +1,8 @@
 import sys
 import os
 import time
+import click
+import datetime
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from dataclasses import dataclass
@@ -118,12 +120,19 @@ class HuntingStory:
         base_df = self.hunter.strike_phase(base_df)
 
         print(base_df[DEBUG_COL][-50:])
+        print(self.hunter.review_mission(base_df))
         base_df[DUMP_COL].to_csv(
-            f"{REPORTS_DIR}/{scout.params.symbol.name}.csv", index=False
+            f"{REPORTS_DIR}/{self.scout.params.symbol.name}_2.csv", index=False
         )
-        print(f"{REPORTS_DIR}/{scout.params.symbol.name}.csv")
-        print(f"Sleep: {self.sensor.interval_min} min")
-        time.sleep(self.sensor.interval_min * 60)
+        print(f"{REPORTS_DIR}/{self.scout.params.symbol.name}_2.csv")
+
+        seconds_to_wait = 60 - datetime.datetime.now().second + 5
+        print(f"Will be start after: {seconds_to_wait} sec")
+        time.sleep(seconds_to_wait)
+
+        # print(f"Sleep: {self.sensor.interval_min} min")
+        # time.sleep(self.sensor.interval_min * 60)
+
         base_df = self.sensor.fetch(base_df)
         return base_df
         # hunt_plan.to_csv("hunt.csv")
@@ -176,7 +185,20 @@ class StrategyParam:
         self.upper_sample = int(self.upper_sample)
 
 
-if __name__ == "__main__":
+@click.command()
+@click.option("--ccy", required=True, help="trade ccy pair")
+@click.option(
+    "--interval",
+    required=False,
+    help="trade interval: 1min 5min 15min 30min 60min 4hour 1day 1mon 1week 1year",
+)
+@click.option(
+    "--fund",
+    required=False,
+    type=int,
+    help="initial funds",
+)
+def main(ccy="maticusdt", interval=None, fund=None):
     import sys
     import os
 
@@ -194,25 +216,33 @@ if __name__ == "__main__":
         "lower_sample": 30,
         "upper_sample": 30,
         "interval": "1min",
-        "symbol": Symbol("btcusdt"),
-        "fetch_huobi": False,
+        "symbol": Symbol(ccy),
+        "fetch_huobi": True,
         "simulate": True,
     }
     sp = StrategyParam(**params)
-    sensor = LocalMarketSensor(symbol=sp.symbol, interval='local')
-    # sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
+    # sensor = LocalMarketSensor(symbol=sp.symbol, interval='local')
+    sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
 
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
     hunter = xHunter(params=sp)
     # gains_bag = GainsBags(init_fund=100, position=0)
 
+    # Adjust start time
+    seconds_to_wait = 60 - datetime.datetime.now().second + 5
+    print(f"Will be start after: {seconds_to_wait} sec")
+    time.sleep(seconds_to_wait)
+
     story = HuntingStory(sensor, scout, engine, hunter)
     base_df = sensor.scan(2000)
-    for i in range(2000):
-        base_df = story.start(base_df)
-    # try:
-    #     base_df = story.start(base_df)
-    # except Exception as e:
-    #     print(e)
-    #     time.sleep(3)
+    for i in range(20000):
+        try:
+            base_df = story.start(base_df)
+        except Exception as e:
+            print(e)
+            time.sleep(3)
+
+
+if __name__ == "__main__":
+    main()

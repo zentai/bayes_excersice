@@ -17,6 +17,24 @@ BAYESIAN_ENGINE_COLUMNS = [
 ]
 
 
+def x_times_odd(df, count):
+    s_base = df.BuySignal == 1
+    for i in range(count):
+        s_base &= df.shift(-i).BuySignal == 1
+    result_df = df[s_base]
+    # print(result_df[['Date', 'BuySignal', 'profit', 'Kelly']][-60:])
+    if len(result_df) == 0:
+        return 1
+    odd = (result_df.profit > 0).sum() / (
+        (result_df.profit <= 0).sum() or 1 / (10**10)
+    )
+    return odd
+
+
+def signal_meter(df, windows_size):
+    return {i: x_times_odd(df, i) for i in range(1, windows_size)}
+
+
 def pick_dates(df, today, windows):
     today = pd.to_datetime(today)
     df = df[["Date", "Matured"]].copy()
@@ -127,14 +145,30 @@ class BayesianEngine(IEngine):
         base_df = pandas_util.equip_fields(base_df, BAYESIAN_ENGINE_COLUMNS)
         windows = self._params.bayes_windows or 120
         df = base_df
+
         posterior = self._latest_prior
         # s_buysignal = (df.BuySignal == True) & (df.sell.isna())
-        for idx, row in df[df.BuySignal == True].iterrows():
+        # if df.loc[df.Date == today, "Kelly"].isna().any():
+        # for idx, row in df[df.BuySignal == True].iterrows():
+        for idx, row in df[(df.BuySignal == True) & df.Kelly.isna()].iterrows():
             today = row.Date
             s_matured, s_eod, s_eod_yet_matured = pick_dates(df, today, windows)
             df_clone = df.loc[s_eod].copy()
-            # df_clone = df
 
+            prior = 1
+            if (df.BuySignal == 1).sum() > windows:
+                profit_distribution = signal_meter(df[df.Date <= today], windows + 1)
+                signal_count = 0
+                for i in reversed(df_clone.BuySignal.values):
+                    if i == 0:
+                        break
+                    signal_count += 1
+                prior = profit_distribution.get(signal_count)
+                print(
+                    f"[{today}] Prior: {profit_distribution.get(signal_count)}, SignalCount: {signal_count}, dist: {profit_distribution}"
+                )
+            else:
+                print(f"!Data sample < {windows}")
             if s_eod_yet_matured.sum() > 0:
                 sub_df = enrichment_temp_close(df[s_eod_yet_matured])
                 df_clone.loc[
@@ -148,10 +182,10 @@ class BayesianEngine(IEngine):
                 signal_pnl, daily_pnl, windows / 2
             )
 
-            posterior = prob_odd(odd(posterior) * _like)
+            posterior = prob_odd(prior * _like)
 
             kelly_args = {
-                "pwin": (_like / (_like * 2)),  # posterior,
+                "pwin": posterior,
                 "loss_margin": abs(loss_margin),
                 "profit_margin": profit_margin,
             }
