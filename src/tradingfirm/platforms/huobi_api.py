@@ -1,10 +1,13 @@
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime
 import pandas as pd
-from market.base import Candlestick
 
-import huobi
+
 from huobi.client.trade import TradeClient
 from huobi.client.account import AccountClient
 from huobi.client.market import MarketClient
@@ -28,6 +31,22 @@ huobi_interval = {
     "1week": CandlestickInterval.WEEK1,
     "1year": CandlestickInterval.YEAR1,
 }
+
+
+
+@dataclass
+class Candlestick:
+    Date: int
+    High: float
+    Low: float
+    Open: float
+    Close: float
+    Amount: float
+    Count: int
+    Vol: float
+
+    def __post_init__(self):
+        self.Date = datetime.fromtimestamp(self.Date)
 
 # Account
 def get_spot_acc():
@@ -117,11 +136,21 @@ def place_order(symbol, amount, price, order_type):
         "B": OrderType.BUY_LIMIT,
         "S": OrderType.SELL_LIMIT,
         "SM": OrderType.SELL_MARKET,
+        "BM": OrderType.BUY_MARKET,
     }
     order_type = side.get(order_type)
+    if order_type in (OrderType.BUY_LIMIT, OrderType.BUY_MARKET):
+        round_amount = symbol.round_price(amount)
+        print(f"[BUY] adjust buy amount: {amount} -> {round_amount}")
+        amount = round_amount
+    elif order_type in (OrderType.SELL_LIMIT, OrderType.SELL_MARKET):
+        round_amount = symbol.round_amount(amount)
+        print(f"[SELL] adjust sell position: {amount} -> {round_amount}")
+        amount = round_amount
+    
     trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
     order_id = trade_client.create_order(
-        symbol=symbol,
+        symbol=symbol.name,
         account_id=spot_account_id,
         order_type=order_type,
         source=OrderSource.API,
@@ -183,9 +212,39 @@ def get_strike(symbol):
     return df.iloc[len(df.index) - 1].Close
 
 
+def seek_price(symbol, action):
+    market_client = MarketClient()
+    seeking = True
+    while seeking:
+        list_obj = market_client.get_market_trade(symbol=symbol.name)
+        for t in list_obj:
+            if t.direction == action:
+                return t.price
+            # t.print_object()
+        time.sleep(0.05)
+
+
 if __name__ == "__main__":
     # get_balance('nearusdt')
     # get_balance('usdt')
+
+    from story import Symbol
+    symbol = Symbol('btcusdt')
     get_spot_acc().print_object()
-    balance = get_balance("usdt")
+    balance = get_balance("mkrusdt")
     print(balance)
+    # print(f"[SEEK BUY] {seek_price(symbol=symbol, action='buy')}")
+    # order_id = place_order(symbol=symbol, amount=10, price=None, order_type='BM')
+    # df_orders = get_orders([order_id])
+    # print(df_orders)
+    # price = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[0]
+    # position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
+    # print(f"[BUY] Average Price: {price/position} ")
+    # time.sleep(1)
+    # print(f"[SEEK SELL] {seek_price(symbol=symbol, action='sell')}")
+    # order_id = place_order(symbol=symbol, amount=position, price=None, order_type='SM')
+    # df_orders = get_orders([order_id])
+    # print(df_orders)
+    # price = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[0]
+    # position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
+    # print(f"[SELL] Average Price: {price/position} ")

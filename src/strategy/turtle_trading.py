@@ -40,7 +40,7 @@ class TurtleScout(IStrategyScout):
         df.loc[:, "BuySignal"] = df.High > df.turtle_h
         # Sell condition:
         # s_sell = df.buy.notna() & (df.Low.shift(-1) < df.exit_price)
-        s_sell = df.buy.notna() & (df.Low < df.exit_price)
+        s_sell = df.buy.notna() & (df.Close < df.exit_price)
         df.loc[s_sell, "sell"] = df.exit_price.where(s_sell)
         # df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.shift(-1).where(s_sell))
         df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.where(s_sell))

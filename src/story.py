@@ -119,7 +119,7 @@ class HuntingStory:
         base_df = self.engine.hunt_plan(base_df)
         base_df = self.hunter.strike_phase(base_df)
 
-        print(base_df[DEBUG_COL][-50:])
+        print(base_df[DEBUG_COL][-30:])
         print(self.hunter.review_mission(base_df))
         base_df[DUMP_COL].to_csv(
             f"{REPORTS_DIR}/{self.scout.params.symbol.name}_2.csv", index=False
@@ -158,6 +158,18 @@ class Symbol:
             if item.symbol == self.name:
                 self.amount_prec = item.amount_precision
                 self.price_prec = item.price_precision
+
+    def _round_down(self, number, prec):
+        return round(
+            int(number * 10**prec) / 10**prec,
+            prec,
+        )
+
+    def round_price(self, price):
+        return self._round_down(price, self.price_prec)
+
+    def round_amount(self, amount):
+        return self._round_down(amount, self.amount_prec)
 
     def __str__(self):
         return self.__repr__()
@@ -210,15 +222,15 @@ def main(ccy="maticusdt", interval=None, fund=None):
     from tradingfirm.trader import xHunter
 
     params = {
-        "ATR_sample": 30,
+        "ATR_sample": 5,
         "atr_loss_margin": 1.5,
-        "bayes_windows": 30,
-        "lower_sample": 30,
-        "upper_sample": 30,
+        "bayes_windows": 5,
+        "lower_sample": 5,
+        "upper_sample": 5,
         "interval": "1min",
         "symbol": Symbol(ccy),
         "fetch_huobi": True,
-        "simulate": True,
+        "simulate": False,
     }
     sp = StrategyParam(**params)
     # sensor = LocalMarketSensor(symbol=sp.symbol, interval='local')
@@ -241,7 +253,7 @@ def main(ccy="maticusdt", interval=None, fund=None):
             base_df = story.start(base_df)
         except Exception as e:
             print(e)
-            time.sleep(3)
+            time.sleep(5)
 
 
 if __name__ == "__main__":

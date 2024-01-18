@@ -64,7 +64,6 @@ def enrichment_temp_close(df):
     # for col, value in new_columns.items():
     #     df.loc[s_sell_na, col] = value
     df.loc[s_sell_na, "sell"] = close
-
     df["profit"] = (df["sell"] / df["buy"]) - 1
     return df
 
@@ -163,10 +162,10 @@ class BayesianEngine(IEngine):
                     if i == 0:
                         break
                     signal_count += 1
-                prior = profit_distribution.get(signal_count)
-                print(
-                    f"[{today}] Prior: {profit_distribution.get(signal_count)}, SignalCount: {signal_count}, dist: {profit_distribution}"
-                )
+                prior = profit_distribution.get(signal_count, 1)
+                # print(
+                #     f"[{today}] Prior: {profit_distribution.get(signal_count)}, SignalCount: {signal_count}, dist: {profit_distribution}"
+                # )
             else:
                 print(f"!Data sample < {windows}")
             if s_eod_yet_matured.sum() > 0:

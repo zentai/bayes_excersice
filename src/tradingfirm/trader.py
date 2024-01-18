@@ -1,5 +1,6 @@
 from story import IHunter, DEBUG_COL
 from utils import pandas_util
+from tradingfirm.platforms import huobi_api
 import pandas as pd
 import numpy as np
 import logging
@@ -106,6 +107,11 @@ class GainsBag:
         self.position -= position
         self.log_action("close_position", price, position, cash)
 
+    def is_enough_position(self):
+        return self.position * self.avg_cost > self.MIN_STAKE_CAP
+
+    def is_enough_cash(self):
+        return self.cash > self.MIN_STAKE_CAP
 
 class xHunter(IHunter):
     def __init__(self, params):
@@ -113,53 +119,57 @@ class xHunter(IHunter):
         self.params = params
         self.fetch_huobi = params.fetch_huobi
         self.simulate = params.simulate
-        self.gains_bag = GainsBag(symbol=params.symbol, init_funds=200, stake_cap=50)
+        self.gains_bag = GainsBag(symbol=params.symbol, init_funds=100, stake_cap=50)
 
     def strike_phase(self, base_df):
         base_df = pandas_util.equip_fields(base_df, HUNTER_COLUMNS)
         lastest_candlestick = base_df.iloc[-1]
         buy_signal = lastest_candlestick.Kelly > 0
-        sell_signal = lastest_candlestick.Low < lastest_candlestick.exit_price
-        if buy_signal:
+        sell_signal = lastest_candlestick.Close < lastest_candlestick.exit_price
+        if buy_signal and self.gains_bag.is_enough_cash():
             budget = self.gains_bag.discharge(lastest_candlestick.Kelly)
-            if budget:
-                if self.params.simulate:
-                    price = (
-                        pandas_util.sim_trade(self.params.symbol, action="buy")
-                        if self.params.fetch_huobi
-                        else lastest_candlestick.Close
-                    )
-                    position = budget / price
-                    self.gains_bag.open_position(position, price)
-                    s_buy = base_df.Date == lastest_candlestick.Date
-                    base_df.loc[s_buy, "xBuy"] = price
-                    base_df.loc[s_buy, "xPosition"] = self.gains_bag.position
-                    base_df.loc[s_buy, "xCash"] = self.gains_bag.cash
-                    base_df.loc[s_buy, "xAvgCost"] = self.gains_bag.avg_cost
-                else:
-                    # TODO: call huobi client, using market price to buy
-                    # base_df.loc[base_df.Date==lastest_candlestick.Date, 'xBuy'] = pandas_util.sim_trade(self.params.symbol, action='buy')
-                    pass
-        elif sell_signal:
+            
+            if self.params.simulate:
+                price = (
+                    huobi_api.seek_price(self.params.symbol, action="buy")
+                    if self.params.fetch_huobi
+                    else lastest_candlestick.Close
+                )
+                position = budget / price
+            else:
+                order_id = huobi_api.place_order(symbol=self.params.symbol, amount=budget, price=None, order_type='BM')
+                df_orders = huobi_api.get_orders([order_id])
+                cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[0]
+                position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
+                price = cash/position
+            self.gains_bag.open_position(position, price)
+            s_buy = base_df.Date == lastest_candlestick.Date
+            base_df.loc[s_buy, "xBuy"] = price
+            base_df.loc[s_buy, "xPosition"] = self.gains_bag.position
+            base_df.loc[s_buy, "xCash"] = self.gains_bag.cash
+            base_df.loc[s_buy, "xAvgCost"] = self.gains_bag.avg_cost
+        elif sell_signal and self.gains_bag.is_enough_position():
             position = self.gains_bag.position
-            if position:
-                if self.params.simulate:
-                    price = (
-                        pandas_util.sim_trade(self.params.symbol, action="sell")
-                        if self.params.fetch_huobi
-                        else lastest_candlestick.exit_price
-                    )
-                    self.gains_bag.close_position(position, price)
-                    s_sell = base_df.xBuy.notna() & base_df.xSell.isna()
-                    last_index = base_df.loc[s_sell].index[-1]
-                    base_df.loc[s_sell, "xSell"] = price
-                    base_df.loc[s_sell, "xProfit"] = (base_df.xSell / base_df.xBuy) - 1
-                    base_df.at[last_index, "xPosition"] = self.gains_bag.position
-                    base_df.at[last_index, "xCash"] = self.gains_bag.cash
-                else:
-                    # TODO: call huobi client, using market price to sell
-                    # base_df.loc[base_df.Date==lastest_candlestick.Date, 'xBuy'] = pandas_util.sim_trade(self.params.symbol, action='buy')
-                    pass
+            if self.params.simulate:
+                price = (
+                    huobi_api.seek_price(self.params.symbol, action="sell")
+                    if self.params.fetch_huobi
+                    else lastest_candlestick.exit_price
+                )            
+            else:
+                huobi_position = huobi_api.get_balance(self.params.symbol.name)
+                order_id = huobi_api.place_order(symbol=self.params.symbol, amount=huobi_position, price=None, order_type='SM')
+                df_orders = huobi_api.get_orders([order_id])
+                cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[0]
+                position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
+                price = cash/position
+            self.gains_bag.close_position(position, price)
+            s_sell = base_df.xBuy.notna() & base_df.xSell.isna()
+            last_index = base_df.loc[s_sell].index[-1]
+            base_df.loc[s_sell, "xSell"] = price
+            base_df.loc[s_sell, "xProfit"] = (base_df.xSell / base_df.xBuy) - 1
+            base_df.at[last_index, "xPosition"] = self.gains_bag.position
+            base_df.at[last_index, "xCash"] = self.gains_bag.cash
         return base_df
 
     def review_mission(self, base_df):

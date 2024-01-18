@@ -108,7 +108,7 @@ if __name__ == "__main__":
     from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
 
     code = "BTC-USD"
-    df = pd.read_csv(f"/Users/zen/Documents/code/bayes/reports/maticusdt.csv")
+    df = pd.read_csv(f"/Users/zen/code/bayes_excersice/reports/nearusdt_2.csv")
     size = len(df)
 
     results = monte_carlo_simulation(
