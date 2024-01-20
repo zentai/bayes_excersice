@@ -81,7 +81,7 @@ def get_history_stick(symbol, sample=20, interval="1min"):
 def load_symbols(symbol):
     code = symbol.name  # "BTC-USD"
     df = pd.read_csv(f"{DATA_DIR}/{code}.csv")
-    df = df.dropna()
+    # df = df.dropna()
     return df
 
 
@@ -98,6 +98,18 @@ def equip_fields(df, columns):
         }
         return df.assign(**new_cols)
     return df
+
+
+def buy_market(symbol, budget):
+    trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
+    order_id = trade_client.create_order(
+        symbol=symbol,
+        account_id=account_id,
+        order_type=OrderType.BUY_MARKET,
+        source=OrderSource.API,
+        amount=5.0,
+        price=1.292,
+    )
 
 
 # TODO: refactor me to nicer place

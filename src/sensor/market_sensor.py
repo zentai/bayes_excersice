@@ -1,4 +1,4 @@
-from story import IMarketSensor
+from hunterverse.interface import IMarketSensor
 from utils import pandas_util
 import pandas as pd
 

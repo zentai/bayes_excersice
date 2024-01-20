@@ -1,9 +1,10 @@
-from story import IHunter, DEBUG_COL
+from hunterverse.interface import IHunter
 from utils import pandas_util
 from tradingfirm.platforms import huobi_api
 import pandas as pd
 import numpy as np
 import logging
+from settings import ZERO
 
 HUNTER_COLUMNS = [
     "xBuy",
@@ -26,13 +27,15 @@ def weighted_daily_return(df_subset):
 
 
 def calc_annual_return_and_sortino_ratio(cost, profit, df):
+    if df.empty:
+        return 0, 0
     _yield_curve_1yr = 0.0419
     _start_date = df.iloc[0].Date
     _end_date = df.iloc[-1].Date
     _trade_count = len(df[df.Kelly > 0])
     _trade_minutes = (
         pd.to_datetime(_end_date) - pd.to_datetime(_start_date)
-    ).total_seconds() / 60
+    ).total_seconds() / 60 or ZERO
     _annual_trade_count = (_trade_count / _trade_minutes) * 365 * 24 * 60
     _downside_risk_stdv = df[
         (df.Kelly > 0) & (df.xProfit < _yield_curve_1yr)
@@ -113,6 +116,7 @@ class GainsBag:
     def is_enough_cash(self):
         return self.cash > self.MIN_STAKE_CAP
 
+
 class xHunter(IHunter):
     def __init__(self, params):
         super().__init__()
@@ -128,20 +132,30 @@ class xHunter(IHunter):
         sell_signal = lastest_candlestick.Close < lastest_candlestick.exit_price
         if buy_signal and self.gains_bag.is_enough_cash():
             budget = self.gains_bag.discharge(lastest_candlestick.Kelly)
-            
-            if self.params.simulate:
-                price = (
-                    huobi_api.seek_price(self.params.symbol, action="buy")
-                    if self.params.fetch_huobi
-                    else lastest_candlestick.Close
-                )
+
+            if self.simulate:
+                if self.fetch_huobi:
+                    price = (
+                        huobi_api.seek_price(self.params.symbol, action="buy")
+                        if self.params.fetch_huobi
+                        else lastest_candlestick.Close
+                    )
+                else:
+                    price = lastest_candlestick.Close
                 position = budget / price
             else:
-                order_id = huobi_api.place_order(symbol=self.params.symbol, amount=budget, price=None, order_type='BM')
+                order_id = huobi_api.place_order(
+                    symbol=self.params.symbol,
+                    amount=budget,
+                    price=None,
+                    order_type="BM",
+                )
                 df_orders = huobi_api.get_orders([order_id])
-                cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[0]
+                cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[
+                    0
+                ]
                 position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
-                price = cash/position
+                price = cash / position
             self.gains_bag.open_position(position, price)
             s_buy = base_df.Date == lastest_candlestick.Date
             base_df.loc[s_buy, "xBuy"] = price
@@ -150,19 +164,29 @@ class xHunter(IHunter):
             base_df.loc[s_buy, "xAvgCost"] = self.gains_bag.avg_cost
         elif sell_signal and self.gains_bag.is_enough_position():
             position = self.gains_bag.position
-            if self.params.simulate:
-                price = (
-                    huobi_api.seek_price(self.params.symbol, action="sell")
-                    if self.params.fetch_huobi
-                    else lastest_candlestick.exit_price
-                )            
+            if self.simulate:
+                if self.fetch_huobi:
+                    price = (
+                        huobi_api.seek_price(self.params.symbol, action="sell")
+                        if self.params.fetch_huobi
+                        else lastest_candlestick.exit_price
+                    )
+                else:
+                    price = lastest_candlestick.Close
             else:
                 huobi_position = huobi_api.get_balance(self.params.symbol.name)
-                order_id = huobi_api.place_order(symbol=self.params.symbol, amount=huobi_position, price=None, order_type='SM')
+                order_id = huobi_api.place_order(
+                    symbol=self.params.symbol,
+                    amount=huobi_position,
+                    price=None,
+                    order_type="SM",
+                )
                 df_orders = huobi_api.get_orders([order_id])
-                cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[0]
+                cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[
+                    0
+                ]
                 position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
-                price = cash/position
+                price = cash / position
             self.gains_bag.close_position(position, price)
             s_sell = base_df.xBuy.notna() & base_df.xSell.isna()
             last_index = base_df.loc[s_sell].index[-1]
@@ -176,8 +200,8 @@ class xHunter(IHunter):
         df = base_df[base_df.BuySignal == 1]
         sample = len(df)
         profit_sample = len(df[df.xProfit > 0])
-        profit_mean = (df.xProfit > 0).mean()
-        loss_mean = (df.xProfit <= 0).mean()
+        profit_mean = (df.xProfit > 0).mean() or ZERO
+        loss_mean = (df.xProfit <= 0).mean() or ZERO
         profit_loss_ratio = profit_mean / loss_mean
         cost = self.gains_bag.init_funds
         strike = base_df.iloc[-1].Close

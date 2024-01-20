@@ -1,6 +1,6 @@
 import sys
 import os
-from story import IEngine
+from hunterverse.interface import IEngine
 from utils import pandas_util
 import numpy as np
 import pandas as pd
@@ -39,6 +39,7 @@ def pick_dates(df, today, windows):
     today = pd.to_datetime(today)
     df = df[["Date", "Matured"]].copy()
     trans_date = pd.to_datetime(df.Date)
+    df.Matured = pd.to_datetime(df.Matured)
     date_interval = trans_date.diff().mode()[0].total_seconds()
     start_day = trans_date >= (today - pd.to_timedelta(windows * date_interval, "s"))
     s_matured = start_day & (df.Matured <= today)
@@ -105,13 +106,12 @@ def kelly_formular(pwin, loss_margin, profit_margin):
 
 
 def calc_likelihood(signal_pnl, daily_pnl, n_mid):
-    if len(daily_pnl) < n_mid:
+    if len(daily_pnl) < n_mid or daily_pnl.isna().all():
         _like = 1
         p_win = 0.5
         profit_margin = 0
         loss_margin = 0
         return _like, p_win, profit_margin, loss_margin
-
     pmf, cdf = pmf_n_cdf(daily_pnl)
     profits = daily_pnl[daily_pnl > 0]
     loss = daily_pnl[daily_pnl <= 0]
@@ -131,6 +131,7 @@ def calc_likelihood(signal_pnl, daily_pnl, n_mid):
     _like = 1 / (cdf(0) or 0.1) - (1 - _zero)  # profit_count/loss_count
     w = sigmoid(len(daily_pnl), n_mid)
     _pwin = 1 - cdf(0)
+
     return w * _like, _pwin, profit_margin, loss_margin
 
 
@@ -167,13 +168,15 @@ class BayesianEngine(IEngine):
                 #     f"[{today}] Prior: {profit_distribution.get(signal_count)}, SignalCount: {signal_count}, dist: {profit_distribution}"
                 # )
             else:
-                print(f"!Data sample < {windows}")
+                # print(f"!Data sample < {windows}")
+                pass
             if s_eod_yet_matured.sum() > 0:
                 sub_df = enrichment_temp_close(df[s_eod_yet_matured])
                 df_clone.loc[
                     sub_df.index, ["sell", "time_cost", "Matured", "profit"]
                 ] = sub_df[["sell", "time_cost", "Matured", "profit"]]
             daily_pnl = df_clone.profit
+
             # print(f"daily pnl count: {len(daily_pnl)}")
             # signal_pnl = df[(df.BuySignal == True) & (df.Date < today)][-windows:].profit
             signal_pnl = daily_pnl
@@ -188,6 +191,7 @@ class BayesianEngine(IEngine):
                 "loss_margin": abs(loss_margin),
                 "profit_margin": profit_margin,
             }
+
             _signal_kelly = kelly_formular(**kelly_args)
 
             if df.loc[df.Date == today, "Kelly"].isna().any():

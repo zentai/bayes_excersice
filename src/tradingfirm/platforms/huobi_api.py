@@ -228,7 +228,7 @@ if __name__ == "__main__":
     # get_balance('nearusdt')
     # get_balance('usdt')
 
-    from story import Symbol
+    from hunterverse.interface import Symbol
     symbol = Symbol('btcusdt')
     get_spot_acc().print_object()
     balance = get_balance("mkrusdt")

@@ -1,6 +1,6 @@
 import sys
 import os
-from story import IStrategyScout
+from hunterverse.interface import IStrategyScout
 from utils import pandas_util
 import numpy as np
 import pandas as pd
