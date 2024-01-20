@@ -26,6 +26,9 @@ class LocalMarketSensor(IMarketSensor):
         self.update_idx += 1
         return base_df
 
+    def left(self):
+        return len(self.test_df)
+
 
 class HuobiMarketSensor(IMarketSensor):
     def scan(self, limits):

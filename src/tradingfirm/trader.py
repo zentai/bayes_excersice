@@ -189,11 +189,12 @@ class xHunter(IHunter):
                 price = cash / position
             self.gains_bag.close_position(position, price)
             s_sell = base_df.xBuy.notna() & base_df.xSell.isna()
-            last_index = base_df.loc[s_sell].index[-1]
-            base_df.loc[s_sell, "xSell"] = price
-            base_df.loc[s_sell, "xProfit"] = (base_df.xSell / base_df.xBuy) - 1
-            base_df.at[last_index, "xPosition"] = self.gains_bag.position
-            base_df.at[last_index, "xCash"] = self.gains_bag.cash
+            if s_sell.any():    # should skip all False, mean nothing to update
+                last_index = base_df.loc[s_sell].index[-1]
+                base_df.loc[s_sell, "xSell"] = price
+                base_df.loc[s_sell, "xProfit"] = (base_df.xSell / base_df.xBuy) - 1
+                base_df.at[last_index, "xPosition"] = self.gains_bag.position
+                base_df.at[last_index, "xCash"] = self.gains_bag.cash
         return base_df
 
     def review_mission(self, base_df):

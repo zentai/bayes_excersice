@@ -100,7 +100,6 @@ class HuntingStory:
 
 
 def start_journey(sp):
-    print(sp)
     if sp.simulate:
         sensor = LocalMarketSensor(symbol=sp.symbol, interval="local")
     elif sp.fetch_huobi:
@@ -111,15 +110,18 @@ def start_journey(sp):
     hunter = xHunter(params=sp)
 
     # Adjust start time
-    seconds_to_wait = 60 - datetime.datetime.now().second + 5
-    print(f"Will be start after: {seconds_to_wait} sec")
-    time.sleep(seconds_to_wait)
+    if sp.fetch_huobi:
+        seconds_to_wait = 60 - datetime.datetime.now().second + 5
+        print(f"Will be start after: {seconds_to_wait} sec")
+        time.sleep(seconds_to_wait)
 
     story = HuntingStory(sensor, scout, engine, hunter)
     base_df = sensor.scan(1000)
     final_review = None
 
-    for i in range(1000):
+    round = sensor.left() or 1000000
+    for i in range(round):
+        # base_df, review = story.move_forward(base_df)
         try:
             base_df, review = story.move_forward(base_df)
             print(base_df[DEBUG_COL][-30:])
@@ -127,16 +129,13 @@ def start_journey(sp):
             base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp.symbol.name}.csv", index=False)
             print(f"{REPORTS_DIR}/{sp.symbol.name}.csv")
 
-            seconds_to_wait = 60 - datetime.datetime.now().second + 5
-            print(f"Will be start after: {seconds_to_wait} sec")
-            time.sleep(seconds_to_wait)
-
-            # print(f"Sleep: {self.sensor.interval_min} min")
-            # time.sleep(self.sensor.interval_min * 60)
+            if sp.fetch_huobi:
+                seconds_to_wait = 60 - datetime.datetime.now().second + 5
+                print(f"Will be start after: {seconds_to_wait} sec")
+                time.sleep(seconds_to_wait)
         except Exception as e:
             print(e)
             time.sleep(5)
-            # break
         final_review = review
     return final_review
 

@@ -29,6 +29,9 @@ class IMarketSensor(ABC):
     def fetch(self, base_df):
         pass
 
+    def left(self):
+        return 0
+
 
 class IStrategyScout(ABC):
     @abstractmethod
