@@ -116,14 +116,14 @@ def start_journey(sp):
         time.sleep(seconds_to_wait)
 
     story = HuntingStory(sensor, scout, engine, hunter)
-    base_df = sensor.scan(1000)
+    base_df = sensor.scan(2000)
     final_review = None
 
     round = sensor.left() or 1000000
     for i in range(round):
-        # base_df, review = story.move_forward(base_df)
         try:
             base_df, review = story.move_forward(base_df)
+            final_review = review
             print(base_df[DEBUG_COL][-30:])
             print(final_review)
             base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp.symbol.name}.csv", index=False)
@@ -136,7 +136,6 @@ def start_journey(sp):
         except Exception as e:
             print(e)
             time.sleep(5)
-        final_review = review
     return final_review
 
 

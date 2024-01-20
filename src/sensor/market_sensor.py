@@ -33,7 +33,7 @@ class LocalMarketSensor(IMarketSensor):
 class HuobiMarketSensor(IMarketSensor):
     def scan(self, limits):
         df = pandas_util.load_symbols_from_huobi(self.symbol, limits, self.interval)
-        return df
+        return df[:-2]
 
     def fetch(self, base_df):
         new_data = pandas_util.get_history_stick(

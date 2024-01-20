@@ -128,7 +128,9 @@ def calc_likelihood(signal_pnl, daily_pnl, n_mid):
     # _like = 1/signal_cdf(0) - 1   # profit_count/loss_count
     # w = sigmoid(len(signal_pnl), n_mid)
     # _pwin = 1 - signal_cdf(0)
-    _like = 1 / (cdf(0) or 0.1) - (1 - _zero)  # profit_count/loss_count
+    _like = 1
+    if len(cdf) > 2:
+        _like = 1 / (cdf(0) or 0.1) - (1 - _zero)  # profit_count/loss_count
     w = sigmoid(len(daily_pnl), n_mid)
     _pwin = 1 - cdf(0)
 
