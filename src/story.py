@@ -19,6 +19,7 @@ from hunterverse.interface import IEngine
 from hunterverse.interface import IHunter
 from hunterverse.interface import Symbol
 from hunterverse.interface import StrategyParam
+from hunterverse.interface import INTERVAL_TO_MIN
 
 from sensor.market_sensor import LocalMarketSensor
 from sensor.market_sensor import HuobiMarketSensor
@@ -99,6 +100,25 @@ class HuntingStory:
         return base_df, self.hunter.review_mission(base_df)
 
 
+def hunterPause(sp):
+    if sp.fetch_huobi:
+        now = datetime.datetime.now()
+        minutes_interval = INTERVAL_TO_MIN.get(sp.interval)
+        next_whole_point = now.replace(second=0, microsecond=0) + datetime.timedelta(
+            minutes=minutes_interval
+        )
+        if now.minute % minutes_interval != 0:
+            next_whole_point = next_whole_point.replace(
+                minute=(now.minute // minutes_interval + 1) * minutes_interval
+            )
+        sleep_seconds = (next_whole_point - now).total_seconds()
+        seconds_to_wait = max(0, sleep_seconds) + 5  # Ensure non-negative value
+        print(
+            f"Will be start after: {seconds_to_wait} sec, {datetime.datetime.now()+datetime.timedelta(seconds=seconds_to_wait)}"
+        )
+        time.sleep(seconds_to_wait)
+
+
 def start_journey(sp):
     if sp.simulate:
         sensor = LocalMarketSensor(symbol=sp.symbol, interval="local")
@@ -110,10 +130,7 @@ def start_journey(sp):
     hunter = xHunter(params=sp)
 
     # Adjust start time
-    if sp.fetch_huobi:
-        seconds_to_wait = 60 - datetime.datetime.now().second + 5
-        print(f"Will be start after: {seconds_to_wait} sec")
-        time.sleep(seconds_to_wait)
+    hunterPause(sp)
 
     story = HuntingStory(sensor, scout, engine, hunter)
     base_df = sensor.scan(2000)
@@ -128,19 +145,32 @@ def start_journey(sp):
             print(final_review)
             base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp.symbol.name}.csv", index=False)
             print(f"{REPORTS_DIR}/{sp.symbol.name}.csv")
+            hunterPause(sp)
 
-            if sp.fetch_huobi:
-                seconds_to_wait = 60 - datetime.datetime.now().second + 5
-                print(f"Will be start after: {seconds_to_wait} sec")
-                time.sleep(seconds_to_wait)
         except Exception as e:
             print(e)
             time.sleep(5)
     return final_review
 
 
+def training_camp(sp):
+    sensor = LocalMarketSensor(symbol=sp.symbol, interval="local")
+    scout = TurtleScout(params=sp)
+    engine = BayesianEngine(params=sp)
+    hunter = xHunter(params=sp)
+
+    story = HuntingStory(sensor, scout, engine, hunter)
+    base_df = sensor.scan(1000)
+    final_review = None
+
+    for i in range(sensor.left()):
+        base_df, review = story.move_forward(base_df)
+        final_review = review
+    return base_df, final_review
+
+
 @click.command()
-@click.option("--ccy", required=False, help="trade ccy pair")
+@click.option("--ccy", default="maticusdt", required=False, help="trade ccy pair")
 @click.option(
     "--interval",
     required=False,
@@ -152,20 +182,20 @@ def start_journey(sp):
     type=int,
     help="initial funds",
 )
-def main(ccy="maticusdt", interval=None, fund=None):
+def main(ccy, interval, fund):
     params = {
-        "ATR_sample": 73,
-        "atr_loss_margin": 10,
-        "bayes_windows": 5,
-        "lower_sample": 13,
-        "upper_sample": 5,
-        "interval": "1min",
+        "ATR_sample": 40.69386655044119,
+        "atr_loss_margin": 1.0,
+        "bayes_windows": 69.13338800480899,
+        "lower_sample": 100.0,
+        "upper_sample": 5.0,
+        "interval": "15min",
         "symbol": Symbol(ccy),
         "fetch_huobi": True,
         "simulate": False,
     }
     sp = StrategyParam(**params)
-    final_review = start_journey(sp)
+    final_review = training_camp(sp)
 
 
 if __name__ == "__main__":
