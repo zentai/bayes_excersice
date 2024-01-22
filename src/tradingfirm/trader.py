@@ -13,6 +13,7 @@ HUNTER_COLUMNS = [
     "xPosition",
     "xCash",
     "xAvgCost",
+    "xOrder",
 ]
 
 
@@ -51,14 +52,14 @@ class GainsBag:
     MIN_STAKE_CAP = 10  # huobi limitation
 
     def __init__(self, symbol, init_funds, stake_cap, init_position=0, init_avg_cost=0):
-        self.logger = logging.getLogger(f"GainsBag_{symbol}")
+        self.logger = logging.getLogger(f"GainsBag_{symbol.name}")
         self.symbol = symbol
         self.stake_cap = stake_cap
         self.init_funds = self.cash = init_funds
         self.position = init_position
         self.avg_cost = init_avg_cost
         self.logger.info(
-            f"Create GainsBag: [{self.symbol}] ${self.init_funds} Ⓒ {self.position} ∆ {self.avg_cost}"
+            f"Create GainsBag: [{self.symbol.name}] ${self.init_funds} Ⓒ {self.position} ∆ {self.avg_cost}"
         )
 
     def get_un_pnl(self, strike):
@@ -69,7 +70,7 @@ class GainsBag:
         position = round(position, self.symbol.amount_prec)
         cash = round(cash, 2)  # USDT
         unpnl = round(self.get_un_pnl(price), 2)  # USDT
-        msg = f"[{self.symbol}] ∆ {price} $ {cash} Ⓒ {position} unPNL: {unpnl}"
+        msg = f"[{self.symbol.name}] ∆ {price} $ {cash} Ⓒ {position} unPNL: {unpnl}"
         if action == "open_position":
             msg = f"+{msg}"
         elif action == "close_position":
@@ -81,7 +82,7 @@ class GainsBag:
         snapshot_position = round(self.position, self.symbol.amount_prec)
         snapshot_cash = round(self.cash, 2)  # USDT
         self.logger.info(
-            f"![{self.symbol}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
+            f"![{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
         )
 
     def discharge(self, ratio):
@@ -130,9 +131,36 @@ class xHunter(IHunter):
         lastest_candlestick = base_df.iloc[-1]
         buy_signal = lastest_candlestick.Kelly > 0
         sell_signal = lastest_candlestick.Close < lastest_candlestick.exit_price
+
+        # check order id status
+        s_order = base_df.xOrder.notna() & base_df.xBuy.isna()
+        # if s_order.any():
+        if True:
+            # order_id = base_df[s_order].xOrder.values
+            order_id = [971051765076083]
+            df_orders = huobi_api.get_orders(order_id)
+            if (
+                (df_orders.type == "buy-limit")
+                & (
+                    (df_orders.state == "filled")
+                    | (df_orders.state == "partial-filled")
+                )
+            ).any():
+                cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[
+                    0
+                ]
+                position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
+                price = cash / position
+
+                self.gains_bag.open_position(position, price)
+                base_df.loc[s_order, "xBuy"] = price
+                base_df.loc[s_order, "xPosition"] = self.gains_bag.position
+                base_df.loc[s_order, "xCash"] = self.gains_bag.cash
+                base_df.loc[s_order, "xAvgCost"] = self.gains_bag.avg_cost
+
         if buy_signal and self.gains_bag.is_enough_cash():
             budget = self.gains_bag.discharge(lastest_candlestick.Kelly)
-
+            order_id = ""
             if self.simulate:
                 if self.fetch_huobi:
                     price = (
@@ -148,7 +176,7 @@ class xHunter(IHunter):
                     symbol=self.params.symbol,
                     amount=budget,
                     price=None,
-                    order_type="BM",
+                    order_type="B",
                 )
                 df_orders = huobi_api.get_orders([order_id])
                 cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[
@@ -158,10 +186,8 @@ class xHunter(IHunter):
                 price = cash / position
             self.gains_bag.open_position(position, price)
             s_buy = base_df.Date == lastest_candlestick.Date
-            base_df.loc[s_buy, "xBuy"] = price
-            base_df.loc[s_buy, "xPosition"] = self.gains_bag.position
-            base_df.loc[s_buy, "xCash"] = self.gains_bag.cash
-            base_df.loc[s_buy, "xAvgCost"] = self.gains_bag.avg_cost
+            base_df.loc[s_buy, "xOrder"] = order_id
+
         elif sell_signal and self.gains_bag.is_enough_position():
             position = self.gains_bag.position
             if self.simulate:
@@ -189,7 +215,7 @@ class xHunter(IHunter):
                 price = cash / position
             self.gains_bag.close_position(position, price)
             s_sell = base_df.xBuy.notna() & base_df.xSell.isna()
-            if s_sell.any():    # should skip all False, mean nothing to update
+            if s_sell.any():  # should skip all False, mean nothing to update
                 last_index = base_df.loc[s_sell].index[-1]
                 base_df.loc[s_sell, "xSell"] = price
                 base_df.loc[s_sell, "xProfit"] = (base_df.xSell / base_df.xBuy) - 1
