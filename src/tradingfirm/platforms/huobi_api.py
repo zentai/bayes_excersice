@@ -140,7 +140,7 @@ def place_order(symbol, amount, price, order_type):
     }
     order_type = side.get(order_type)
     if order_type in (OrderType.BUY_LIMIT, OrderType.BUY_MARKET):
-        round_amount = symbol.round_price(amount)
+        round_amount = symbol.round_price(amount) if order_type == OrderType.BUY_MARKET else symbol.round_amount(amount)
         print(f"[BUY] adjust buy amount: {amount} -> {round_amount}")
         amount = round_amount
     elif order_type in (OrderType.SELL_LIMIT, OrderType.SELL_MARKET):

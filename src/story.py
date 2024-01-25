@@ -46,6 +46,7 @@ DEBUG_COL = [
     "xPosition",
     "xCash",
     "xAvgCost",
+    "xOrder",
     "Kelly",
     "Postrior",
     "P/L",
@@ -76,6 +77,7 @@ DUMP_COL = [
     "xPosition",
     "xCash",
     "xAvgCost",
+    "xOrder",
     "Kelly",
     "Postrior",
     "P/L",
@@ -93,10 +95,10 @@ class HuntingStory:
     hunter: IHunter
 
     def move_forward(self, base_df):
+        base_df = self.sensor.fetch(base_df)
         base_df = self.scout.market_recon(base_df)
         base_df = self.engine.hunt_plan(base_df)
         base_df = self.hunter.strike_phase(base_df)
-        base_df = self.sensor.fetch(base_df)
         return base_df, self.hunter.review_mission(base_df)
 
 
@@ -170,7 +172,7 @@ def training_camp(sp):
 
 
 @click.command()
-@click.option("--ccy", default="maticusdt", required=False, help="trade ccy pair")
+@click.option("--ccy", default="amuusdt", required=False, help="trade ccy pair")
 @click.option(
     "--interval",
     required=False,
@@ -189,13 +191,13 @@ def main(ccy, interval, fund):
         "bayes_windows": 69.13338800480899,
         "lower_sample": 100.0,
         "upper_sample": 5.0,
-        "interval": "15min",
+        "interval": "1min",
         "symbol": Symbol(ccy),
         "fetch_huobi": True,
         "simulate": False,
     }
     sp = StrategyParam(**params)
-    final_review = training_camp(sp)
+    final_review = start_journey(sp)
 
 
 if __name__ == "__main__":

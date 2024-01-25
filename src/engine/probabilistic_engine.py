@@ -158,8 +158,9 @@ class BayesianEngine(IEngine):
             df_clone = df.loc[s_eod].copy()
 
             prior = 1
-            if (df.BuySignal == 1).sum() > windows:
-                profit_distribution = signal_meter(df[df.Date <= today], windows + 1)
+            if ((df.Date <= today) & (df.BuySignal==1)).sum() > windows:
+                profit_distribution = signal_meter(df[df.Date <= today], 10)
+                # profit_distribution = signal_meter(df[df.Date <= today], windows + 1)
                 signal_count = 0
                 for i in reversed(df_clone.BuySignal.values):
                     if i == 0:
@@ -202,7 +203,7 @@ class BayesianEngine(IEngine):
                 #     f"[{today}] {self._latest_prior}! {odd(posterior):.6f} * {_like:.6f} = {prob_odd(odd(posterior) * _like):.10f}"
                 # )
                 df.loc[df.Date == today, "Postrior"] = self._latest_prior
-                df.loc[df.Date == today, "Kelly"] = _signal_kelly
+                df.loc[df.Date == today, "Kelly"] = 1 #_signal_kelly
                 df.loc[df.Date == today, "p_win"] = p_win
                 df.loc[
                     df.Date == today, "P/L"
