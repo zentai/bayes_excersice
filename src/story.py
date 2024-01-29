@@ -46,7 +46,8 @@ DEBUG_COL = [
     "xPosition",
     "xCash",
     "xAvgCost",
-    "xOrder",
+    "xBuyOrder",
+    "xSellOrder",
     "Kelly",
     "Postrior",
     "P/L",
@@ -77,7 +78,8 @@ DUMP_COL = [
     "xPosition",
     "xCash",
     "xAvgCost",
-    "xOrder",
+    "xBuyOrder",
+    "xSellOrder",
     "Kelly",
     "Postrior",
     "P/L",
@@ -110,9 +112,9 @@ def hunterPause(sp):
             minutes=minutes_interval
         )
         if now.minute % minutes_interval != 0:
-            next_whole_point = next_whole_point.replace(
-                minute=(now.minute // minutes_interval + 1) * minutes_interval
-            )
+            extra_minutes = minutes_interval - now.minute % minutes_interval
+            next_whole_point = now + datetime.timedelta(minutes=extra_minutes)
+            next_whole_point = next_whole_point.replace(second=0, microsecond=0)
         sleep_seconds = (next_whole_point - now).total_seconds()
         seconds_to_wait = max(0, sleep_seconds) + 5  # Ensure non-negative value
         print(
@@ -164,7 +166,6 @@ def training_camp(sp):
     story = HuntingStory(sensor, scout, engine, hunter)
     base_df = sensor.scan(1000)
     final_review = None
-
     for i in range(sensor.left()):
         base_df, review = story.move_forward(base_df)
         final_review = review
@@ -172,10 +173,11 @@ def training_camp(sp):
 
 
 @click.command()
-@click.option("--ccy", default="amuusdt", required=False, help="trade ccy pair")
+@click.option("--ccy", default="altusdt", required=False, help="trade ccy pair")
 @click.option(
     "--interval",
     required=False,
+    default="1min",
     help="trade interval: 1min 5min 15min 30min 60min 4hour 1day 1mon 1week 1year",
 )
 @click.option(
@@ -188,10 +190,11 @@ def main(ccy, interval, fund):
     params = {
         "ATR_sample": 40.69386655044119,
         "atr_loss_margin": 1.0,
+        "hard_cutoff": 0.95,
         "bayes_windows": 69.13338800480899,
         "lower_sample": 100.0,
         "upper_sample": 5.0,
-        "interval": "1min",
+        "interval": interval,
         "symbol": Symbol(ccy),
         "fetch_huobi": True,
         "simulate": False,

@@ -131,23 +131,31 @@ def get_open_orders(symbol):
     return result
 
 
-def place_order(symbol, amount, price, order_type):
+def place_order(symbol, amount, price, order_type, stop_price=None, operator=None):
     side = {
+        "BL": OrderType.BUY_STOP_LIMIT,
         "B": OrderType.BUY_LIMIT,
         "S": OrderType.SELL_LIMIT,
+        "SL": OrderType.SELL_STOP_LIMIT,
         "SM": OrderType.SELL_MARKET,
         "BM": OrderType.BUY_MARKET,
     }
     order_type = side.get(order_type)
-    if order_type in (OrderType.BUY_LIMIT, OrderType.BUY_MARKET):
+    if order_type in (OrderType.BUY_LIMIT, OrderType.BUY_STOP_LIMIT, OrderType.BUY_MARKET):
         round_amount = symbol.round_price(amount) if order_type == OrderType.BUY_MARKET else symbol.round_amount(amount)
-        print(f"[BUY] adjust buy amount: {amount} -> {round_amount}")
+        round_price = symbol.round_price(price)
+        print(f"[BUY] adjust buy amount: {amount} -> {round_amount}, price: {price} -> {round_price}")
         amount = round_amount
-    elif order_type in (OrderType.SELL_LIMIT, OrderType.SELL_MARKET):
+        price = round_price
+        stop_price = symbol.round_price(stop_price)
+    elif order_type in (OrderType.SELL_LIMIT, OrderType.SELL_STOP_LIMIT):
         round_amount = symbol.round_amount(amount)
-        print(f"[SELL] adjust sell position: {amount} -> {round_amount}")
+        round_price = symbol.round_price(price)
+        stop_price = symbol.round_price(stop_price)
         amount = round_amount
-    
+        price = round_price
+        print(f"[SELL] adjust sell amount: {amount} -> {round_amount}, price: {price} -> {round_price}")
+
     trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
     order_id = trade_client.create_order(
         symbol=symbol.name,
@@ -156,18 +164,22 @@ def place_order(symbol, amount, price, order_type):
         source=OrderSource.API,
         amount=amount,
         price=price,
+        stop_price=stop_price,
+        operator=operator,
     )
     logger.debug(f"[{order_type}] Order placed: {order_id}")
     return order_id
 
 
-def cancel_all_open_orders(symbol):
+def cancel_all_open_orders(symbol, order_type=None):
     try:
         trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
         orders = get_open_orders(symbol)
         c_success, c_fail = [], []
         for order in orders:
             if order.source != "api":
+                continue
+            if order_type and order.type != order_type:
                 continue
             logger.info(
                 f"Cancel: {order.id}, {order.type}, {order.state}, {order.filled_amount}, {order.filled_cash_amount}"
@@ -229,10 +241,15 @@ if __name__ == "__main__":
     # get_balance('usdt')
 
     from hunterverse.interface import Symbol
-    symbol = Symbol('btcusdt')
+    symbol = Symbol('1catusdt')
     get_spot_acc().print_object()
     balance = get_balance("mkrusdt")
     print(balance)
+    order_id = place_order(symbol, 2174, 0.004640, 'BL', stop_price=0.004645, operator='lte')
+    # order_id = place_order(symbol, 2170.5, 0.004949, 'SL', stop_price=0.005000, operator='gte')
+    # succ, fail = cancel_all_open_orders(symbol.name, OrderType.BUY_LIMIT)
+    # print(succ)
+    # print(fail)
     # print(f"[SEEK BUY] {seek_price(symbol=symbol, action='buy')}")
     # order_id = place_order(symbol=symbol, amount=10, price=None, order_type='BM')
     # df_orders = get_orders([order_id])

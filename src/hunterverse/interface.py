@@ -90,6 +90,7 @@ class StrategyParam:
     symbol: str
     ATR_sample: int = 7
     atr_loss_margin: float = 1.5
+    hard_cutoff: float = 0.95
     bayes_windows: int = 30
     lower_sample: int = 7
     upper_sample: int = 7
