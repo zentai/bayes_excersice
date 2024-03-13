@@ -4,6 +4,13 @@ from hunterverse.interface import IStrategyScout
 from utils import pandas_util
 import numpy as np
 import pandas as pd
+import statistics
+from datetime import datetime
+from collections import deque
+
+import logging
+logger = logging.getLogger(__name__)
+
 
 # FIXME: move some columns to IEngine
 TURTLE_COLUMNS = [
@@ -20,9 +27,45 @@ TURTLE_COLUMNS = [
 ]
 
 
+class BollingerBandsSurfer:
+    def __init__(self, symbol, buy_sell_conf, buffer_size=30):
+        self.symbol = symbol
+        self.buy_sell_conf = buy_sell_conf
+        self.stdv_ring_buffer = deque(maxlen=buffer_size)
+
+    def create_plan(self, prices_df, min_profit_price):
+        prices = prices_df.Close.values.tolist()
+        mean = statistics.mean(prices)
+        stdv = statistics.stdev(prices)
+        self.stdv_ring_buffer.append(stdv)
+        if stdv < statistics.median(self.stdv_ring_buffer):
+            logger.info(
+                f"Stdv: {stdv} < Median Stdv: {statistics.median(self.stdv_ring_buffer)}, stop buy sell plan"
+            )
+            return pd.DataFrame()
+        bs_conf = self.buy_sell_conf.copy()
+        bs_conf.loc[bs_conf.Action == "S", "price"] = min_profit_price + (
+            bs_conf["level"] * stdv
+        )
+        bs_conf.loc[bs_conf.Action == "B", "price"] = mean + (bs_conf["level"] * stdv)
+        return bs_conf
+
+
 class TurtleScout(IStrategyScout):
     def __init__(self, params):
         self.params = params
+        ma_window = 10
+        trade_conf = [
+            ["S", 10, 0.25],
+            ["S", 7, 0.25],
+            ["S", 5, 0.5],
+            ["B", -5, 0.125],
+            ["B", -7, 0.125],
+            ["B", -9, 0.25],
+            ["B", -11, 0.5],
+        ]
+        trade_conf = pd.DataFrame(trade_conf, columns=["Action", "level", "ratio"])
+        self.sufer = BollingerBandsSurfer(params.symbol.name, trade_conf, ma_window)
 
     def _calc_profit(self, base_df):
         resume_idx = base_df.sell.isna().idxmax()
@@ -94,8 +137,18 @@ class TurtleScout(IStrategyScout):
         )
         return base_df
 
+    def _surfing(self, base_df):
+        plan_df = self.sufer.create_plan(base_df, 0)
+        print(plan_df)
+
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_profit(base_df)
+        # TODO
+        # migrate boll buy/sell plan into base_df
+        # base_df = pandas_util.equip_fields(base_df, BOLL_SURF_COLUNBS)
+        base_df = self._surfing(base_df)
+        # base_df = self._calc_surf_profit(base_df)   #TODO: this is a good solution?
+        
         return base_df
