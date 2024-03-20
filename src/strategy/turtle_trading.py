@@ -18,6 +18,8 @@ TURTLE_COLUMNS = [
     "turtle_h",
     "turtle_l",
     "Stop_profit",
+    "surfing_buy",
+    "surfing_sell",
     "buy",
     "sell",
     "profit",
@@ -139,16 +141,24 @@ class TurtleScout(IStrategyScout):
 
     def _surfing(self, base_df):
         plan_df = self.sufer.create_plan(base_df, 0)
-        print(plan_df)
+        return plan_df
 
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
+        base_df['surfing_buy'] = base_df['surfing_buy'].astype(object)
+        base_df['surfing_sell'] = base_df['surfing_sell'].astype(object)
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_profit(base_df)
         # TODO
         # migrate boll buy/sell plan into base_df
         # base_df = pandas_util.equip_fields(base_df, BOLL_SURF_COLUNBS)
-        base_df = self._surfing(base_df)
+        records = self._surfing(base_df).to_dict('records')
+        sell_params = [ (i['ratio'], i['price']) for i in records if i['Action'] == 'S']
+        buy_params = [ (i['ratio'], i['price']) for i in records if i['Action'] == 'B']
+        _index = len(base_df) - 1
+        base_df.at[_index, 'surfing_buy'] = buy_params
+        base_df.at[_index, 'surfing_sell'] = sell_params
+        print(base_df)
         # base_df = self._calc_surf_profit(base_df)   #TODO: this is a good solution?
         
         return base_df
