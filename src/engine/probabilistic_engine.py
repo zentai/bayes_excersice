@@ -1,7 +1,7 @@
-from hunterverse.interface import IEngine
-from utils import pandas_util
 import pandas as pd
-from bayes import prob_odd, sigmoid, pmf_n_cdf, kde_top
+from ..bayes import prob_odd, sigmoid, pmf_n_cdf, kde_top
+from ..hunterverse.interface import IEngine
+from ..utils import pandas_util
 
 BAYESIAN_ENGINE_COLUMNS = [
     "Postrior",

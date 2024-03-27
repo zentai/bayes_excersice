@@ -1,7 +1,6 @@
 import pandas as pd
-from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
+
 import time
-import huobi
 from huobi.client.trade import TradeClient
 from huobi.client.account import AccountClient
 from huobi.client.market import MarketClient
@@ -11,6 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime
 import pandas as pd
 import numpy as np
+
+from config import config
+DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
 INTERVAL_TO_MIN = {
     "1min": 1,

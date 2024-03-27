@@ -1,6 +1,6 @@
-from hunterverse.interface import IMarketSensor
-from utils import pandas_util
 import pandas as pd
+from ..hunterverse.interface import IMarketSensor
+from ..utils import pandas_util
 
 
 class LocalMarketSensor(IMarketSensor):
