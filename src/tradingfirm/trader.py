@@ -1,11 +1,14 @@
-from hunterverse.interface import IHunter
-from utils import pandas_util
-from tradingfirm.platforms import huobi_api
 import pandas as pd
 import numpy as np
 import logging
-from settings import ZERO
 from huobi.constant.definition import OrderType, OrderState
+
+from ..hunterverse.interface import IHunter
+from ..utils import pandas_util
+from .platforms import huobi_api
+
+from config import config
+ZERO = config.zero
 
 HUNTER_COLUMNS = [
     "xBuy",

@@ -1,36 +1,16 @@
-import sys
-import os
-from collections import namedtuple
-
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
-
 from bayes_opt import BayesianOptimization
 from sklearn.model_selection import ParameterGrid
-import functools
-
-# from bayes_excercise import *
-from bayes_kelly import enrichment_daily_profit
-from bayes_kelly import s_turtle_buy
-from bayes_kelly import pick_dates
-from bayes_kelly import enrichment_temp_close
-from bayes_kelly import calc_likelihood
-from bayes_kelly import kelly_formular
-from bayes_kelly import BayesKelly
-from bayes_kelly import StrategyParam
-from bayes_kelly import back_test
 import matplotlib.pyplot as plt
-
-from bayes import conditional, prob, odd, prob_odd
-import numpy as np
-import warnings
-
 import pandas as pd
 from empiricaldist import Pmf
-import seaborn as sns
-import numpy as np
+
+from .bayes_kelly import s_turtle_buy
+from .bayes_kelly import BayesKelly
+from .bayes_kelly import StrategyParam
+from .bayes_kelly import back_test
+from config import config
+DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
+
 
 
 def decorate(**options):

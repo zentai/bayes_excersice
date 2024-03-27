@@ -1,10 +1,7 @@
-import os
-from datetime import datetime
 import pandas as pd
-import sys
 import matplotlib.pyplot as plt
-import numpy as np
-
+from config import config
+DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.report
 
 def monte_carlo_simulation(dataframe, num_simulations, num_trades_per_simulation):
     """
@@ -100,15 +97,8 @@ def monte_carlo_simulation(dataframe, num_simulations, num_trades_per_simulation
 
 if __name__ == "__main__":
     # TODO: Consider moving these settings to a separate settings module
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.float_format", lambda x: "%.5f" % x)
-    pd.set_option("display.width", 300)
-
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
-
     code = "BTC-USD"
-    df = pd.read_csv(f"/Users/zen/code/bayes_excersice/reports/nearusdt_2.csv")
+    df = pd.read_csv(f"/Users/zen/code/bayes_excersice/reports/nearusdt.csv")
     size = len(df)
 
     results = monte_carlo_simulation(

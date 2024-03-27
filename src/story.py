@@ -1,29 +1,26 @@
-import sys
-import os
+from icecream import ic
 import time
 import click
 import datetime
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from dataclasses import dataclass
 import pandas as pd
 import numpy as np
-from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
 
-from strategy.turtle_trading import TurtleScout
-from engine.probabilistic_engine import BayesianEngine
+from config import config
+from .strategy.turtle_trading import TurtleScout
+from .engine.probabilistic_engine import BayesianEngine
 
-from hunterverse.interface import IStrategyScout
-from hunterverse.interface import IMarketSensor
-from hunterverse.interface import IEngine
-from hunterverse.interface import IHunter
-from hunterverse.interface import Symbol
-from hunterverse.interface import StrategyParam
-from hunterverse.interface import INTERVAL_TO_MIN
+from .hunterverse.interface import IStrategyScout
+from .hunterverse.interface import IMarketSensor
+from .hunterverse.interface import IEngine
+from .hunterverse.interface import IHunter
+from .hunterverse.interface import Symbol
+from .hunterverse.interface import StrategyParam
+from .hunterverse.interface import INTERVAL_TO_MIN
 
-from sensor.market_sensor import LocalMarketSensor
-from sensor.market_sensor import HuobiMarketSensor
-from tradingfirm.trader import xHunter
+from .sensor.market_sensor import LocalMarketSensor
+from .sensor.market_sensor import HuobiMarketSensor
+from .tradingfirm.trader import xHunter
 
 
 DEBUG_COL = [
@@ -134,7 +131,7 @@ def start_journey(sp):
     hunter = xHunter(params=sp)
 
     # Adjust start time
-    hunterPause(sp)
+    # hunterPause(sp)
 
     story = HuntingStory(sensor, scout, engine, hunter)
     base_df = sensor.scan(2000)
@@ -147,8 +144,8 @@ def start_journey(sp):
             final_review = review
             print(base_df[DEBUG_COL][-30:])
             print(final_review)
-            base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp.symbol.name}.csv", index=False)
-            print(f"{REPORTS_DIR}/{sp.symbol.name}.csv")
+            base_df[DUMP_COL].to_csv(f"{config.reports_dir}/{sp.symbol.name}.csv", index=False)
+            print(f"{config.reports_dir}/{sp.symbol.name}.csv")
             hunterPause(sp)
 
         except Exception as e:
@@ -173,7 +170,7 @@ def training_camp(sp):
 
 
 @click.command()
-@click.option("--ccy", default="altusdt", required=False, help="trade ccy pair")
+@click.option("--ccy", default="suiusdt", required=False, help="trade ccy pair")
 @click.option(
     "--interval",
     required=False,
@@ -203,5 +200,7 @@ def main(ccy, interval, fund):
     final_review = start_journey(sp)
 
 
+
 if __name__ == "__main__":
     main()
+    

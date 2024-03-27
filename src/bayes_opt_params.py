@@ -1,28 +1,13 @@
-import sys
-import os
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
-
-from bayes_opt import BayesianOptimization
-from sklearn.model_selection import ParameterGrid
 import functools
-# from bayes_excercise import *
-from bayes_kelly import enrichment_daily_profit
-from bayes_kelly import s_turtle_buy
-from bayes_kelly import pick_dates
-from bayes_kelly import enrichment_temp_close
-from bayes_kelly import calc_likelihood
-from bayes_kelly import kelly_formular
-from bayes_kelly import adjust_like
-from bayes_kelly import back_test
-
-from bayes_kelly import BayesKelly
-from bayes_kelly import StrategyParam
+from bayes_opt import BayesianOptimization
+from .bayes_kelly import s_turtle_buy
+from .bayes_kelly import back_test
+from .bayes_kelly import BayesKelly
+from .bayes_kelly import StrategyParam
 import pandas as pd
-import numpy as np
-import warnings
 
+from config import config
+DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
 def optimize_func(code, **kwargs):
     sp = StrategyParam(**kwargs)
@@ -104,7 +89,8 @@ def run():
     metas = {
         # 'P9D.SI.csv': 'P9D.SI',
         # '6888.KL.csv': '6888.KL',
-        '5148.KL.csv': '5148.KL',    # UEMS
+        # '5148.KL.csv': '5148.KL',    # UEMS
+        '5127.KL.csv': '5127.KL',
         # 'NVDA.csv': 'NVDA',
         # 'BTC-USD.csv': 'BTC-USD',
         # 'E28.SI.csv': 'E28.SI',

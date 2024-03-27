@@ -1,20 +1,14 @@
-import sys
-import os
-from icecream import ic
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
-
-import datetime
 import pandas as pd
 import numpy as np
 
 import matplotlib.pyplot as plt
-import functools
-from bayes import conditional, prob, odd, prob_odd, sigmoid, pmf_n_cdf
-from settings import ZERO
 from empiricaldist import Pmf
+
+from config import config
+from .bayes import conditional, prob, odd, prob_odd, sigmoid, pmf_n_cdf
+
+DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
+ZERO = config.zero
 
 terminal_view = [
     "Date",
@@ -818,13 +812,6 @@ def create_profit_bins(df):
 
 if __name__ == "__main__":
     # TODO: Consider moving these settings to a separate settings module
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.float_format", lambda x: "%.5f" % x)
-    pd.set_option("display.width", 300)
-
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    from settings import DATA_DIR, SRC_DIR, REPORTS_DIR
-
     code = "BTC-USD"
     df = pd.read_csv(f"{DATA_DIR}/{code}.csv")
     df = df.dropna()
@@ -851,7 +838,7 @@ if __name__ == "__main__":
         "upper_sample": 10,
     }
     sp = StrategyParam(**best_params)
-    ic("Original DF: ", base_df, sp)
+    print("Original DF: ", base_df, sp)
     bkf = BayesKelly(base_df, sp)
 
     base_df = bkf._df
@@ -862,8 +849,8 @@ if __name__ == "__main__":
         )
 
         bkf = BayesKelly(base_df, sp)
-        ic(bkf._df[-59:])
-        ic(len(bkf._df))
+        print(bkf._df[-59:])
+        print(len(bkf._df))
 
     # bkf.register_signal("TurtleBuy", s_turtle_buy)
     # kelly_df = bkf.bayes_update(prior=0.5, debug=True)
