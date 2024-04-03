@@ -144,10 +144,11 @@ def place_order(symbol, amount, price, order_type, stop_price=None, operator=Non
     if order_type in (OrderType.BUY_LIMIT, OrderType.BUY_STOP_LIMIT, OrderType.BUY_MARKET):
         round_amount = symbol.round_price(amount) if order_type == OrderType.BUY_MARKET else symbol.round_amount(amount)
         round_price = symbol.round_price(price)
-        print(f"[BUY] adjust buy amount: {amount} -> {round_amount}, price: {price} -> {round_price}")
+        round_stop_price = symbol.round_price(stop_price)
         amount = round_amount
         price = round_price
-        stop_price = symbol.round_price(stop_price)
+        stop_price = round_stop_price
+        print(f"[BUY] adjust buy amount: {amount} -> {round_amount}, price: {price} -> {round_price}, stop price: {round_stop_price}")
     elif order_type in (OrderType.SELL_LIMIT, OrderType.SELL_STOP_LIMIT):
         round_amount = symbol.round_amount(amount)
         round_price = symbol.round_price(price)

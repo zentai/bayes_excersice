@@ -8,6 +8,7 @@ from ..utils import pandas_util
 from .platforms import huobi_api
 
 from config import config
+
 ZERO = config.zero
 
 HUNTER_COLUMNS = [
@@ -146,7 +147,9 @@ class xHunter(IHunter):
         return base_df
 
     def sim_attack(self, base_df):
-        buy_signal = self.lastest_candlestick.Kelly > 0 and self.gains_bag.is_enough_cash()
+        buy_signal = (
+            self.lastest_candlestick.Kelly > 0 and self.gains_bag.is_enough_cash()
+        )
         if buy_signal:
             budget = self.gains_bag.discharge(self.lastest_candlestick.Kelly)
             price = self.lastest_candlestick.Close
@@ -191,15 +194,16 @@ class xHunter(IHunter):
                 base_df.loc[s_buy_order, "xCash"] = self.gains_bag.cash
                 base_df.loc[s_buy_order, "xAvgCost"] = self.gains_bag.avg_cost
 
-
         # buy_signal = self.lastest_candlestick.Kelly > 0 and self.gains_bag.is_enough_cash()
         buy_signal = self.gains_bag.is_enough_cash()
         if buy_signal:
-            budget = self.gains_bag.discharge(1)
+            budget = self.gains_bag.discharge(ratio=1)
             # budget = self.gains_bag.discharge(self.lastest_candlestick.Kelly)
 
             try:
-                success, fail = huobi_api.cancel_all_open_orders(self.params.symbol.name, order_type=OrderType.BUY_STOP_LIMIT)
+                success, fail = huobi_api.cancel_all_open_orders(
+                    self.params.symbol.name, order_type=OrderType.BUY_STOP_LIMIT
+                )
                 print(f"cancelled orders success: {success}, fail: {fail}")
                 base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = "Cancel"
             except Exception as e:
@@ -212,7 +216,7 @@ class xHunter(IHunter):
                     symbol=self.params.symbol,
                     amount=position,
                     price=price,
-                    stop_price=(price * 0.9990),
+                    stop_price=(price * 0.9995),
                     order_type="BL",
                     operator="gte",
                 )
@@ -222,11 +226,13 @@ class xHunter(IHunter):
                 print(f"[xHunter.attack()] place order fail: {e}")
         return base_df
 
-
     def sim_retreat(self, base_df):
         cutoff_price = self.params.hard_cutoff * self.gains_bag.avg_cost
         exit_price = max(cutoff_price, self.lastest_candlestick.exit_price)
-        sell_signal = self.lastest_candlestick.Close < exit_price and self.gains_bag.is_enough_position()
+        sell_signal = (
+            self.lastest_candlestick.Close < exit_price
+            and self.gains_bag.is_enough_position()
+        )
         if sell_signal:
             position = self.gains_bag.position
             price = self.lastest_candlestick.Close
@@ -248,7 +254,6 @@ class xHunter(IHunter):
 
         cutoff_price = self.params.hard_cutoff * self.gains_bag.avg_cost
         exit_price = max(cutoff_price, self.lastest_candlestick.exit_price)
-
 
         # check pending Sell-Stop-Limit order's status
         pending_order = (
@@ -272,7 +277,9 @@ class xHunter(IHunter):
                 self.gains_bag.close_position(position, price)
                 print(f"gains_bag: {self.gains_bag.cash} - {self.gains_bag.position}")
                 base_df.loc[pending_order, "xSell"] = price
-                base_df.loc[pending_order, "xProfit"] = (base_df.xSell / base_df.xBuy) - 1
+                base_df.loc[pending_order, "xProfit"] = (
+                    base_df.xSell / base_df.xBuy
+                ) - 1
                 # base_df.loc[pending_order, "xPosition"] = self.gains_bag.position
                 # base_df.loc[pending_order, "xCash"] = self.gains_bag.cash
                 # base_df.loc[pending_order, "xAvgCost"] = self.gains_bag.avg_cost
@@ -294,7 +301,7 @@ class xHunter(IHunter):
                 order_id = huobi_api.place_order(
                     symbol=self.params.symbol,
                     amount=huobi_position,
-                    price=exit_price * 0.9990,
+                    price=exit_price,
                     stop_price=exit_price * 0.9995,
                     order_type="SL",
                     operator="lte",

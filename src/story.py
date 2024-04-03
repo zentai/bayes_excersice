@@ -1,4 +1,7 @@
 from icecream import ic
+
+import signal
+import sys
 import time
 import click
 import datetime
@@ -7,6 +10,9 @@ import pandas as pd
 import numpy as np
 
 from config import config
+from huobi.constant.definition import OrderType
+from .tradingfirm.platforms import huobi_api
+
 from .strategy.turtle_trading import TurtleScout
 from .engine.probabilistic_engine import BayesianEngine
 
@@ -121,6 +127,38 @@ def hunterPause(sp):
 
 
 def start_journey(sp):
+    base_df = None
+
+    def signal_handler(sig, frame):
+        nonlocal base_df
+        print("Received kill signal, retreating...")
+        if base_df is not None:
+            try:
+                success, fail = huobi_api.cancel_all_open_orders(
+                    sp.symbol.name, order_type=OrderType.BUY_STOP_LIMIT
+                )
+                print(f"cancel buy-stop-limit orders success: {success}, fail: {fail}")
+                base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = "Cancel"
+            except Exception as e:
+                print(f"[Terminated] buy-stop-limit fail: {e}")
+            try:
+                success, fail = huobi_api.cancel_all_open_orders(
+                    sp.symbol.name, order_type=OrderType.SELL_STOP_LIMIT
+                )
+                print(f"cancel sell-stop-limit orders success: {success}, fail: {fail}")
+                base_df.loc[base_df.xSellOrder.isin(success), "xSellOrder"] = "Cancel"
+            except Exception as e:
+                print(f"[Terminated] sell-stop-limit fail: {e}")
+
+            base_df[DUMP_COL].to_csv(
+                f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+            )
+            print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     if sp.simulate:
         sensor = LocalMarketSensor(symbol=sp.symbol, interval="local")
     elif sp.fetch_huobi:
@@ -129,9 +167,6 @@ def start_journey(sp):
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
     hunter = xHunter(params=sp)
-
-    # Adjust start time
-    # hunterPause(sp)
 
     story = HuntingStory(sensor, scout, engine, hunter)
     base_df = sensor.scan(2000)
@@ -144,13 +179,16 @@ def start_journey(sp):
             final_review = review
             print(base_df[DEBUG_COL][-30:])
             print(final_review)
-            base_df[DUMP_COL].to_csv(f"{config.reports_dir}/{sp.symbol.name}.csv", index=False)
+            base_df[DUMP_COL].to_csv(
+                f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+            )
             print(f"{config.reports_dir}/{sp.symbol.name}.csv")
             hunterPause(sp)
 
         except Exception as e:
             print(e)
             time.sleep(5)
+
     return final_review
 
 
@@ -200,7 +238,5 @@ def main(ccy, interval, fund):
     final_review = start_journey(sp)
 
 
-
 if __name__ == "__main__":
     main()
-    
