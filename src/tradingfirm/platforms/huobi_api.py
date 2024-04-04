@@ -1,4 +1,5 @@
 import sys, os
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 import logging
@@ -33,7 +34,6 @@ huobi_interval = {
 }
 
 
-
 @dataclass
 class Candlestick:
     Date: int
@@ -47,6 +47,7 @@ class Candlestick:
 
     def __post_init__(self):
         self.Date = datetime.fromtimestamp(self.Date)
+
 
 # Account
 def get_spot_acc():
@@ -141,21 +142,33 @@ def place_order(symbol, amount, price, order_type, stop_price=None, operator=Non
         "BM": OrderType.BUY_MARKET,
     }
     order_type = side.get(order_type)
-    if order_type in (OrderType.BUY_LIMIT, OrderType.BUY_STOP_LIMIT, OrderType.BUY_MARKET):
-        round_amount = symbol.round_price(amount) if order_type == OrderType.BUY_MARKET else symbol.round_amount(amount)
+    if order_type in (
+        OrderType.BUY_LIMIT,
+        OrderType.BUY_STOP_LIMIT,
+        OrderType.BUY_MARKET,
+    ):
+        round_amount = (
+            symbol.round_price(amount)
+            if order_type == OrderType.BUY_MARKET
+            else symbol.round_amount(amount)
+        )
         round_price = symbol.round_price(price)
         round_stop_price = symbol.round_price(stop_price)
         amount = round_amount
         price = round_price
         stop_price = round_stop_price
-        print(f"[BUY] adjust buy amount: {amount} -> {round_amount}, price: {price} -> {round_price}, stop price: {round_stop_price}")
+        print(
+            f"[BUY] adjust buy amount: {amount} -> {round_amount}, price: {price} -> {round_price}, stop price: {round_stop_price}"
+        )
     elif order_type in (OrderType.SELL_LIMIT, OrderType.SELL_STOP_LIMIT):
         round_amount = symbol.round_amount(amount)
         round_price = symbol.round_price(price)
         stop_price = symbol.round_price(stop_price)
         amount = round_amount
         price = round_price
-        print(f"[SELL] adjust sell amount: {amount} -> {round_amount}, price: {price} -> {round_price}")
+        print(
+            f"[SELL] adjust sell amount: {amount} -> {round_amount}, price: {price} -> {round_price}"
+        )
 
     trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
     order_id = trade_client.create_order(
@@ -195,6 +208,11 @@ def cancel_all_open_orders(symbol, order_type=None):
         logger.error(f"Cancel fail, {e}")
         time.sleep(5)
         return cancel_all_open_orders(symbol)
+
+
+def load_history_orders(symbol, size=1000):
+    trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
+    return [obj.id for obj in trade_client.get_history_orders(symbol=symbol, size=size)]
 
 
 # Market
@@ -242,11 +260,14 @@ if __name__ == "__main__":
     # get_balance('usdt')
 
     from hunterverse.interface import Symbol
-    symbol = Symbol('1catusdt')
+
+    symbol = Symbol("1catusdt")
     get_spot_acc().print_object()
     balance = get_balance("mkrusdt")
     print(balance)
-    order_id = place_order(symbol, 2174, 0.004640, 'BL', stop_price=0.004645, operator='lte')
+    order_id = place_order(
+        symbol, 2174, 0.004640, "BL", stop_price=0.004645, operator="lte"
+    )
     # order_id = place_order(symbol, 2170.5, 0.004949, 'SL', stop_price=0.005000, operator='gte')
     # succ, fail = cancel_all_open_orders(symbol.name, OrderType.BUY_LIMIT)
     # print(succ)

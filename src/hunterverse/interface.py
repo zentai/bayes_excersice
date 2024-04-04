@@ -12,6 +12,7 @@ INTERVAL_TO_MIN = {
     "local": 0.001,
 }
 
+
 class IMarketSensor(ABC):
     def __init__(self, symbol, interval):
         self.symbol = symbol
@@ -81,6 +82,14 @@ class Symbol:
     def __repr__(self):
         return self.name
 
+    def __format__(self, format_spec):
+        if format_spec == "price":
+            return f"{self.name} price precision: {self.price_prec}"
+        elif format_spec == "amount":
+            return f"{self.name} amount precision: {self.amount_prec}"
+        else:
+            return self.name
+
 
 @dataclass
 class StrategyParam:
@@ -100,4 +109,3 @@ class StrategyParam:
         self.bayes_windows = int(self.bayes_windows)
         self.lower_sample = int(self.lower_sample)
         self.upper_sample = int(self.upper_sample)
-

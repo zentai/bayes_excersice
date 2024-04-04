@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import logging
@@ -113,6 +114,9 @@ class GainsBag:
         self.avg_cost = ((self.avg_cost * self.position) + cash) / (
             self.position + position
         )
+        print(
+            f"!OPEN avg.cost: {self.avg_cost} self.@{self.position} @{position} ${price} C:{cash}"
+        )
         self.cash -= cash
         self.position += position
         self.log_action("open_position", price, position, cash)
@@ -129,6 +133,19 @@ class GainsBag:
     def is_enough_cash(self):
         return self.cash > self.MIN_STAKE_CAP
 
+    def __format__(self, format_spec):
+        if format_spec == "cash":
+            return f"{self.cash}"
+        elif format_spec == "avg_cost":
+            return f"{self.avg_cost}"
+        elif format_spec == "review":
+            snapshot_avg_cost = round(self.avg_cost, 2)  # USDT
+            snapshot_position = round(self.position, self.symbol.amount_prec)
+            snapshot_cash = round(self.cash, 2)  # USDT
+            return f"![{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
+        else:
+            return self.name
+
 
 class xHunter(IHunter):
     def __init__(self, params):
@@ -138,6 +155,76 @@ class xHunter(IHunter):
         self.simulate = params.simulate
         self.gains_bag = GainsBag(symbol=params.symbol, init_funds=100, stake_cap=50)
         self.lastest_candlestick = None
+
+    def load_memories(self, fetch=True, deals=[]):
+        print(f"load_memories(self, fetch={fetch}, deals={deals})")
+        status = ("filled", "partial-canceled", "partial-filled")
+        buy_types = ("buy-stop-limit", "buy-limit", "buy-market")
+        sell_types = ("sell-limit", "sell-stop-limit", "sell-market")
+
+        cached_order_ids = []
+        if os.path.exists(db_path := f"{config.data_dir}/{self.params.symbol}.csv"):
+            cached_order_ids += pd.read_csv(db_path).id.tolist()
+
+        if fetch:
+            orders = huobi_api.get_orders(
+                set(
+                    cached_order_ids
+                    + deals
+                    + huobi_api.load_history_orders(f"{self.params.symbol}")
+                )
+            )
+
+        """Process and enrich orders DataFrame with positions and prices."""
+        orders = orders[orders.state.isin(status)]
+        pd.DataFrame(orders).to_csv(db_path, index=False)
+
+        # 分别处理买入和卖出订单
+        buy_mask = orders.type.isin(buy_types)
+        sell_mask = orders.type.isin(sell_types)
+
+        # 买入订单的 position 需要减去手续费
+        orders.loc[buy_mask, "position"] = (
+            orders.loc[buy_mask, "filled_amount"] - orders.loc[buy_mask, "filled_fees"]
+        )
+        # 卖出订单的 position 不减去手续费
+        orders.loc[sell_mask, "position"] = orders.loc[sell_mask, "filled_amount"]
+
+        # 所有订单的价格都是成交金额除以位置大小
+        orders.loc[buy_mask, "price"] = (
+            orders["filled_cash_amount"] / orders["position"]
+        )
+        orders.loc[sell_mask, "price"] = (
+            orders["filled_cash_amount"] - orders["filled_fees"]
+        ) / orders["position"]
+
+        msg = []
+        for order in orders.itertuples():
+            print(order)
+            position, price, filled_cash_amount = (
+                order.position,
+                order.price,
+                order.filled_cash_amount,
+            )
+
+            if order.type in buy_types:
+                self.gains_bag.open_position(position, price)
+                print(f"[B] {self.gains_bag:review}")
+                msg.append(["-", round(filled_cash_amount, 2), round(price, 8)])
+            elif order.type in sell_types:
+                self.gains_bag.close_position(position, price)
+                print(f"[S] {self.gains_bag:review}")
+                msg.append(["+", round(filled_cash_amount, 2), round(price, 8)])
+
+        if msg:
+            fund = f"{self.gains_bag:cash}"
+            cost = float(f"{self.gains_bag:avg_cost}")
+            msg.append(["=", fund, cost])
+            strike = huobi_api.get_strike(f"{self.params.symbol}")
+            market_value = strike - cost
+            msg.append(["$", market_value * position, strike])
+            msg_df = pd.DataFrame(msg, columns=["@", "USDT", "Price"])
+            print(msg_df)
 
     def strike_phase(self, base_df):
         base_df = pandas_util.equip_fields(base_df, HUNTER_COLUMNS)
@@ -345,6 +432,9 @@ class xHunter(IHunter):
                     drawdown,
                     _annual_return,
                     _sortino_ratio,
+                    self.gains_bag.cash,
+                    self.gains_bag.position,
+                    self.gains_bag.avg_cost,
                 ]
             ],
             columns=[
@@ -358,5 +448,8 @@ class xHunter(IHunter):
                 "Drawdown",
                 "Annual.Return",
                 "SortinoRatio",
+                "Cash",
+                "Position",
+                "Avg.Cost",
             ],
         )
