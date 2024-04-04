@@ -302,8 +302,8 @@ class xHunter(IHunter):
                 order_id = huobi_api.place_order(
                     symbol=self.params.symbol,
                     amount=position,
-                    price=price,
-                    stop_price=(price * 0.9995),
+                    price=price * 1.001,
+                    stop_price=price,
                     order_type="BL",
                     operator="gte",
                 )
