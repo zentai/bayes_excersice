@@ -224,6 +224,7 @@ def training_camp(sp):
     "--fund",
     required=False,
     type=int,
+    default=100.0,
     help="initial funds",
 )
 def main(ccy, interval, fund):
@@ -235,6 +236,7 @@ def main(ccy, interval, fund):
         "lower_sample": 100.0,
         "upper_sample": 5.0,
         "interval": interval,
+        "funds": fund,
         "symbol": Symbol(ccy),
         "fetch_huobi": True,
         "simulate": False,

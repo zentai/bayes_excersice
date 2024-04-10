@@ -133,16 +133,34 @@ class GainsBag:
     def is_enough_cash(self):
         return self.cash > self.MIN_STAKE_CAP
 
+    def portfolio(self, pre_strike, strike):
+        market_value = self.position * strike
+        cost = self.position * self.avg_cost
+        return {
+            "Pair": self.symbol.name,
+            "MarketValue": market_value,
+            "BuyValue": cost,
+            "ProfitLoss": market_value - cost,
+            "ProfitLossPercent": (market_value / cost) - 1,
+            "Hr24": (strike / pre_strike) - 1,
+            "Position": self.position,
+            "AvgCost": self.avg_cost,
+            "Strikle": strike,
+            "Cash": self.cash,
+        }
+
     def __format__(self, format_spec):
         if format_spec == "cash":
             return f"{self.cash}"
         elif format_spec == "avg_cost":
             return f"{self.avg_cost}"
-        elif format_spec == "review":
+        elif format_spec == "snapshot":
             snapshot_avg_cost = round(self.avg_cost, 2)  # USDT
             snapshot_position = round(self.position, self.symbol.amount_prec)
             snapshot_cash = round(self.cash, 2)  # USDT
             return f"![{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
+        elif format_spec == "review":
+            pass
         else:
             return self.name
 
@@ -153,7 +171,9 @@ class xHunter(IHunter):
         self.params = params
         self.fetch_huobi = params.fetch_huobi
         self.simulate = params.simulate
-        self.gains_bag = GainsBag(symbol=params.symbol, init_funds=100, stake_cap=50)
+        self.gains_bag = GainsBag(
+            symbol=params.symbol, init_funds=params.funds, stake_cap=50
+        )
         self.lastest_candlestick = None
 
     def load_memories(self, fetch=True, deals=[]):
@@ -169,9 +189,14 @@ class xHunter(IHunter):
         if fetch:
             orders = huobi_api.get_orders(
                 set(
-                    cached_order_ids
-                    + deals
-                    + huobi_api.load_history_orders(f"{self.params.symbol}")
+                    [
+                        int(i)
+                        for i in (
+                            cached_order_ids
+                            + deals
+                            + huobi_api.load_history_orders(f"{self.params.symbol}")
+                        )
+                    ]
                 )
             )
 
@@ -209,11 +234,11 @@ class xHunter(IHunter):
 
             if order.type in buy_types:
                 self.gains_bag.open_position(position, price)
-                print(f"[B] {self.gains_bag:review}")
+                print(f"[B] {self.gains_bag:snapshot}")
                 msg.append(["-", round(filled_cash_amount, 2), round(price, 8)])
             elif order.type in sell_types:
                 self.gains_bag.close_position(position, price)
-                print(f"[S] {self.gains_bag:review}")
+                print(f"[S] {self.gains_bag:snapshot}")
                 msg.append(["+", round(filled_cash_amount, 2), round(price, 8)])
 
         if msg:
@@ -400,6 +425,9 @@ class xHunter(IHunter):
             except Exception as e:
                 print(f"[xHunter.retreat()] place order fail: {e}")
         return base_df
+
+    def portfolio(self, pre_strike, strike):
+        return self.gains_bag.portfolio(pre_strike, strike)
 
     def review_mission(self, base_df):
         df = base_df[base_df.BuySignal == 1]

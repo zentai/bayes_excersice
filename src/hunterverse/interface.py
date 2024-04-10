@@ -100,6 +100,7 @@ class StrategyParam:
     bayes_windows: int = 30
     lower_sample: int = 7
     upper_sample: int = 7
+    funds: float = 100
     interval: str = "1min"
     fetch_huobi: bool = False
     simulate: bool = False
