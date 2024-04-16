@@ -97,9 +97,11 @@ class StrategyParam:
     ATR_sample: int = 7
     atr_loss_margin: float = 1.5
     hard_cutoff: float = 0.95
+    profit_loss_ratio: float = 2.0
     bayes_windows: int = 30
     lower_sample: int = 7
     upper_sample: int = 7
+    surfing_level: int = 5
     funds: float = 100
     interval: str = "1min"
     fetch_huobi: bool = False

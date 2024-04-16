@@ -42,6 +42,7 @@ class PortfolioItem:
     AvgCost: float
     Strike: float
     Cash: float
+    FinalPnL: float
 
 
 def load_history(symbols, sp):
@@ -57,6 +58,7 @@ def summarize(df):
         "ProfitLoss": df["ProfitLoss"].sum(),
         "ProfitLossPercent": df["ProfitLoss"].sum() / df["BuyValue"].sum(),
         "Hr24": df["Hr24"].mean(),
+        "FinalPnL": df["FinalPnL"].sum(),
     }
 
     # 调整盈亏百分比和24小时变动为百分比形式
