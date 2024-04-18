@@ -1,5 +1,3 @@
-from icecream import ic
-
 import signal
 import sys
 import time
@@ -230,7 +228,7 @@ def training_camp(sp):
 
 
 @click.command()
-@click.option("--ccy", default="suiusdt", required=False, help="trade ccy pair")
+@click.option("--ccy", default="satsusdt", required=False, help="trade ccy pair")
 @click.option(
     "--interval",
     required=False,

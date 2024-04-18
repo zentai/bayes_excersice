@@ -5,8 +5,8 @@ from huobi.client.market import MarketClient
 from huobi.client.generic import GenericClient
 from huobi.utils import *
 from huobi.constant import *
-from utils import pandas_util
-from hunterverse.interface import Symbol
+from .utils import pandas_util
+from .hunterverse.interface import Symbol
 
 # generic_client = GenericClient()
 # list_obj = generic_client.get_exchange_symbols()

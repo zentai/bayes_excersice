@@ -84,7 +84,7 @@ class GainsBag:
         self.logger.info(msg)
 
         # dump snapshot
-        snapshot_avg_cost = round(self.avg_cost, 2)  # USDT
+        snapshot_avg_cost = round(self.avg_cost, self.symbol.price_prec)  # USDT
         snapshot_position = round(self.position, self.symbol.amount_prec)
         snapshot_cash = round(self.cash, 2)  # USDT
         print(f"{self:snapshot}")
@@ -105,9 +105,6 @@ class GainsBag:
         cash = position * price
         self.avg_cost = ((self.avg_cost * self.position) + cash) / (
             self.position + position
-        )
-        print(
-            f"!OPEN avg.cost: {self.avg_cost} self.@{self.position} @{position} ${price} C:{cash}"
         )
         self.cash -= cash
         self.position += position
@@ -148,7 +145,7 @@ class GainsBag:
         elif format_spec == "avg_cost":
             return f"{self.avg_cost}"
         elif format_spec == "snapshot":
-            snapshot_avg_cost = round(self.avg_cost, 2)  # USDT
+            snapshot_avg_cost = round(self.avg_cost, self.symbol.price_prec)  # USDT
             snapshot_position = round(self.position, self.symbol.amount_prec)
             snapshot_cash = round(self.cash, 2)  # USDT
             return f"![{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
@@ -177,19 +174,14 @@ class xHunter(IHunter):
 
         cached_order_ids = []
         if os.path.exists(db_path := f"{config.data_dir}/{self.params.symbol}.csv"):
-            cached_order_ids += pd.read_csv(db_path).id.tolist()
+            cached_order_ids = pd.read_csv(db_path).id.tolist()
 
         if fetch:
             orders = huobi_api.get_orders(
                 set(
-                    [
-                        int(i)
-                        for i in (
-                            cached_order_ids
-                            + deals
-                            + huobi_api.load_history_orders(f"{self.params.symbol}")
-                        )
-                    ]
+                    [ str(i) for i in (cached_order_ids
+                    + deals
+                    + huobi_api.load_history_orders(f"{self.params.symbol}"))]
                 )
             )
 
@@ -291,7 +283,7 @@ class xHunter(IHunter):
                 price = cash / position
                 print(f"Order: {order_id} filled, position: {position}  price: {price}")
                 self.gains_bag.open_position(position, price)
-                print(f"gains_bag: {self.gains_bag.cash} - {self.gains_bag.position}")
+                print(f"gains_bag: {self.gains_bag:review}")
                 base_df.loc[s_buy_order, "xBuy"] = price
                 base_df.loc[s_buy_order, "xPosition"] = self.gains_bag.position
                 base_df.loc[s_buy_order, "xCash"] = self.gains_bag.cash
