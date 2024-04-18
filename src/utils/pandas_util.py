@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 
 from config import config
+
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
 INTERVAL_TO_MIN = {
@@ -125,3 +126,29 @@ def sim_trade(symbol, action):
                 return t.price
             # t.print_object()
         time.sleep(0.05)
+
+
+def setup_scheduler():
+    import pytz
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.executors.pool import ProcessPoolExecutor
+    from apscheduler.triggers.cron import CronTrigger
+
+    jobstores = {}
+
+    executors = {
+        "default": {"type": "threadpool", "max_workers": 20},
+        "processpool": ProcessPoolExecutor(max_workers=5),
+    }
+
+    job_defaults = {"coalesce": False, "max_instances": 10}
+
+    scheduler = BackgroundScheduler()
+    scheduler.configure(
+        jobstores=jobstores,
+        executors=executors,
+        job_defaults=job_defaults,
+        timezone=pytz.timezone("Asia/Singapore"),
+    )
+
+    return scheduler

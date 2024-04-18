@@ -28,7 +28,6 @@ from .sensor.market_sensor import LocalMarketSensor
 from .sensor.market_sensor import HuobiMarketSensor
 from .tradingfirm.trader import xHunter
 
-
 DEBUG_COL = [
     "Date",
     # "Open",
@@ -51,10 +50,10 @@ DEBUG_COL = [
     "xAvgCost",
     "xBuyOrder",
     "xSellOrder",
-    "Kelly",
-    "Postrior",
+    # "Kelly",
+    # "Postrior",
     "P/L",
-    "likelihood",
+    # "likelihood",
     "profit_margin",
     "loss_margin",
 ]
@@ -134,21 +133,30 @@ def start_journey(sp):
         print("Received kill signal, retreating...")
         if base_df is not None:
             try:
-                success, fail = huobi_api.cancel_all_open_orders(
-                    sp.symbol.name, order_type=OrderType.BUY_STOP_LIMIT
-                )
-                print(f"cancel buy-stop-limit orders success: {success}, fail: {fail}")
-                base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = "Cancel"
+                for order_type in (
+                    "buy-stop-limit",
+                    "buy-limit",
+                    "buy-market",
+                    "sell-limit",
+                    "sell-stop-limit",
+                    "sell-market",
+                ):
+                    success, fail = huobi_api.cancel_all_open_orders(
+                        sp.symbol.name, order_type=OrderType.BUY_STOP_LIMIT
+                    )
+                    print(
+                        f"cancel {order_type} orders success: {success}, fail: {fail}"
+                    )
+                    if order_type in ("buy-stop-limit", "buy-limit", "buy-market"):
+                        base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = (
+                            "Cancel"
+                        )
+                    elif order_type in ("sell-limit", "sell-stop-limit", "sell-market"):
+                        base_df.loc[base_df.xSellOrder.isin(success), "xSellOrder"] = (
+                            "Cancel"
+                        )
             except Exception as e:
-                print(f"[Terminated] buy-stop-limit fail: {e}")
-            try:
-                success, fail = huobi_api.cancel_all_open_orders(
-                    sp.symbol.name, order_type=OrderType.SELL_STOP_LIMIT
-                )
-                print(f"cancel sell-stop-limit orders success: {success}, fail: {fail}")
-                base_df.loc[base_df.xSellOrder.isin(success), "xSellOrder"] = "Cancel"
-            except Exception as e:
-                print(f"[Terminated] sell-stop-limit fail: {e}")
+                print(f"[Terminated] cancel process fail: {e}")
 
             base_df[DUMP_COL].to_csv(
                 f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
@@ -168,9 +176,9 @@ def start_journey(sp):
     engine = BayesianEngine(params=sp)
     hunter = xHunter(params=sp)
     hunter.load_memories(
-        deals="1027484112361143,1034030263900804,1027486645785466,1027488129910406,1027488650695359,1027490159924606,1034036295340576,1034036790236728,1027493189034947,1027497257214173,1027498263981253,1027500721802378,1027505762931012,1027506316616796,1027508800129054,1034054985162494,1027513321396081,1027513832576164,1027517867885066,1027526399467449,1027527439125751,1034075553990161,1027531441050102,1034077600814374,1027534007569496,1027534460652806,1027538487119002,1042206464017203,1042206489487643".split(
-            ","
-        )
+        # deals="1027484112361143,1034030263900804,1027486645785466,1027488129910406,1027488650695359,1027490159924606,1034036295340576,1034036790236728,1027493189034947,1027497257214173,1027498263981253,1027500721802378,1027505762931012,1027506316616796,1027508800129054,1034054985162494,1027513321396081,1027513832576164,1027517867885066,1027526399467449,1027527439125751,1034075553990161,1027531441050102,1034077600814374,1027534007569496,1027534460652806,1027538487119002,1042206464017203,1042206489487643".split(
+        #     ","
+        # )
     )
 
     story = HuntingStory(sensor, scout, engine, hunter)
@@ -179,20 +187,29 @@ def start_journey(sp):
 
     round = sensor.left() or 1000000
     for i in range(round):
-        try:
-            base_df, review = story.move_forward(base_df)
-            final_review = review
-            print(base_df[DEBUG_COL][-30:])
-            print(final_review)
-            base_df[DUMP_COL].to_csv(
-                f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
-            )
-            print(f"{config.reports_dir}/{sp.symbol.name}.csv")
-            hunterPause(sp)
+        base_df, review = story.move_forward(base_df)
+        final_review = review
+        print(base_df[DEBUG_COL][-20:])
+        print(final_review)
+        base_df[DUMP_COL].to_csv(
+            f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+        )
+        print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+        hunterPause(sp)
+        # try:
+        #     base_df, review = story.move_forward(base_df)
+        #     final_review = review
+        #     print(base_df[DEBUG_COL][-30:])
+        #     print(final_review)
+        #     base_df[DUMP_COL].to_csv(
+        #         f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+        #     )
+        #     print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+        #     hunterPause(sp)
 
-        except Exception as e:
-            print(e)
-            time.sleep(5)
+        # except Exception as e:
+        #     print(e)
+        #     time.sleep(5)
 
     return final_review
 
@@ -224,18 +241,22 @@ def training_camp(sp):
     "--fund",
     required=False,
     type=int,
+    default=100.0,
     help="initial funds",
 )
 def main(ccy, interval, fund):
     params = {
-        "ATR_sample": 40.69386655044119,
-        "atr_loss_margin": 1.0,
+        "ATR_sample": 60,
+        "atr_loss_margin": 3,
         "hard_cutoff": 0.95,
-        "bayes_windows": 69.13338800480899,
-        "lower_sample": 100.0,
+        "profit_loss_ratio": 2.0,
+        "bayes_windows": 10,
+        "lower_sample": 10.0,
         "upper_sample": 5.0,
         "interval": interval,
+        "funds": fund,
         "symbol": Symbol(ccy),
+        "surfing_level": 4,
         "fetch_huobi": True,
         "simulate": False,
     }

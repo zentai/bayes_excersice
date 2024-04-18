@@ -153,21 +153,21 @@ def place_order(symbol, amount, price, order_type, stop_price=None, operator=Non
             else symbol.round_amount(amount)
         )
         round_price = symbol.round_price(price)
-        round_stop_price = symbol.round_price(stop_price)
+        round_stop_price = symbol.round_price(stop_price) if stop_price else None
         amount = round_amount
         price = round_price
         stop_price = round_stop_price
         print(
-            f"[BUY] adjust buy amount: {amount} -> {round_amount}, price: {price} -> {round_price}, stop price: {round_stop_price}"
+            f"[{order_type}] adjust buy amount: {round_amount}, trigger Price: {round_stop_price}, price: {round_price}"
         )
     elif order_type in (OrderType.SELL_LIMIT, OrderType.SELL_STOP_LIMIT):
         round_amount = symbol.round_amount(amount)
         round_price = symbol.round_price(price)
-        stop_price = symbol.round_price(stop_price)
+        stop_price = symbol.round_price(stop_price) if stop_price else None
         amount = round_amount
         price = round_price
         print(
-            f"[SELL] adjust sell amount: {amount} -> {round_amount}, price: {price} -> {round_price}"
+            f"[{order_type}] adjust sell amount: {round_amount}, trigger Price: {stop_price}, price: {round_price}"
         )
 
     trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)

@@ -132,12 +132,16 @@ class TurtleScout(IStrategyScout):
         base_df.loc[idx, "c_l"] = (base_df.Close.shift(1) - base_df.Low).abs()
         base_df.loc[idx, "TR"] = base_df[["h_l", "c_h", "c_l"]].max(axis=1)
         base_df.loc[idx, "ATR"] = base_df["TR"].rolling(ATR_sample).mean()
-        base_df.loc[idx, "Stop_profit"] = (
-            base_df.Close.shift(1) - base_df.ATR.shift(1) * atr_loss_margin
-        )
-        base_df.loc[idx, "exit_price"] = base_df[["turtle_l", "Stop_profit"]].max(
-            axis=1
-        )
+
+        # Single Bollinger band take profit solution
+        surfing_df = base_df.tail(upper_sample)
+        prices = surfing_df.High.values.tolist()
+        mean = statistics.mean(prices)
+        stdv = statistics.stdev(prices)
+        surfing_profit = mean + (self.params.surfing_level * stdv)
+        base_df.loc[idx, "Stop_profit"] = surfing_profit
+        cut_off = base_df.Close.shift(1) - base_df.ATR.shift(1) * atr_loss_margin
+        base_df.loc[idx, "exit_price"] = np.maximum(base_df["turtle_l"], cut_off)
         return base_df
 
     def _surfing(self, base_df):
@@ -146,20 +150,8 @@ class TurtleScout(IStrategyScout):
 
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
-        base_df['surfing_buy'] = base_df['surfing_buy'].astype(object)
-        base_df['surfing_sell'] = base_df['surfing_sell'].astype(object)
+        base_df["surfing_buy"] = base_df["surfing_buy"].astype(object)
+        base_df["surfing_sell"] = base_df["surfing_sell"].astype(object)
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_profit(base_df)
-        # TODO
-        # migrate boll buy/sell plan into base_df
-        # base_df = pandas_util.equip_fields(base_df, BOLL_SURF_COLUNBS)
-        records = self._surfing(base_df).to_dict('records')
-        sell_params = [ (i['ratio'], i['price']) for i in records if i['Action'] == 'S']
-        buy_params = [ (i['ratio'], i['price']) for i in records if i['Action'] == 'B']
-        _index = len(base_df) - 1
-        base_df.at[_index, 'surfing_buy'] = buy_params
-        base_df.at[_index, 'surfing_sell'] = sell_params
-        print(base_df)
-        # base_df = self._calc_surf_profit(base_df)   #TODO: this is a good solution?
-        
         return base_df

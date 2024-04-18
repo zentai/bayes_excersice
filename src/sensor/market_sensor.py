@@ -39,7 +39,6 @@ class HuobiMarketSensor(IMarketSensor):
         new_data = pandas_util.get_history_stick(
             self.symbol, sample=3, interval=self.interval
         )
-        print(new_data)
         new_data = new_data.iloc[1]
         new_data["Matured"] = pd.NaT
         base_df = pd.concat(

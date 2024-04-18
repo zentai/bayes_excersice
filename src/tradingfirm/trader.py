@@ -65,12 +65,8 @@ class GainsBag:
         self.init_funds = self.cash = init_funds
         self.position = init_position
         self.avg_cost = init_avg_cost
-        self.logger.info(
-            f"Create GainsBag: [{self.symbol.name}] ${self.init_funds} Ⓒ {self.position} ∆ {self.avg_cost}"
-        )
-        print(
-            f"Create GainsBag: [{self.symbol.name}] ${self.init_funds} Ⓒ {self.position} ∆ {self.avg_cost}"
-        )
+        self.logger.info(f"Create GainsBag: {self:snapshot}")
+        print(f"Create GainsBag: {self:snapshot}")
 
     def get_un_pnl(self, strike):
         return (strike * self.position) + self.cash - self.init_funds
@@ -91,12 +87,8 @@ class GainsBag:
         snapshot_avg_cost = round(self.avg_cost, 2)  # USDT
         snapshot_position = round(self.position, self.symbol.amount_prec)
         snapshot_cash = round(self.cash, 2)  # USDT
-        print(
-            f"![{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
-        )
-        self.logger.info(
-            f"![{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
-        )
+        print(f"{self:snapshot}")
+        self.logger.info(f"{self:snapshot}")
 
     def discharge(self, ratio):
         stake_amount = self.stake_cap if self.cash > self.stake_cap else self.cash
@@ -133,16 +125,35 @@ class GainsBag:
     def is_enough_cash(self):
         return self.cash > self.MIN_STAKE_CAP
 
+    def portfolio(self, pre_strike, strike):
+        market_value = self.position * strike
+        cost = self.position * self.avg_cost
+        return {
+            "Pair": self.symbol.name,
+            "MarketValue": market_value,
+            "BuyValue": cost,
+            "ProfitLoss": market_value - cost,
+            "ProfitLossPercent": (market_value / cost) - 1,
+            "Hr24": (strike / pre_strike) - 1,
+            "Position": self.position,
+            "AvgCost": self.avg_cost,
+            "Strikle": strike,
+            "Cash": self.cash,
+            "FinalPnL": market_value + self.cash - self.init_funds,
+        }
+
     def __format__(self, format_spec):
         if format_spec == "cash":
             return f"{self.cash}"
         elif format_spec == "avg_cost":
             return f"{self.avg_cost}"
-        elif format_spec == "review":
+        elif format_spec == "snapshot":
             snapshot_avg_cost = round(self.avg_cost, 2)  # USDT
             snapshot_position = round(self.position, self.symbol.amount_prec)
             snapshot_cash = round(self.cash, 2)  # USDT
             return f"![{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
+        elif format_spec == "review":
+            pass
         else:
             return self.name
 
@@ -150,17 +161,19 @@ class GainsBag:
 class xHunter(IHunter):
     def __init__(self, params):
         super().__init__()
+        self.buy_types = ("buy-stop-limit", "buy-limit", "buy-market")
+        self.sell_types = ("sell-limit", "sell-stop-limit", "sell-market")
+        self.status = ("filled", "partial-canceled", "partial-filled")
         self.params = params
         self.fetch_huobi = params.fetch_huobi
         self.simulate = params.simulate
-        self.gains_bag = GainsBag(symbol=params.symbol, init_funds=100, stake_cap=50)
+        self.gains_bag = GainsBag(
+            symbol=params.symbol, init_funds=params.funds, stake_cap=50
+        )
         self.lastest_candlestick = None
 
     def load_memories(self, fetch=True, deals=[]):
         print(f"load_memories(self, fetch={fetch}, deals={deals})")
-        status = ("filled", "partial-canceled", "partial-filled")
-        buy_types = ("buy-stop-limit", "buy-limit", "buy-market")
-        sell_types = ("sell-limit", "sell-stop-limit", "sell-market")
 
         cached_order_ids = []
         if os.path.exists(db_path := f"{config.data_dir}/{self.params.symbol}.csv"):
@@ -169,19 +182,24 @@ class xHunter(IHunter):
         if fetch:
             orders = huobi_api.get_orders(
                 set(
-                    cached_order_ids
-                    + deals
-                    + huobi_api.load_history_orders(f"{self.params.symbol}")
+                    [
+                        int(i)
+                        for i in (
+                            cached_order_ids
+                            + deals
+                            + huobi_api.load_history_orders(f"{self.params.symbol}")
+                        )
+                    ]
                 )
             )
 
         """Process and enrich orders DataFrame with positions and prices."""
-        orders = orders[orders.state.isin(status)]
+        orders = orders[orders.state.isin(self.status)]
         pd.DataFrame(orders).to_csv(db_path, index=False)
 
         # 分别处理买入和卖出订单
-        buy_mask = orders.type.isin(buy_types)
-        sell_mask = orders.type.isin(sell_types)
+        buy_mask = orders.type.isin(self.buy_types)
+        sell_mask = orders.type.isin(self.sell_types)
 
         # 买入订单的 position 需要减去手续费
         orders.loc[buy_mask, "position"] = (
@@ -200,20 +218,19 @@ class xHunter(IHunter):
 
         msg = []
         for order in orders.itertuples():
-            print(order)
             position, price, filled_cash_amount = (
                 order.position,
                 order.price,
                 order.filled_cash_amount,
             )
 
-            if order.type in buy_types:
+            if order.type in self.buy_types:
                 self.gains_bag.open_position(position, price)
-                print(f"[B] {self.gains_bag:review}")
+                print(f"[B] {self.gains_bag:snapshot}")
                 msg.append(["-", round(filled_cash_amount, 2), round(price, 8)])
-            elif order.type in sell_types:
+            elif order.type in self.sell_types:
                 self.gains_bag.close_position(position, price)
-                print(f"[S] {self.gains_bag:review}")
+                print(f"[S] {self.gains_bag:snapshot}")
                 msg.append(["+", round(filled_cash_amount, 2), round(price, 8)])
 
         if msg:
@@ -254,7 +271,6 @@ class xHunter(IHunter):
     def attack(self, base_df):
         if self.simulate or not self.fetch_huobi:
             return base_df
-
         # check Limit-buy status
         s_buy_order = (
             base_df.xBuyOrder.notna()
@@ -265,8 +281,8 @@ class xHunter(IHunter):
             order_id = base_df[s_buy_order].xBuyOrder.values
             df_orders = huobi_api.get_orders(order_id)
             if (
-                (df_orders.type == OrderType.BUY_STOP_LIMIT)
-                & (df_orders.state.isin((OrderState.FILLED, OrderState.PARTIAL_FILLED)))
+                (df_orders.type.isin(self.buy_types))
+                & (df_orders.state.isin(self.status))
             ).any():
                 cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[
                     0
@@ -288,25 +304,36 @@ class xHunter(IHunter):
             # budget = self.gains_bag.discharge(self.lastest_candlestick.Kelly)
 
             try:
-                success, fail = huobi_api.cancel_all_open_orders(
-                    self.params.symbol.name, order_type=OrderType.BUY_STOP_LIMIT
-                )
-                print(f"cancelled orders success: {success}, fail: {fail}")
-                base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = "Cancel"
+                for order_type in self.buy_types:
+                    success, fail = huobi_api.cancel_all_open_orders(
+                        self.params.symbol.name, order_type=order_type
+                    )
+                    base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = "Cancel"
             except Exception as e:
                 print(f"[xHunter.atack()] Cancel Old trade fail: {e}")
 
             position = budget / (self.lastest_candlestick.Close * 1.002)
             try:
-                price = base_df[-5:].High.max()
-                order_id = huobi_api.place_order(
-                    symbol=self.params.symbol,
-                    amount=position,
-                    price=price * 1.001,
-                    stop_price=price,
-                    order_type="BL",
-                    operator="gte",
-                )
+                price = base_df.tail(self.params.upper_sample).High.max()
+                is_fly = price == base_df.iloc[-1].High
+                if is_fly:
+                    print(f"[B] {price}")
+                    order_id = huobi_api.place_order(
+                        symbol=self.params.symbol,
+                        amount=position,
+                        price=price,
+                        order_type="B",
+                    )
+                else:
+                    print(f"[BL] {price}")
+                    order_id = huobi_api.place_order(
+                        symbol=self.params.symbol,
+                        amount=position,
+                        stop_price=(price * 0.9995),
+                        price=price,
+                        order_type="BL",
+                        operator="gte",
+                    )
                 s_buy = base_df.Date == self.lastest_candlestick.Date
                 base_df.loc[s_buy, "xBuyOrder"] = order_id
             except Exception as e:
@@ -315,9 +342,9 @@ class xHunter(IHunter):
 
     def sim_retreat(self, base_df):
         cutoff_price = self.params.hard_cutoff * self.gains_bag.avg_cost
-        exit_price = max(cutoff_price, self.lastest_candlestick.exit_price)
+        Stop_profit = max(cutoff_price, self.lastest_candlestick.Stop_profit)
         sell_signal = (
-            self.lastest_candlestick.Close < exit_price
+            self.lastest_candlestick.Close < Stop_profit
             and self.gains_bag.is_enough_position()
         )
         if sell_signal:
@@ -338,9 +365,9 @@ class xHunter(IHunter):
     def retreat(self, base_df):
         if self.simulate or not self.fetch_huobi:
             return base_df
-
         cutoff_price = self.params.hard_cutoff * self.gains_bag.avg_cost
-        exit_price = max(cutoff_price, self.lastest_candlestick.exit_price)
+        cutoff_price = max(cutoff_price, self.lastest_candlestick.exit_price)
+        Stop_profit = self.lastest_candlestick.Stop_profit
 
         # check pending Sell-Stop-Limit order's status
         pending_order = (
@@ -352,8 +379,8 @@ class xHunter(IHunter):
             order_id = base_df[pending_order].xSellOrder.values
             df_orders = huobi_api.get_orders(order_id)
             if (
-                (df_orders.type == OrderType.SELL_STOP_LIMIT)
-                & (df_orders.state.isin((OrderState.FILLED, OrderState.PARTIAL_FILLED)))
+                (df_orders.type.isin(self.sell_types))
+                & (df_orders.state.isin(self.status))
             ).any():
                 cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[
                     0
@@ -362,44 +389,70 @@ class xHunter(IHunter):
                 price = cash / position
                 print(f"Order: {order_id} filled, position: {position}  price: {price}")
                 self.gains_bag.close_position(position, price)
-                print(f"gains_bag: {self.gains_bag.cash} - {self.gains_bag.position}")
+                print(f"gains_bag: {self.gains_bag:snapshot}")
                 base_df.loc[pending_order, "xSell"] = price
                 base_df.loc[pending_order, "xProfit"] = (
                     base_df.xSell / base_df.xBuy
                 ) - 1
-                # base_df.loc[pending_order, "xPosition"] = self.gains_bag.position
-                # base_df.loc[pending_order, "xCash"] = self.gains_bag.cash
-                # base_df.loc[pending_order, "xAvgCost"] = self.gains_bag.avg_cost
 
-        # sell_signal = self.lastest_candlestick.Close < exit_price and self.gains_bag.is_enough_position()
         sell_signal = self.gains_bag.is_enough_position()
         if sell_signal:
             try:
-                # reset cutoff order (Sell-Stop-Limit order)
-                success, fail = huobi_api.cancel_all_open_orders(
-                    self.params.symbol.name, order_type=OrderType.SELL_STOP_LIMIT
-                )
-                print(f"cancelled orders success: {success}, fail: {fail}")
-                base_df.loc[base_df.xSellOrder.isin(success), "xSellOrder"] = "Cancel"
+                for order_type in self.sell_types:
+                    # reset cutoff order (Sell-Stop-Limit order)
+                    success, fail = huobi_api.cancel_all_open_orders(
+                        self.params.symbol.name, order_type=order_type
+                    )
+                    base_df.loc[base_df.xSellOrder.isin(success), "xSellOrder"] = (
+                        "Cancel"
+                    )
             except Exception as e:
                 print(f"[xHunter.retreat()] Cancel Old trade fail: {e}")
             huobi_position = huobi_api.get_balance(self.params.symbol.name)
-            try:
-                order_id = huobi_api.place_order(
-                    symbol=self.params.symbol,
-                    amount=huobi_position,
-                    price=exit_price,
-                    stop_price=exit_price * 0.9995,
-                    order_type="SL",
-                    operator="lte",
-                )
-                print(f"Reset Cutoff price: {exit_price}")
-                s_sell = base_df.xBuy.notna() & base_df.xSell.isna()
-                if s_sell.any():  # should skip all False, mean nothing to update
-                    base_df.loc[s_sell, "xSellOrder"] = order_id
-            except Exception as e:
-                print(f"[xHunter.retreat()] place order fail: {e}")
+            if huobi_position:
+                try:
+                    strike = huobi_api.get_strike(f"{self.params.symbol}")
+                    cutoff_price = self.params.hard_cutoff * self.gains_bag.avg_cost
+                    exit_price = self.lastest_candlestick.exit_price
+                    cutoff = strike <= (max(cutoff_price, exit_price))
+                    if cutoff:
+                        trigger_price = strike * 0.9995
+                        price = trigger_price * 0.9995
+                        order_type = "SL"
+                        operator = "lte"
+                    else:
+                        max_loss = self.gains_bag.avg_cost * (
+                            1 - self.params.hard_cutoff
+                        )
+                        min_profit = self.gains_bag.avg_cost + (
+                            max_loss * self.params.profit_loss_ratio
+                        )
+                        if Stop_profit < min_profit:
+                            print(f"{Stop_profit} -> {min_profit}")
+                            Stop_profit = min_profit
+                        trigger_price = None
+                        price = Stop_profit * 1.0005
+                        order_type = "S"
+                        operator = "gte"
+
+                    order_id = huobi_api.place_order(
+                        symbol=self.params.symbol,
+                        amount=huobi_position,
+                        stop_price=trigger_price,
+                        price=price,
+                        order_type=order_type,
+                        operator=operator,
+                    )
+                    s_sell = base_df.xBuy.notna() & base_df.xSell.isna()
+                    if s_sell.any():  # should skip all False, mean nothing to update
+                        base_df.loc[s_sell, "xSellOrder"] = order_id
+
+                except Exception as e:
+                    print(f"[xHunter.retreat()] place order fail: {e}")
         return base_df
+
+    def portfolio(self, pre_strike, strike):
+        return self.gains_bag.portfolio(pre_strike, strike)
 
     def review_mission(self, base_df):
         df = base_df[base_df.BuySignal == 1]
