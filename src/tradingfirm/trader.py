@@ -1,3 +1,4 @@
+from icecream import ic
 import os
 import pandas as pd
 import numpy as np
@@ -283,7 +284,7 @@ class xHunter(IHunter):
                 price = cash / position
                 print(f"Order: {order_id} filled, position: {position}  price: {price}")
                 self.gains_bag.open_position(position, price)
-                print(f"gains_bag: {self.gains_bag:review}")
+                print(f"gains_bag: {self.gains_bag:snapshot}")
                 base_df.loc[s_buy_order, "xBuy"] = price
                 base_df.loc[s_buy_order, "xPosition"] = self.gains_bag.position
                 base_df.loc[s_buy_order, "xCash"] = self.gains_bag.cash
@@ -361,7 +362,6 @@ class xHunter(IHunter):
         cutoff_price = max(cutoff_price, self.lastest_candlestick.exit_price)
         Stop_profit = self.lastest_candlestick.Stop_profit
 
-        # check pending Sell-Stop-Limit order's status
         pending_order = (
             base_df.xSellOrder.notna()
             & (base_df.xSellOrder != "Cancel")
@@ -438,6 +438,8 @@ class xHunter(IHunter):
                     s_sell = base_df.xBuy.notna() & base_df.xSell.isna()
                     if s_sell.any():  # should skip all False, mean nothing to update
                         base_df.loc[s_sell, "xSellOrder"] = order_id
+                    else:
+                        base_df.at[base_df.index[-1], "xSellOrder"] = order_id
 
                 except Exception as e:
                     print(f"[xHunter.retreat()] place order fail: {e}")
