@@ -173,11 +173,7 @@ def start_journey(sp):
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
     hunter = xHunter(params=sp)
-    hunter.load_memories(
-        # deals="1027484112361143,1034030263900804,1027486645785466,1027488129910406,1027488650695359,1027490159924606,1034036295340576,1034036790236728,1027493189034947,1027497257214173,1027498263981253,1027500721802378,1027505762931012,1027506316616796,1027508800129054,1034054985162494,1027513321396081,1027513832576164,1027517867885066,1027526399467449,1027527439125751,1034075553990161,1027531441050102,1034077600814374,1027534007569496,1027534460652806,1027538487119002,1042206464017203,1042206489487643".split(
-        #     ","
-        # )
-    )
+    hunter.load_memories()
 
     story = HuntingStory(sensor, scout, engine, hunter)
     base_df = sensor.scan(2000)
@@ -185,29 +181,20 @@ def start_journey(sp):
 
     round = sensor.left() or 1000000
     for i in range(round):
-        base_df, review = story.move_forward(base_df)
-        final_review = review
-        print(base_df[DEBUG_COL][-20:])
-        print(final_review)
-        base_df[DUMP_COL].to_csv(
-            f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
-        )
-        print(f"{config.reports_dir}/{sp.symbol.name}.csv")
-        hunterPause(sp)
-        # try:
-        #     base_df, review = story.move_forward(base_df)
-        #     final_review = review
-        #     print(base_df[DEBUG_COL][-30:])
-        #     print(final_review)
-        #     base_df[DUMP_COL].to_csv(
-        #         f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
-        #     )
-        #     print(f"{config.reports_dir}/{sp.symbol.name}.csv")
-        #     hunterPause(sp)
+        try:
+            base_df, review = story.move_forward(base_df)
+            final_review = review
+            print(base_df[DEBUG_COL][-30:])
+            print(final_review)
+            base_df[DUMP_COL].to_csv(
+                f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+            )
+            print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+            hunterPause(sp)
 
-        # except Exception as e:
-        #     print(e)
-        #     time.sleep(5)
+        except Exception as e:
+            print(e)
+            time.sleep(5)
 
     return final_review
 
@@ -247,14 +234,14 @@ def main(ccy, interval, fund):
         "ATR_sample": 60,
         "atr_loss_margin": 3,
         "hard_cutoff": 0.95,
-        "profit_loss_ratio": 2.0,
+        "profit_loss_ratio": 3.0,
         "bayes_windows": 10,
         "lower_sample": 10.0,
-        "upper_sample": 5.0,
+        "upper_sample": 20.0,
         "interval": interval,
         "funds": fund,
         "symbol": Symbol(ccy),
-        "surfing_level": 4,
+        "surfing_level": 5,
         "fetch_huobi": True,
         "simulate": False,
     }

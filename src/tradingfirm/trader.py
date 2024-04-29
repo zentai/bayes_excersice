@@ -169,6 +169,7 @@ class xHunter(IHunter):
             symbol=params.symbol, init_funds=params.funds, stake_cap=50
         )
         self.lastest_candlestick = None
+        self.on_hold = False
 
     def load_memories(self, fetch=True, deals=[]):
         print(f"load_memories(self, fetch={fetch}, deals={deals})")
@@ -291,7 +292,7 @@ class xHunter(IHunter):
                 base_df.loc[s_buy_order, "xAvgCost"] = self.gains_bag.avg_cost
 
         # buy_signal = self.lastest_candlestick.Kelly > 0 and self.gains_bag.is_enough_cash()
-        buy_signal = self.gains_bag.is_enough_cash()
+        buy_signal = self.gains_bag.is_enough_cash() and not self.on_hold
         if buy_signal:
             budget = self.gains_bag.discharge(ratio=1)
             # budget = self.gains_bag.discharge(self.lastest_candlestick.Kelly)
@@ -374,14 +375,16 @@ class xHunter(IHunter):
                 (df_orders.type.isin(self.sell_types))
                 & (df_orders.state.isin(self.status))
             ).any():
-                cash = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[
-                    0
-                ]
-                position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
+                _order = df_orders.loc[df_orders.id == order_id].iloc[0]
+                cash = _order.filled_cash_amount
+                position = _order.filled_amount
                 price = cash / position
                 print(f"Order: {order_id} filled, position: {position}  price: {price}")
                 self.gains_bag.close_position(position, price)
                 print(f"gains_bag: {self.gains_bag:snapshot}")
+                if _order.type == "sell-limit":
+                    print(f"mission completed: on hold")
+                    self.on_hold = True
                 base_df.loc[pending_order, "xSell"] = price
                 base_df.loc[pending_order, "xProfit"] = (
                     base_df.xSell / base_df.xBuy
@@ -482,6 +485,7 @@ class xHunter(IHunter):
                     self.gains_bag.cash,
                     self.gains_bag.position,
                     self.gains_bag.avg_cost,
+                    self.on_hold
                 ]
             ],
             columns=[
@@ -498,5 +502,6 @@ class xHunter(IHunter):
                 "Cash",
                 "Position",
                 "Avg.Cost",
+                "Onhold"
             ],
         )
