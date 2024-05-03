@@ -40,6 +40,12 @@ DEBUG_COL = [
     "buy",
     "sell",
     "profit",
+    "sBuy",
+    "sSell",
+    "sProfit",
+    "sPosition",
+    "sCash",
+    "sAvgCost",
     "xBuy",
     "xSell",
     "xProfit",
@@ -146,13 +152,13 @@ def start_journey(sp):
                         f"cancel {order_type} orders success: {success}, fail: {fail}"
                     )
                     if order_type in ("buy-stop-limit", "buy-limit", "buy-market"):
-                        base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = (
-                            "Cancel"
-                        )
+                        base_df.loc[
+                            base_df.xBuyOrder.isin(success), "xBuyOrder"
+                        ] = "Cancel"
                     elif order_type in ("sell-limit", "sell-stop-limit", "sell-market"):
-                        base_df.loc[base_df.xSellOrder.isin(success), "xSellOrder"] = (
-                            "Cancel"
-                        )
+                        base_df.loc[
+                            base_df.xSellOrder.isin(success), "xSellOrder"
+                        ] = "Cancel"
             except Exception as e:
                 print(f"[Terminated] cancel process fail: {e}")
 
@@ -229,7 +235,14 @@ def training_camp(sp):
     default=100.0,
     help="initial funds",
 )
-def main(ccy, interval, fund):
+@click.option(
+    "--cap",
+    required=False,
+    type=int,
+    default=50,
+    help="Stake cap",
+)
+def main(ccy, interval, fund, cap):
     params = {
         "ATR_sample": 60,
         "atr_loss_margin": 3,
@@ -240,6 +253,7 @@ def main(ccy, interval, fund):
         "upper_sample": 20.0,
         "interval": interval,
         "funds": fund,
+        "stake_cap": cap,
         "symbol": Symbol(ccy),
         "surfing_level": 5,
         "fetch_huobi": True,

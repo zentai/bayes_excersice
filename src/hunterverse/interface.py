@@ -103,6 +103,7 @@ class StrategyParam:
     upper_sample: int = 7
     surfing_level: int = 5
     funds: float = 100
+    stake_cap: int = 50
     interval: str = "1min"
     fetch_huobi: bool = False
     simulate: bool = False

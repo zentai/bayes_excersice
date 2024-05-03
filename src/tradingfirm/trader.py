@@ -14,6 +14,14 @@ from config import config
 ZERO = config.zero
 
 HUNTER_COLUMNS = [
+    "sBuy",
+    "sSell",
+    "sProfit",
+    "sPosition",
+    "sCash",
+    "sAvgCost",
+    "sBuyOrder",
+    "sSellOrder",
     "xBuy",
     "xSell",
     "xProfit",
@@ -165,8 +173,11 @@ class xHunter(IHunter):
         self.params = params
         self.fetch_huobi = params.fetch_huobi
         self.simulate = params.simulate
-        self.gains_bag = GainsBag(
-            symbol=params.symbol, init_funds=params.funds, stake_cap=50
+        self.sim_bag = GainsBag(
+            symbol=params.symbol, init_funds=params.funds, stake_cap=params.stake_cap
+        )
+        self.live_bag = GainsBag(
+            symbol=params.symbol, init_funds=params.funds, stake_cap=params.stake_cap
         )
         self.lastest_candlestick = None
         self.on_hold = False
@@ -181,9 +192,14 @@ class xHunter(IHunter):
         if fetch:
             orders = huobi_api.get_orders(
                 set(
-                    [ str(i) for i in (cached_order_ids
-                    + deals
-                    + huobi_api.load_history_orders(f"{self.params.symbol}"))]
+                    [
+                        str(i)
+                        for i in (
+                            cached_order_ids
+                            + deals
+                            + huobi_api.load_history_orders(f"{self.params.symbol}")
+                        )
+                    ]
                 )
             )
 
@@ -191,18 +207,16 @@ class xHunter(IHunter):
         orders = orders[orders.state.isin(self.status)]
         pd.DataFrame(orders).to_csv(db_path, index=False)
 
-        # 分别处理买入和卖出订单
         buy_mask = orders.type.isin(self.buy_types)
         sell_mask = orders.type.isin(self.sell_types)
 
-        # 买入订单的 position 需要减去手续费
+        # 计算买入和卖出订单的 position 和 price
+        # 买入订单的 position 减去手续费，卖出订单的 position 不变
+        # 所有订单的价格计算为成交金额除以 position
         orders.loc[buy_mask, "position"] = (
             orders.loc[buy_mask, "filled_amount"] - orders.loc[buy_mask, "filled_fees"]
         )
-        # 卖出订单的 position 不减去手续费
         orders.loc[sell_mask, "position"] = orders.loc[sell_mask, "filled_amount"]
-
-        # 所有订单的价格都是成交金额除以位置大小
         orders.loc[buy_mask, "price"] = (
             orders["filled_cash_amount"] / orders["position"]
         )
@@ -219,17 +233,19 @@ class xHunter(IHunter):
             )
 
             if order.type in self.buy_types:
-                self.gains_bag.open_position(position, price)
-                print(f"[B] {self.gains_bag:snapshot}")
+                self.sim_bag.open_position(position, price)
+                self.live_bag.open_position(position, price)
+                print(f"[B] {self.sim_bag:snapshot}")
                 msg.append(["-", round(filled_cash_amount, 2), round(price, 8)])
             elif order.type in self.sell_types:
-                self.gains_bag.close_position(position, price)
-                print(f"[S] {self.gains_bag:snapshot}")
+                self.sim_bag.close_position(position, price)
+                self.live_bag.close_position(position, price)
+                print(f"[S] {self.sim_bag:snapshot}")
                 msg.append(["+", round(filled_cash_amount, 2), round(price, 8)])
 
         if msg:
-            fund = f"{self.gains_bag:cash}"
-            cost = float(f"{self.gains_bag:avg_cost}")
+            fund = f"{self.sim_bag:cash}"
+            cost = float(f"{self.sim_bag:avg_cost}")
             msg.append(["=", fund, cost])
             strike = huobi_api.get_strike(f"{self.params.symbol}")
             market_value = strike - cost
@@ -398,9 +414,9 @@ class xHunter(IHunter):
                     success, fail = huobi_api.cancel_all_open_orders(
                         self.params.symbol.name, order_type=order_type
                     )
-                    base_df.loc[base_df.xSellOrder.isin(success), "xSellOrder"] = (
-                        "Cancel"
-                    )
+                    base_df.loc[
+                        base_df.xSellOrder.isin(success), "xSellOrder"
+                    ] = "Cancel"
             except Exception as e:
                 print(f"[xHunter.retreat()] Cancel Old trade fail: {e}")
             huobi_position = huobi_api.get_balance(self.params.symbol.name)
@@ -485,7 +501,7 @@ class xHunter(IHunter):
                     self.gains_bag.cash,
                     self.gains_bag.position,
                     self.gains_bag.avg_cost,
-                    self.on_hold
+                    self.on_hold,
                 ]
             ],
             columns=[
@@ -502,6 +518,6 @@ class xHunter(IHunter):
                 "Cash",
                 "Position",
                 "Avg.Cost",
-                "Onhold"
+                "Onhold",
             ],
         )
