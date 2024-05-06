@@ -17,7 +17,7 @@ class LocalMarketSensor(IMarketSensor):
         return df
 
     def fetch(self, base_df):
-        new_data = self.test_df.iloc[self.update_idx].copy()
+        new_data = self.test_df.iloc[self.update_idx].copy() if not self.test_df.empty else self.test_df
         new_data["Matured"] = pd.NaT
         base_df = pd.concat(
             [base_df, pd.DataFrame([new_data], columns=base_df.columns)],

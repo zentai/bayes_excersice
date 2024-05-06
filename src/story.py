@@ -78,6 +78,12 @@ DUMP_COL = [
     "profit",
     # "turtle_l",
     # "turtle_h",
+    "sBuy",
+    "sSell",
+    "sProfit",
+    "sPosition",
+    "sCash",
+    "sAvgCost",
     "xBuy",
     "xSell",
     "xProfit",
@@ -111,6 +117,8 @@ class HuntingStory:
 
 
 def hunterPause(sp):
+    if sp.simulate:
+        return
     if sp.fetch_huobi:
         now = datetime.datetime.now()
         minutes_interval = INTERVAL_TO_MIN.get(sp.interval)
@@ -149,7 +157,7 @@ def start_journey(sp):
                         sp.symbol.name, order_type=OrderType.BUY_STOP_LIMIT
                     )
                     print(
-                        f"cancel {order_type} orders success: {success}, fail: {fail}"
+                        f"cancel {order_type} orders success: {success}, fail: {fail}" 
                     )
                     if order_type in ("buy-stop-limit", "buy-limit", "buy-market"):
                         base_df.loc[
@@ -179,28 +187,45 @@ def start_journey(sp):
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
     hunter = xHunter(params=sp)
-    hunter.load_memories()
+    if not sp.simulate:
+        hunter.load_memories()
 
     story = HuntingStory(sensor, scout, engine, hunter)
-    base_df = sensor.scan(2000)
+    base_df = sensor.scan(2000 if not sp.simulate else 100)
     final_review = None
 
     round = sensor.left() or 1000000
     for i in range(round):
-        try:
-            base_df, review = story.move_forward(base_df)
-            final_review = review
-            print(base_df[DEBUG_COL][-30:])
-            print(final_review)
-            base_df[DUMP_COL].to_csv(
-                f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
-            )
-            print(f"{config.reports_dir}/{sp.symbol.name}.csv")
-            hunterPause(sp)
+        base_df, review = story.move_forward(base_df)
+        final_review = review
+        # print(base_df[DEBUG_COL][-30:])
+        # print(final_review)
+        # base_df[DUMP_COL].to_csv(
+        #     f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+        # )
+        # print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+        hunterPause(sp)
 
-        except Exception as e:
-            print(e)
-            time.sleep(5)
+    base_df[DUMP_COL].to_csv(
+        f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+    )
+    print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+
+
+        # try:
+        #     base_df, review = story.move_forward(base_df)
+        #     final_review = review
+        #     print(base_df[DEBUG_COL][-30:])
+        #     print(final_review)
+        #     base_df[DUMP_COL].to_csv(
+        #         f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+        #     )
+        #     print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+        #     hunterPause(sp)
+
+        # except Exception as e:
+        #     print(e)
+        #     time.sleep(5)
 
     return final_review
 
@@ -221,7 +246,7 @@ def training_camp(sp):
 
 
 @click.command()
-@click.option("--ccy", default="satsusdt", required=False, help="trade ccy pair")
+@click.option("--ccy", default="bomeusdt", required=False, help="trade ccy pair")
 @click.option(
     "--interval",
     required=False,
@@ -257,7 +282,7 @@ def main(ccy, interval, fund, cap):
         "symbol": Symbol(ccy),
         "surfing_level": 5,
         "fetch_huobi": True,
-        "simulate": False,
+        "simulate": True,
     }
     sp = StrategyParam(**params)
     final_review = start_journey(sp)
