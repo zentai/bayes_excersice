@@ -144,6 +144,43 @@ class TurtleScout(IStrategyScout):
         base_df.loc[idx, "exit_price"] = np.maximum(base_df["turtle_l"], cut_off)
         return base_df
 
+    def _calc_OBV(self, base_df, multiplier=3.4):
+        window = self.params.upper_sample
+        df = base_df.copy()
+
+        # Calculate price difference and direction
+        df["price_diff"] = df["Close"].diff()
+        df["direction"] = df["price_diff"].apply(
+            lambda x: 1 if x > 0 else -1 if x < 0 else 0
+        )
+        df["Vol"] *= df["direction"]
+
+        # Calculate OBV
+        df["OBV"] = df["Vol"].cumsum()
+
+        # Calculate moving average and standard deviation for OBV
+        df["OBV_MA"] = df["OBV"].rolling(window=window).mean()
+        df["OBV_std"] = df["OBV"].rolling(window=window).std()
+
+        # Calculate upper and lower bounds
+        df["upper_bound"] = df["OBV_MA"] + (multiplier * df["OBV_std"])
+        df["lower_bound"] = df["OBV_MA"] - (multiplier * df["OBV_std"])
+
+        # Calculate relative difference between bounds
+        df["bound_diff"] = (df["upper_bound"] - df["lower_bound"]) / df["OBV_MA"]
+
+        # Identify significant points where OBV crosses the upper bound
+        df["OBV_UP"] = (
+            (df["OBV"] > df["upper_bound"])
+            & (df["OBV"].shift(1) <= df["upper_bound"])
+            & (df["bound_diff"] > 0.05)
+        )
+
+        # Combine the new 'OBV_UP' column back to the original dataframe
+        base_df["OBV_UP"] = df["OBV_UP"]
+
+        return base_df
+
     def _surfing(self, base_df):
         plan_df = self.sufer.create_plan(base_df, 0)
         return plan_df
@@ -153,5 +190,6 @@ class TurtleScout(IStrategyScout):
         base_df["surfing_buy"] = base_df["surfing_buy"].astype(object)
         base_df["surfing_sell"] = base_df["surfing_sell"].astype(object)
         base_df = self._calc_ATR(base_df)
+        base_df = self._calc_OBV(base_df, multiplier=4)
         base_df = self._calc_profit(base_df)
         return base_df
