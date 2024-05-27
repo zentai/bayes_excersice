@@ -19,8 +19,7 @@ TURTLE_COLUMNS = [
     "turtle_h",
     "turtle_l",
     "Stop_profit",
-    "surfing_buy",
-    "surfing_sell",
+    "OBV_UP",
     "buy",
     "sell",
     "profit",
@@ -187,9 +186,7 @@ class TurtleScout(IStrategyScout):
 
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
-        base_df["surfing_buy"] = base_df["surfing_buy"].astype(object)
-        base_df["surfing_sell"] = base_df["surfing_sell"].astype(object)
         base_df = self._calc_ATR(base_df)
-        base_df = self._calc_OBV(base_df, multiplier=4)
+        base_df = self._calc_OBV(base_df, multiplier=3)
         base_df = self._calc_profit(base_df)
         return base_df

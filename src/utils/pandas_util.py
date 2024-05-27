@@ -83,7 +83,7 @@ def get_history_stick(symbol, sample=20, interval="1min"):
 
 def load_symbols(symbol):
     code = symbol.name  # "BTC-USD"
-    df = pd.read_csv(f"{DATA_DIR}/{code}.csv")
+    df = pd.read_csv(f"{DATA_DIR}/{code}_cached.csv")
     # df = df.dropna()
     return df
 

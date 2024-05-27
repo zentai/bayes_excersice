@@ -68,6 +68,7 @@ DUMP_COL = [
     "High",
     "Low",
     "Close",
+    "Vol",
     "BuySignal",
     "Stop_profit",
     "exit_price",
@@ -78,6 +79,7 @@ DUMP_COL = [
     "profit",
     # "turtle_l",
     # "turtle_h",
+    "OBV_UP",
     "sBuy",
     "sSell",
     "sProfit",
@@ -198,14 +200,14 @@ def start_journey(sp):
     for i in range(round):
         base_df, review = story.move_forward(base_df)
         final_review = review
-        # print(base_df[DEBUG_COL][-30:])
-        # print(final_review)
-        # base_df[DUMP_COL].to_csv(
-        #     f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
-        # )
-        # print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+        print(base_df[DEBUG_COL][-30:])
+        print(final_review)
+        base_df[DUMP_COL].to_csv(
+            f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+        )
+        print(f"{config.reports_dir}/{sp.symbol.name}.csv")
         hunterPause(sp)
-
+    print(base_df[base_df.OBV_UP])
     base_df[DUMP_COL].to_csv(
         f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
     )
@@ -270,12 +272,12 @@ def training_camp(sp):
 def main(ccy, interval, fund, cap):
     params = {
         "ATR_sample": 60,
-        "atr_loss_margin": 3,
-        "hard_cutoff": 0.95,
+        "atr_loss_margin": 5,
+        "hard_cutoff": 0.9,
         "profit_loss_ratio": 3.0,
         "bayes_windows": 10,
         "lower_sample": 10.0,
-        "upper_sample": 20.0,
+        "upper_sample": 60.0,
         "interval": interval,
         "funds": fund,
         "stake_cap": cap,
