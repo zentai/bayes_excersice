@@ -19,6 +19,7 @@ TURTLE_COLUMNS = [
     "turtle_h",
     "turtle_l",
     "Stop_profit",
+    "exit_price",
     "OBV_UP",
     "buy",
     "sell",
@@ -26,6 +27,7 @@ TURTLE_COLUMNS = [
     "time_cost",
     "Matured",
     "BuySignal",
+    "P/L",
 ]
 
 
@@ -138,7 +140,7 @@ class TurtleScout(IStrategyScout):
         mean = statistics.mean(prices)
         stdv = statistics.stdev(prices)
         surfing_profit = mean + (self.params.surfing_level * stdv)
-        base_df.loc[idx, "Stop_profit"] = surfing_profit
+        base_df.iloc[-1, base_df.columns.get_loc("Stop_profit")] = surfing_profit
         cut_off = base_df.Close.shift(1) - base_df.ATR.shift(1) * atr_loss_margin
         base_df.loc[idx, "exit_price"] = np.maximum(base_df["turtle_l"], cut_off)
         return base_df
@@ -172,12 +174,14 @@ class TurtleScout(IStrategyScout):
         df["OBV_UP"] = (
             (df["OBV"] > df["upper_bound"])
             & (df["OBV"].shift(1) <= df["upper_bound"])
-            & (df["bound_diff"] > 0.05)
+            # & (df["bound_diff"] > 0.0001)
         )
 
         # Combine the new 'OBV_UP' column back to the original dataframe
+        base_df["OBV"] = df["OBV"]
         base_df["OBV_UP"] = df["OBV_UP"]
-
+        base_df["upper_bound"] = df["upper_bound"]
+        base_df["lower_bound"] = df["lower_bound"]
         return base_df
 
     def _surfing(self, base_df):
@@ -187,6 +191,6 @@ class TurtleScout(IStrategyScout):
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         base_df = self._calc_ATR(base_df)
-        base_df = self._calc_OBV(base_df, multiplier=3)
+        base_df = self._calc_OBV(base_df, multiplier=2)
         base_df = self._calc_profit(base_df)
         return base_df

@@ -267,28 +267,25 @@ class xHunter(IHunter):
             & base_df.sBuy.isna()
         )
 
-        if base_df.iloc[-1].OBV_UP:
-            print()
-
-        # check filled order
         if s_buy_order.any():
             order_id = base_df[s_buy_order].sBuyOrder.values
             order_id = order_id[0] if order_id.any() else ""
             _order_type, _price, _position, _stop_price, _operator = order_id.split(",")
             _price = float(_price) if _price else None
             _position = float(_position) if _position else None
-            if _price and self.lastest_candlestick.High >= float(_price):
-                print(
-                    f"Order: {order_id} filled, position: {_position}  price: {_price}"
-                )
+            if _price and self.lastest_candlestick.High <= float(_price):
+                _price = self.lastest_candlestick.High
+                print(f"[Buy Filled]: {order_id=}, {_position=}, {_price=}")
                 self.sim_bag.open_position(_position, _price)
-                print(
-                    f"-sim_bag: [{self.lastest_candlestick.Date}] {self.sim_bag:snapshot}"
-                )
+                # print(
+                #     f"-sim_bag: [{self.lastest_candlestick.Date}] {self.sim_bag:snapshot}"
+                # )
                 base_df.loc[s_buy_order, "sBuy"] = _price
                 base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
                 base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
                 base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
+            else:
+                print(f'[Buy Missed]: {order_id=}, {self.lastest_candlestick.High=}')
 
             # cancel old orders
             s_buy_order = (
@@ -298,17 +295,16 @@ class xHunter(IHunter):
             )
             base_df.loc[s_buy_order, "sBuyOrder"] = "Cancel"
 
-        buy_signal = self.sim_bag.is_enough_cash() and base_df.iloc[-1].OBV_UP == True
+        buy_signal = self.sim_bag.is_enough_cash() and base_df.iloc[-1].OBV_UP == True and not self.on_hold
         if buy_signal:
             budget = self.sim_bag.discharge(1)
             price = base_df.tail(self.params.upper_sample).High.max()
-            position = budget / price
             is_fly = price == base_df.iloc[-1].High
+            price = base_df.iloc[-1].High
+            position = budget / price
             if is_fly:
-                print(f"[B] {price}")
                 order_id = f"B,{price},{position},,"
             else:
-                print(f"[BL] {price}")
                 stop_price = price * 0.9995
                 order_id = f"BL,{price},{position},{stop_price},gte"
             s_buy = base_df.Date == self.lastest_candlestick.Date
@@ -316,8 +312,6 @@ class xHunter(IHunter):
         return base_df
 
     def attack(self, base_df):
-        if self.simulate or not self.fetch_huobi:
-            return base_df
         # check Limit-buy status
         s_buy_order = (
             base_df.xBuyOrder.notna()
@@ -338,7 +332,7 @@ class xHunter(IHunter):
                 ]
                 position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
                 price = cash / position
-                print(f"Order: {order_id} filled, position: {position}  price: {price}")
+                print(f"[Buy Filled]: {order_id=}, {position=}, {price=}")                
                 self.live_bag.open_position(position, price)
                 print(f"live_bag: {self.live_bag:snapshot}")
                 base_df.loc[s_buy_order, "xBuy"] = price
@@ -347,7 +341,7 @@ class xHunter(IHunter):
                 base_df.loc[s_buy_order, "xAvgCost"] = self.live_bag.avg_cost
 
         # buy_signal = self.lastest_candlestick.Kelly > 0 and self.live_bag.is_enough_cash()
-        buy_signal = self.live_bag.is_enough_cash() and not self.on_hold
+        buy_signal = self.live_bag.is_enough_cash() and base_df.iloc[-1].OBV_UP == True and not self.on_hold
         if buy_signal:
             budget = self.live_bag.discharge(ratio=1)
             # budget = self.live_bag.discharge(self.lastest_candlestick.Kelly)
@@ -362,11 +356,13 @@ class xHunter(IHunter):
                 print(f"[xHunter.atack()] Cancel Old trade fail: {e}")
 
             try:
+                # price = base_df.tail(self.params.upper_sample).High.max()
                 price = base_df.tail(self.params.upper_sample).High.max()
-                position = budget / price
                 is_fly = price == base_df.iloc[-1].High
+                price = base_df.iloc[-1].High
+                position = budget / price
+
                 if is_fly:
-                    print(f"[B] {price}")
                     order_id = huobi_api.place_order(
                         symbol=self.params.symbol,
                         amount=position,
@@ -374,7 +370,6 @@ class xHunter(IHunter):
                         order_type="B",
                     )
                 else:
-                    print(f"[BL] {price}")
                     order_id = huobi_api.place_order(
                         symbol=self.params.symbol,
                         amount=position,
@@ -402,21 +397,34 @@ class xHunter(IHunter):
             order_id = list(order_id)[0] if order_id.any() else ""
             _order_type, _price, _position, _stop_price, _operator = order_id.split(",")
             _price = float(_price) if _price else None
+            _stop_price = float(_stop_price) if _stop_price else None
             _position = float(_position) if _position else None
-            strike = self.lastest_candlestick.Close
-            if strike >= _price:
-                print(
-                    f"Order: {order_id} filled, position: {_position}  price: {_price}"
-                )
-                self.sim_bag.close_position(_position, _price)
-                print(f"sim_bag: {self.sim_bag:snapshot}")
-                if _order_type == "SL":
+            strike = self.lastest_candlestick.High
+            if _order_type == "S":    # sell on max profit
+                if strike >= _price:
+                    print(
+                        f"[Sell Order filled]: {order_id=}, {_position=}, {_price=}"
+                    )
+                    self.sim_bag.close_position(_position, _price)
+                    print(f"sim_bag: {self.sim_bag:snapshot}")
                     print(f"mission completed: on hold")
-                    self.on_hold = True
-                base_df.loc[pending_order, "sSell"] = _price
-                base_df.loc[pending_order, "sProfit"] = (
-                    base_df.sSell / base_df.sBuy
-                ) - 1
+                    # self.on_hold = True
+                    base_df.loc[pending_order, "sSell"] = _price
+                    base_df.loc[pending_order, "sProfit"] = (
+                        base_df.sSell / base_df.sBuy
+                    ) - 1
+            elif _order_type == "SL": # sell on cutoff
+                if strike <= _stop_price:
+                    print(
+                        f"[Cutoff Order filled]: {order_id=}, {_position=}, {_price=}"
+                    )
+                    self.sim_bag.close_position(_position, _price)
+                    print(f"sim_bag: {self.sim_bag:snapshot}")
+                    base_df.loc[pending_order, "sSell"] = _price
+                    base_df.loc[pending_order, "sProfit"] = (
+                        base_df.sSell / base_df.sBuy
+                    ) - 1
+
 
         sell_signal = self.sim_bag.is_enough_position()
         if sell_signal:
@@ -426,8 +434,8 @@ class xHunter(IHunter):
             strike = self.lastest_candlestick.Close
             cutoff = strike <= (max(cutoff_price, exit_price))
             if cutoff:
-                trigger_price = strike * 0.9995
-                price = trigger_price * 0.9995
+                trigger_price = strike
+                price = trigger_price
                 order_type = "SL"
                 operator = "lte"
                 order_id = f"SL,{price},{position},{trigger_price},{operator}"
@@ -437,10 +445,9 @@ class xHunter(IHunter):
                     max_loss * self.params.profit_loss_ratio
                 )
                 if Stop_profit < min_profit:
-                    print(f"{Stop_profit} -> {min_profit}")
                     Stop_profit = min_profit
                 trigger_price = None
-                price = Stop_profit * 1.0005
+                price = Stop_profit
                 order_type = "S"
                 order_id = f"S,{price},{position},,"
 
@@ -453,11 +460,9 @@ class xHunter(IHunter):
         return base_df
 
     def retreat(self, base_df):
-        if self.simulate or not self.fetch_huobi:
-            return base_df
         cutoff_price = self.params.hard_cutoff * self.live_bag.avg_cost
         cutoff_price = max(cutoff_price, self.lastest_candlestick.exit_price)
-        Stop_profit = self.lastest_candlestick.Stop_profit
+        Stop_profit = max(cutoff_price, self.lastest_candlestick.Stop_profit)
 
         pending_order = (
             base_df.xSellOrder.notna()
@@ -475,7 +480,9 @@ class xHunter(IHunter):
                 cash = _order.filled_cash_amount
                 position = _order.filled_amount
                 price = cash / position
-                print(f"Order: {order_id} filled, position: {position}  price: {price}")
+                print(
+                    f"[Sell Order filled]: {order_id=}, {position=}, {price=}"
+                )
                 self.live_bag.close_position(position, price)
                 print(f"live_bag: {self.live_bag:snapshot}")
                 if _order.type == "sell-limit":
@@ -507,7 +514,7 @@ class xHunter(IHunter):
                     exit_price = self.lastest_candlestick.exit_price
                     cutoff = strike <= (max(cutoff_price, exit_price))
                     if cutoff:
-                        trigger_price = strike * 0.9995
+                        trigger_price = strike
                         price = trigger_price * 0.9995
                         order_type = "SL"
                         operator = "lte"
@@ -519,10 +526,9 @@ class xHunter(IHunter):
                             max_loss * self.params.profit_loss_ratio
                         )
                         if Stop_profit < min_profit:
-                            print(f"{Stop_profit} -> {min_profit}")
                             Stop_profit = min_profit
                         trigger_price = None
-                        price = Stop_profit * 1.0005
+                        price = Stop_profit
                         order_type = "S"
                         operator = "gte"
 

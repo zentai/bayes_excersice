@@ -33,7 +33,7 @@ DEBUG_COL = [
     "Low",
     "Close",
     # "BuySignal",
-    # "Stop_profit",
+    "Stop_profit",
     "exit_price",
     # "Matured",
     # "time_cost",
@@ -189,8 +189,8 @@ def start_journey(sp):
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
     hunter = xHunter(params=sp)
-    if not sp.simulate:
-        hunter.load_memories()
+    # if not sp.simulate:
+    #     hunter.load_memories()
 
     story = HuntingStory(sensor, scout, engine, hunter)
     base_df = sensor.scan(2000 if not sp.simulate else 100)
@@ -200,14 +200,14 @@ def start_journey(sp):
     for i in range(round):
         base_df, review = story.move_forward(base_df)
         final_review = review
-        print(base_df[DEBUG_COL][-30:])
-        print(final_review)
-        base_df[DUMP_COL].to_csv(
-            f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
-        )
-        print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+        # print(base_df[DEBUG_COL][-30:])
+        # print(f"{base_df.iloc[-1].Date}")
+        # print(final_review)
+        # base_df[DUMP_COL].to_csv(
+        #     f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+        # )
+        # print(f"{config.reports_dir}/{sp.symbol.name}.csv")
         hunterPause(sp)
-    print(base_df[base_df.OBV_UP])
     base_df[DUMP_COL].to_csv(
         f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
     )
@@ -270,25 +270,36 @@ def training_camp(sp):
     help="Stake cap",
 )
 def main(ccy, interval, fund, cap):
-    params = {
-        "ATR_sample": 60,
-        "atr_loss_margin": 5,
-        "hard_cutoff": 0.9,
-        "profit_loss_ratio": 3.0,
-        "bayes_windows": 10,
-        "lower_sample": 10.0,
-        "upper_sample": 60.0,
+    entry(ccy, interval, fund, cap)
+
+def entry(ccy, interval, fund, cap):
+    params.update({
         "interval": interval,
         "funds": fund,
         "stake_cap": cap,
         "symbol": Symbol(ccy),
-        "surfing_level": 5,
-        "fetch_huobi": True,
-        "simulate": True,
-    }
+    })
     sp = StrategyParam(**params)
     final_review = start_journey(sp)
+    return final_review.iloc[-1].Profit
 
+
+params = {
+    "ATR_sample": 60,
+    "atr_loss_margin": 1.5,
+    "hard_cutoff": 0.95,
+    "profit_loss_ratio": 3.0,
+    "bayes_windows": 10,
+    "lower_sample": 30.0,
+    "upper_sample": 30.0,
+    "interval": "1day",
+    "funds": 100,
+    "stake_cap": 10,
+    "symbol": None,
+    "surfing_level": 6,
+    "fetch_huobi": True,
+    "simulate": True,
+}
 
 if __name__ == "__main__":
     main()

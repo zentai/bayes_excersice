@@ -12,12 +12,14 @@ DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports
 # code, interval = "smiley" + "usdt", "1min"
 # code, interval = "ton" + "usdt", "1min"
 # code, interval = "bob" + "usdt", "1min"
-code, interval = "cta" + "usdt", "1min"
-sensor = HuobiMarketSensor(symbol=Symbol(code), interval=interval)
-df = sensor.scan(600)
+code, interval = "turbo" + "usdt", "1min"
+# sensor = HuobiMarketSensor(symbol=Symbol(code), interval=interval)
+# df = sensor.scan(600)
+df = pd.read_csv(f"{REPORTS_DIR}/{code}.csv")
 df.to_csv(f"{DATA_DIR}/{code}.csv", index=False)
 print(f"{DATA_DIR}/{code}.csv")
-df["Date"] = pd.to_datetime(df["Date"], unit="ms")
+df["Date"] = pd.to_datetime(df["Date"])
+# df["Date"] = pd.to_datetime(df["Date"], unit="ms")
 df.set_index("Date", inplace=True)
 
 df["price_diff"] = df["Close"].diff()
@@ -37,7 +39,7 @@ df["lower_bound"] = df["OBV_MA"] - (3 * df["OBV_std"])
 df["bound_diff"] = 1 - (df["upper_bound"] / df["OBV_MA"])
 
 # Identify significant points where OBV crosses the bounds
-df["upper_cross"] = (
+df["OBV_UP"] = (
     (df["OBV"] > df["upper_bound"])
     & (df["OBV"].shift(1) <= df["upper_bound"])
     & (df["bound_diff"] > 0.05)
@@ -48,7 +50,7 @@ df["lower_cross"] = (
     & (df["bound_diff"] > 0.05)
 )
 
-print(len(df[df.upper_cross]))
+print(len(df[df.OBV_UP]))
 fig, ax1 = plt.subplots(figsize=(14, 7))
 
 ax1.plot(df.index, df["Close"], color="b", label="Close")
@@ -64,8 +66,8 @@ ax2.tick_params(axis="y", labelcolor="r")
 
 # Plot markers for significant upper and lower crosses
 ax2.scatter(
-    df.index[df["upper_cross"]],
-    df["OBV"][df["upper_cross"]],
+    df.index[df["OBV_UP"]],
+    df["OBV"][df["OBV_UP"]],
     color="red",
     marker="^",
     label="Break Upper Bound",
@@ -74,15 +76,16 @@ ax2.scatter(
 
 # Plot blue triangle markers on the price line for significant upper crosses
 ax1.scatter(
-    df.index[df["upper_cross"]],
-    df["Close"][df["upper_cross"]],
+    df.index[df["OBV_UP"]],
+    df["Close"][df["OBV_UP"]],
     color="y",  # Change color to blue
     marker="^",
     label="Break Upper Bound",
     zorder=5
 )
 
-plt.title(f"{sensor.symbol.name} Price and OBV with Bounds")
+print(df[df.OBV_UP])
+plt.title(f"{code} Price and OBV with Bounds")
 ax2.legend(loc="upper left")
 fig.tight_layout()
 plt.show()
