@@ -273,8 +273,8 @@ class xHunter(IHunter):
             _order_type, _price, _position, _stop_price, _operator = order_id.split(",")
             _price = float(_price) if _price else None
             _position = float(_position) if _position else None
-            if _price and self.lastest_candlestick.High <= float(_price):
-                _price = self.lastest_candlestick.High
+            if _price and (self.lastest_candlestick.High <= float(_price) or self.lastest_candlestick.Low <= float(_price)):
+                _price = self.lastest_candlestick.High if self.lastest_candlestick.High <= float(_price) else _price
                 print(f"[Buy Filled]: {order_id=}, {_position=}, {_price=}")
                 self.sim_bag.open_position(_position, _price)
                 # print(
@@ -282,7 +282,7 @@ class xHunter(IHunter):
                 # )
                 base_df.loc[s_buy_order, "sBuy"] = _price
                 base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
-                base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
+                # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
                 base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
             else:
                 print(f'[Buy Missed]: {order_id=}, {self.lastest_candlestick.High=}')
@@ -309,6 +309,7 @@ class xHunter(IHunter):
                 order_id = f"BL,{price},{position},{stop_price},gte"
             s_buy = base_df.Date == self.lastest_candlestick.Date
             base_df.loc[s_buy, "sBuyOrder"] = order_id
+        base_df.loc[base_df.Date == self.lastest_candlestick.Date, 'sCash'] = self.sim_bag.get_un_pnl(self.lastest_candlestick.Close)
         return base_df
 
     def attack(self, base_df):
@@ -399,9 +400,10 @@ class xHunter(IHunter):
             _price = float(_price) if _price else None
             _stop_price = float(_stop_price) if _stop_price else None
             _position = float(_position) if _position else None
-            strike = self.lastest_candlestick.High
+            high = self.lastest_candlestick.High
+            low = self.lastest_candlestick.Low
             if _order_type == "S":    # sell on max profit
-                if strike >= _price:
+                if high >= _price:
                     print(
                         f"[Sell Order filled]: {order_id=}, {_position=}, {_price=}"
                     )
@@ -414,7 +416,7 @@ class xHunter(IHunter):
                         base_df.sSell / base_df.sBuy
                     ) - 1
             elif _order_type == "SL": # sell on cutoff
-                if strike <= _stop_price:
+                if low <= _stop_price:
                     print(
                         f"[Cutoff Order filled]: {order_id=}, {_position=}, {_price=}"
                     )

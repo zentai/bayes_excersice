@@ -174,8 +174,9 @@ class TurtleScout(IStrategyScout):
         df["OBV_UP"] = (
             (df["OBV"] > df["upper_bound"])
             & (df["OBV"].shift(1) <= df["upper_bound"])
-            # & (df["bound_diff"] > 0.0001)
+            # & (df["bound_diff"] > 0.07)
         )
+        # print(df["bound_diff"])
 
         # Combine the new 'OBV_UP' column back to the original dataframe
         base_df["OBV"] = df["OBV"]

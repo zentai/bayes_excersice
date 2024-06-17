@@ -4,6 +4,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import mplfinance as mpf
 import numpy as np
+from collections import Counter
+import seaborn as sns
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from huobi.client.market import MarketClient
@@ -21,7 +23,121 @@ DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports
 
 from .story import entry
 
-stock_watching_list = {
+stocks_singapore = {
+    "C6L.SI": "Singapore Airlines - Airline",
+    "U96.SI": "Sembcorp Industries - Utilities",
+    "D05.SI": "DBS Group Holdings - Banking",
+    "Z74.SI": "Singtel - Telecommunications",
+    "C07.SI": "Jardine Cycle & Carriage - Automotive",
+    "BN4.SI": "Keppel Corporation - Conglomerate",
+    "F34.SI": "Wilmar International - Agriculture",
+    "BS6.SI": "Yangzijiang Shipbuilding - Shipbuilding",
+    "O39.SI": "OCBC Bank - Banking",
+    "9CI.SI": "CapitaLand - Real Estate",
+    "U11.SI": "United Overseas Bank - Banking",
+    "N2IU.SI": "Mapletree Commercial Trust - Real Estate",
+    "H78.SI": "Hongkong Land Holdings - Real Estate",
+    "S68.SI": "Singapore Exchange - Financial Services",
+    "A17U.SI": "Ascendas REIT - Real Estate",
+    "C09.SI": "City Developments - Real Estate",
+    "M44U.SI": "Mapletree Logistics Trust - Real Estate",
+    "V03.SI": "Venture Corporation - Electronics",
+    "J69U.SI": "Frasers Logistics & Commercial Trust - Real Estate",
+    "ME8U.SI": "Mapletree Industrial Trust - Real Estate",
+    "AJBU.SI": "Ascott Residence Trust - Hospitality",
+    "NOBGY": "Noble Group - Commodities",
+    "K71U.SI": "Keppel REIT - Real Estate",
+    "G13.SI": "Genting Singapore - Hospitality",
+    "Y92.SI": "Thai Beverage - Beverages",
+    "Q5T.SI": "Far East Hospitallity Trust - REITS",
+    "U14.SI": "UOL Group - Real Estate",
+    "S63.SI": "ST Engineering - Engineering",
+    "NS8U.SI": "Hutchison Port Holdings Trust  - REITS",
+    "C52.SI": "ComfortDelGro - Transportation",
+    "H02.SI": "Haw Par Corporation Limited ",
+    "E5H.SI": "Golden Agri-Resources - Agriculture",
+    "S59.SI": "SIA Engineering - Aerospace",
+    "U09.SI": "Avarga Limited",
+    "O5RU.SI": "AIMS APAC REIT - Real Estate",
+    "BUOU.SI": "Frasers Logistics & Commercial Trust  - Real Estate",
+    "M1GU.SI": "Sabana Industrial Real Estate Investment Trust - Real Estate",
+    "BVA.SI": "Top Glove Corporation Bhd.",
+    "D03.SI": "Del Monte Pacific - Food & Beverage",
+    "P40U.SI": "Starhill Global Real Estate Investment Trust ",
+    "F9D.SI": "Boustead Singapore Limited",
+    "T82U.SI": "Suntec REIT - Real Estate",
+    "TQ5.SI": "Frasers Property - Real Estate",
+    "BSL.SI": "Raffles Medical Group - Healthcare",
+    "1D4.SI": "Aoxin Q & M Dental Group Limited",
+    "NR7.SI": "Raffles Education Corporation - Education",
+    "5CP.SI": "Silverlake Axis - Technology",
+    "T14.SI": "Tianjin Pharmaceutical Da Ren Tang Group Corporation Limited", 
+    "C2PU.SI": "Parkway Life Real Estate Investment Trust ",  
+    "U96.SI": "Sembcorp Industries - Energy",
+    "5TP.SI": "CNMC Goldmine Holdings Limited", 
+    "G07.SI": "Great Eastern - Insurance",
+    "TQ5.SI": "Frasers Property Limited ", 
+    "CC3.SI": "StarHub - Telecommunications",
+    "BN4.SI": "Keppel Corporation - Industrial Conglomerate",
+    "C09.SI": "City Developments Limited - Real Estate",
+    "O10.SI": "Far East Orchard - Real Estate",
+    "S58.SI": "SATS Ltd. - Aviation",
+    "Y06.SI": "Green Build Technology Limited",
+    "Z25.SI": "Yanlord Land Group - Real Estate",
+    "Z59.SI": "Yoma Strategic Holdings - Conglomerate",
+    "C76.SI": "Creative Technology - Technology",
+    "A50.SI": "Thomson Medical Group - Healthcare",
+    "5IG.SI": "Gallant Venture Ltd", 
+    "1C0.SI": "Emerging Towns & Cities Singapore Ltd.", 
+    "C38U.SI": "CapitaLand Integrated Commercial Trust - Real Stack",
+    "C52.SI": "ComfortDelGro Corporation - Transportation",
+    "G92.SI": "China Aviation Oil (Singapore) Corporation Ltd", 
+    "CRPU.SI": "Sasseur REIT - Real Estate",
+    "H30.SI": "Hong Fok Corporation Limited", 
+    "H13.SI": "Ho Bee Land - Real Estate",
+    "1B1.SI": "HC Surgical Specialists - Healthcare",
+    "AWX.SI": "AEM Holdings Ltd.", 
+    "1J5.SI": "Hyphens Pharma - Pharmaceuticals",
+    "B61.SI": "Bukit Sembawang Estates - Real Estate",
+    "A7RU.SI": "Keppel Infrastructure Trust", 
+    "BTOU.SI": "Manulife US REIT - Real Estate",
+    "BDA.SI": "PNE Industries Ltd",
+    "9I7.SI": "No Signboard Holdings - Food & Beverage",
+    "BWCU.SI": "EC World Real Estate Investment Trust ", 
+    "S7OU.SI": "Asian Pay Television Trust", 
+    "TS0U.SI": "OUE Commercial REIT - Real Estate",
+    "U9E.SI": "China Everbright Water Limited", 
+    "S8N.SG": "Sembcorp Marine - Marine",
+    "5GZ.SI": "HGH Holdings Ltd.", 
+    "RE4.SI": "Geo Energy Resources - Energy",
+    "40T.SI": "ISEC Healthcare Ltd.", 
+    "U77.SI": "Sarine Technologies - Technology",
+    "AJ2.SI": "Ouhua Energy Holdings Limited", 
+    "1A4.SI": "AGV Group - Industrial",
+    "S41.SI": "Hong Leong Finance Limited", 
+    "Q0X.SI": "Ley Choon Group - Construction",
+    "S71.SI": "Sunright Limited", 
+    "5UX.SI": "Oxley Holdings - Real Estate",
+    "5IF.SI": "Natural Cool Holdings Limited - Hospitality",
+    "OV8.SI": "Sheng Siong Group - Retail",
+    "AIY.SI": "iFast Corporation - Financial Services",
+    "5CP.SI": "Silverlake Axis - Technology",
+    "P15.SI": "Pacific Century Regional Developments Limited", 
+    "5AB.SI": "Trek 2000 International Ltd", 
+    "AZI.SI": "AusNet Services - Utilities",
+    "U13.SI": "United Overseas Insurance Limited", 
+    "558.SI": "UMS Holdings - Semiconductors",
+    "1D0.SI": "Kimly Limited", 
+    "I07.SI": "ISDN Holdings - Industrial Automation",
+    "5UX.SI": "Oxley Holdings Limited", 
+    "M35.SI": "Wheelock Properties - Real Estate",
+    "A30.SI": "Aspial Corporation Limited", 
+    "5G1.SI": "EuroSports Global Limited", 
+    "BJZ.SI": "Koda Ltd - Manufacturing",
+    "5TT.SI": "Keong Hong Holdings Limited", 
+}
+
+stock_malaysia = {
     # UEM
     "5148.KL": "UEM Sunrise Berhad",
     "8583.KL": "Mah Sing Group Berhad",         # check
@@ -147,7 +263,8 @@ def fast_scanning():
         bidSize = obj.bidSize
         ask = obj.ask
         askSize = obj.askSize
-        if (amount * close >= 10000000):
+        # if (amount * close >= 10000000):
+        if (vol >= 5000000):
             symbols.append(symbol)
     return symbols
 
@@ -195,42 +312,112 @@ def chart(df, code):
     ]
 
     # Create a candlestick chart with additional plots
-    mpf.plot(df, type='candle', addplot=add_plots, title=f"{stock_watching_list.get(code, code)} Price and OBV with Bounds", ylabel='Price (USD)', style='yahoo', datetime_format='%Y-%m-%d %H:%M:%S')
+    mpf.plot(df, type='candle', addplot=add_plots, title=f"{stock_malaysia.get(code, code)} Price and OBV with Bounds", ylabel='Price (USD)', style='yahoo', datetime_format='%Y-%m-%d %H:%M:%S')
 
 
 @click.command()
-@click.option("--ccy", default="bomeusdt", required=False, help="trade ccy pair")
+@click.option("--market", type=click.Choice(['my', 'sg', 'crypto']), required=True, help="选择市场类型")
+@click.option("--symbol", default=None, help="指定交易对或股票代码")
 @click.option(
     "--interval",
-    required=False,
     default="1day",
-    help="trade interval: 1min 5min 15min 30min 60min 4hour 1day 1mon 1week 1year",
+    help="交易间隔: 1min, 5min, 15min, 30min, 60min, 4hour, 1day, 1mon, 1week, 1year"
 )
 @click.option(
     "--show",
-    required=False,
-    default=False,
-    help="show chart",
+    is_flag=False,
+    help="是否显示图表"
 )
-def main(ccy, interval, show):
-    if ccy == "watching":
+@click.option(
+    "--backtest",
+    is_flag=False,
+    help="是否进行回测"
+)
+def main(market, symbol, interval, show, backtest):
+    if market in ("my", "sg"):
         sensor_cls = YahooMarketSensor
-        symbols = stock_watching_list.keys()
-        sample = 365*20 # 20 years
-    else:
+        if symbol:
+            symbols = [symbol]  
+        else: 
+            symbols = stock_malaysia.keys() if market == "my" else stocks_singapore.keys()
+        sample = 365 * 20  # 20 years
+    elif market == "crypto":
         sensor_cls = HuobiMarketSensor
-        symbols = fast_scanning()
-        sample = 240*3 #
+        symbols = [symbol] if symbol else fast_scanning()
+        sample = 240 * 3  # 3 years
 
     symbols_count = {s: count_obv_cross(sensor_cls, s, interval, sample, show) for s in symbols}
-    from collections import Counter
+    
+    if backtest:
+        # 进行回测逻辑
+        perform_backtest(symbols_count)
+
     c = Counter(symbols_count)
-    from pprint import pprint
-    pprint(c.most_common()) 
+    from pprint import pprint 
+    pprint(c.most_common())
+
+def perform_backtest(symbols_count):
+    result = {}
+    for code in symbols_count.keys():
+        try:
+            result[code] = entry(code, "1day", 100, 10.5) 
+        except Exception as e:
+            print(f"Back test error: {code}, {e}")
+    performance_review(result)
+
+def performance_review(backtest_results):
+    # 将数据转换为 DataFrame
+    df = pd.DataFrame(list(backtest_results.items()), columns=['Stock', 'Return'])
+    df.to_csv(f"{REPORTS_DIR}/backtest.csv")
+    df = df[df.Return != 0]
+    print(df[:60])
+
+    # 总体表现
+    average_return = df['Return'].mean()
+    total_return = df['Return'].sum()
+
+    # 风险分析
+    std_dev = df['Return'].std()
+    max_drawdown = df['Return'].min()
+
+    # 胜率分析
+    positive_returns = df[df['Return'] > 0].shape[0]
+    negative_returns = df[df['Return'] < 0].shape[0]
+    win_rate = positive_returns / df.shape[0]
+    loss_rate = negative_returns / df.shape[0]
+
+    # Sharpe Ratio
+    risk_free_rate = 0.0
+    sharpe_ratio = (df['Return'].mean() - risk_free_rate) / df['Return'].std()
+
+    # Sortino Ratio
+    negative_returns = df[df['Return'] < 0]['Return']
+    downside_std = negative_returns.std()
+    sortino_ratio = (df['Return'].mean() - risk_free_rate) / downside_std
+
+    # 打印结果
+    print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+    print(f"Sortino Ratio: {sortino_ratio:.2f}")
+
+    # 打印结果
+    print(f"平均回报率: {average_return:.2f}%")
+    print(f"总回报率: {total_return:.2f}%")
+    print(f"回报率标准差: {std_dev:.2f}%")
+    print(f"最大回撤: {max_drawdown:.2f}%")
+    print(f"胜率: {win_rate:.2f}")
+    print(f"失败率: {loss_rate:.2f}")
+
+    # 绘制收益分布图
+    plt.figure(figsize=(14, 8))
+    sns.histplot(df['Return'], bins=20, kde=True, color='blue')
+    plt.title('Distribution of Returns')
+    plt.xlabel('Return (%)')
+    plt.ylabel('Frequency')
+    plt.show()
 
 
 if __name__ == "__main__":
-    result = {code: entry(code, "1day", 100, 50) for code in stock_watching_list.keys()}
-    from pprint import pprint 
-    pprint(result)
-    # main()
+    # result = {code: entry(code, "1day", 100, 50) for code in stock_malaysia.keys()}
+    # from pprint import pprint 
+    # pprint(result)
+    main()

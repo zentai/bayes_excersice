@@ -286,7 +286,7 @@ def entry(ccy, interval, fund, cap):
 
 params = {
     "ATR_sample": 60,
-    "atr_loss_margin": 1.5,
+    "atr_loss_margin": 3.5,
     "hard_cutoff": 0.95,
     "profit_loss_ratio": 3.0,
     "bayes_windows": 10,
@@ -294,7 +294,7 @@ params = {
     "upper_sample": 30.0,
     "interval": "1day",
     "funds": 100,
-    "stake_cap": 10,
+    "stake_cap": 10.5,
     "symbol": None,
     "surfing_level": 6,
     "fetch_huobi": True,
