@@ -108,11 +108,45 @@ def chart_statistic(vection_dict):
     plt.show()
 
 
+def debug_wavelet_transform(df, column="High", wavelet="db4", level=3, threshold=0.5):
+    # 取HIGH作为价格
+    original_prices = df[column].values
+
+    # 使用指定小波进行分解
+    coeffs = pywt.wavedec(original_prices, wavelet, level=level)
+
+    # 软阈值处理
+    def soft_thresholding(coeffs, threshold):
+        return np.sign(coeffs) * np.maximum(np.abs(coeffs) - threshold, 0)
+
+    coeffs[1:] = [soft_thresholding(c, threshold) for c in coeffs[1:]]
+
+    # 重构去噪后的信号
+    denoised_prices = pywt.waverec(coeffs, wavelet)
+
+    # 将去噪后的价格放入新列
+    df["price"] = denoised_prices[: len(df)]
+
+    # 画出小波变换前后的图
+    plt.figure(figsize=(14, 7))
+
+    plt.plot(df["Date"], original_prices, label="Original Prices", color="blue")
+    plt.plot(
+        df["Date"], df["price"], label="Denoised Prices", color="red", linestyle="--"
+    )
+    plt.title("Original and Denoised Prices (Wavelet Transform)")
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
 ### 6. `main` 完整的 `main` 函数实现。
 def main(df):
-    df = reduce_noise_by_wavelet_transform(
-        df
-    )  # 取HIGH作为价格，将移除噪声之后的价格放入新column price
+    # df = reduce_noise_by_wavelet_transform(df)  # 取HIGH作为价格，将移除噪声之后的价格放入新column price
+    df = debug_wavelet_transform(df)
     df = calculate_acc_speed(
         df, moving_window=5
     )  # 使用T与T-5进行计算，这样能确保最新的T一定会有资料，并将价格加速度放入 price_acc, 成交量加速度放入 vol_acc
@@ -150,7 +184,7 @@ def calculate_and_plot_correlation(df):
     return correlation
 
 
-code = "btcusdt"
+code = "tonusdt"
 df = pd.read_csv(f"{DATA_DIR}/{code}_cached.csv")
 
 # 调用主函数
