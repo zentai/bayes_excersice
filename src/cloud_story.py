@@ -26,7 +26,7 @@ from .hunterverse.interface import INTERVAL_TO_MIN
 from .sensor.market_sensor import LocalMarketSensor
 from .sensor.market_sensor import HuobiMarketSensor
 from .tradingfirm.trader import xHunter
-from utils import cloud
+from pydispatch import dispatcher
 
 DEBUG_COL = [
     "Date",
@@ -139,7 +139,7 @@ class HuntingStory:
             while True:
                 k = self.sensor.fetch_one()
                 print(k)
-                cloud.publish("k_channel", k)
+                dispatcher.send(signal="k_channel", message=k)
                 hunterPause(sp)
 
         return threading.Thread(target=run_market_sensor)
@@ -147,15 +147,26 @@ class HuntingStory:
     def move_forward(self, message):
         self.base_df = pd.concat(
             [self.base_df, message],
-            ignore_index=False,
+            ignore_index=True,
         )
         self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
-        print(self.base_df)
-        # base_df = self.scout.market_recon(base_df)
-        # base_df = self.engine.hunt_plan(base_df)
-        # base_df = self.hunter.strike_phase(base_df)
-        # return base_df, self.hunter.review_mission(base_df)
+        self.base_df = self.scout.market_recon(self.base_df)
+        self.base_df = self.engine.hunt_plan(self.base_df)
+        self.base_df = self.hunter.strike_phase(self.base_df)
+        print(self.base_df[DEBUG_COL][-30:])
+        return self.base_df, self.hunter.review_mission(self.base_df)
 
+    def price_callback(self, message):
+        self.base_df = pd.concat(
+            [self.base_df, message],
+            ignore_index=True,
+        )
+        self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
+        self.base_df = self.scout.market_recon(self.base_df)
+        self.base_df = self.engine.hunt_plan(self.base_df)
+        self.base_df = self.hunter.strike_phase(self.base_df)
+        print(self.base_df[DEBUG_COL][-30:])
+        return self.base_df, self.hunter.review_mission(self.base_df)
 
 def start_journey(sp):
     base_df = None
@@ -166,7 +177,8 @@ def start_journey(sp):
     base_df = sensor.scan(2000 if not sp.simulate else 100)
 
     story = HuntingStory(sensor, scout, engine, hunter, base_df)
-    cloud.subscribe("k_channel")(story.move_forward)
+    dispatcher.connect(story.move_forward, signal="k_channel")
+
     pub_thread = story.pub_market_sensor(sp)
     print("start thread")
     pub_thread.start()
