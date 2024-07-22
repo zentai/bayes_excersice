@@ -155,7 +155,6 @@ class xHunter(IHunter):
         self.dispatcher = dispatcher
         self.dispatcher.connect(self.sim_attack_feedback, signal="sim_attack_feedback")
         self.dispatcher.connect(self.attack_feedback, signal="attack_feedback")
-        self.dispatcher.connect(self.sim_huobi_api, signal="huobi_command")
 
     def load_memories(self, fetch=True, deals=[]):
         print(f"load_memories(self, fetch={fetch}, deals={deals})")
@@ -246,11 +245,7 @@ class xHunter(IHunter):
         )
 
     def sim_attack_feedback(self, order_id, order_status, price, position):
-        trade_id = self.trading_book.get(order_id)
-        if not trade_id:
-            print(f"huh? order id not found??? {order_id}")
-            return
-
+        print(f"{order_id, order_status, price, position=}")
         # publish_back_to_outsite?
         # FIXME: actually no need, HuntingStory can subscribe same channel
         # self.dispatcher.send(signal="k_channel", message=k)
@@ -314,44 +309,36 @@ class xHunter(IHunter):
         base_df.loc[base_df.Date == self.lastest_candlestick.Date, "sCash"] = (
             self.sim_bag.get_un_pnl(self.lastest_candlestick.Close)
         )
-
-    def sim_huobi_api(self, message):
-        if not message:
-            return
-
-        _order_type, _price, _position, _stop_price, _operator = message.split(",")
-        _price = float(_price) if _price else None
-        _position = float(_position) if _position else None
-        if _price and (
-            self.lastest_candlestick.High <= float(_price)
-            or self.lastest_candlestick.Low <= float(_price)
-        ):
-            _price = (
-                self.lastest_candlestick.High
-                if self.lastest_candlestick.High <= float(_price)
-                else _price
+    
+    def sim_huobi_api(self, hunting_id, target_price, position, trigger_price, order_type, market_High, market_Low):
+        if (market_High <= target_price or market_Low <= target_price):
+            target_price = (
+                market_High
+                if market_High <= target_price
+                else target_price
             )
-            print(f"[Buy Filled]: {order_id=}, {_position=}, {_price=}")
-            self.sim_bag.open_position(_position, _price)
-            base_df.loc[s_buy_order, "sBuy"] = _price
-            base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
-            # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
-            base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
+            print(f"[Buy Filled]: {hunting_id=}, {position=}, {target_price=}")
+            self.sim_bag.open_position(position, target_price)
+            self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
+            # base_df.loc[s_buy_order, "sBuy"] = target_price
+            # base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
+            # # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
+            # base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
         else:
-            print(f"[Buy Missed]: {order_id=}, {self.lastest_candlestick.High=}")
+            print(f"[Buy Missed]: {hunting_id=}, {market_High=}")
 
         # FIXME: cancel order should be somewhere
         # cancel old orders
-        s_buy_order = (
-            base_df.sBuyOrder.notna()
-            & (base_df.sBuyOrder != "Cancel")
-            & base_df.sBuy.isna()
-        )
-        base_df.loc[s_buy_order, "sBuyOrder"] = "Cancel"
+        # s_buy_order = (
+        #     base_df.sBuyOrder.notna()
+        #     & (base_df.sBuyOrder != "Cancel")
+        #     & base_df.sBuy.isna()
+        # )
+        # base_df.loc[s_buy_order, "sBuyOrder"] = "Cancel"
 
-    base_df.loc[base_df.Date == self.lastest_candlestick.Date, "sCash"] = (
-        self.sim_bag.get_un_pnl(self.lastest_candlestick.Close)
-    )
+        # base_df.loc[base_df.Date == self.lastest_candlestick.Date, "sCash"] = (
+        #     self.sim_bag.get_un_pnl(self.lastest_candlestick.Close)
+        # )
 
     def ready_to_move_turtle_scout(self):
         # TODO: is_fly should be done be turtle scout, trader only executed one price.
@@ -371,8 +358,7 @@ class xHunter(IHunter):
 
     # trade_ts, target_price, kelly
     # try to book a order, create an id-orderid mapping for call back
-    def sim_attack(self, buy_commands):
-        hunting_id, target_price, trigger_price, order_type, kelly = buy_commands
+    def sim_attack(self, hunting_id, target_price, trigger_price, order_type, kelly, market_High, market_Low):
         if self.sim_bag.is_enough_cash() and not self.on_hold:
             budget = self.sim_bag.discharge(kelly)  # kelly
             price = target_price  # base_df.tail(self.params.upper_sample).High.max()
@@ -381,7 +367,7 @@ class xHunter(IHunter):
             order_id = (
                 f"{hunting_id},{target_price},{position},{trigger_price},{order_type}"
             )
-            self.dispatcher.send(signal="huobi_command", message=order_id)
+            self.sim_huobi_api(hunting_id, target_price, position, trigger_price, order_type, market_High, market_Low)
 
     def attack(self, base_df):
         # check Limit-buy status
@@ -626,32 +612,3 @@ class xHunter(IHunter):
         return self.live_bag.portfolio(pre_strike, strike)
 
 
-if __name__ == "__main__":
-    from .hunterverse.interface import StrategyParam
-
-    params = {
-        "ATR_sample": 60,
-        "atr_loss_margin": 3.5,
-        "hard_cutoff": 0.95,
-        "profit_loss_ratio": 3.0,
-        "bayes_windows": 10,
-        "lower_sample": 30.0,
-        "upper_sample": 30.0,
-        "interval": "1day",
-        "funds": 100,
-        "stake_cap": 10.5,
-        "symbol": None,
-        "surfing_level": 6,
-        "fetch_huobi": True,
-        "simulate": True,
-    }
-    params.update(
-        {
-            "interval": "1day",
-            "funds": 100,
-            "stake_cap": 50,
-            "symbol": Symbol("btcusdt"),
-        }
-    )
-    sp = StrategyParam(**params)
-    hunter = xHunter(params=sp)
