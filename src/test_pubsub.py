@@ -1,6 +1,16 @@
 from .hunterverse.interface import StrategyParam
 from .tradingfirm.pubsub_trader import xHunter
 from .hunterverse.interface import Symbol
+from pydispatch import dispatcher
+from .sensor.market_sensor import LocalMarketSensor
+
+def sim_attack_feedback(order_id, order_status, price, position):
+        print(f"Please update dataframe here: =====>>  {order_id, order_status, price, position=}")
+        # base_df.loc[s_buy_order, "sBuy"] = target_price
+        # base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
+        # # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
+        # base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
+
 
 if __name__ == "__main__":
     
@@ -29,6 +39,17 @@ if __name__ == "__main__":
             "symbol": Symbol("btcusdt"),
         }
     )
+
+    dispatcher.connect(sim_attack_feedback, signal="sim_attack_feedback")
     sp = StrategyParam(**params)
+
+    sensor = LocalMarketSensor(symbol=sp.symbol, interval="local")
     hunter = xHunter(params=sp)
-    hunter.sim_attack(hunting_id='2024-07-20', target_price=100, trigger_price=99, order_type='b', kelly=1, market_High=100, market_Low=99)
+
+    base_df = sensor.scan(100)
+    print(base_df)
+    round = sensor.left() or 1000000
+    for i in range(round):
+        base_df = sensor.fetch(base_df)
+        date, open, high, low, close, vol = base_df.iloc[-1]
+        hunter.sim_attack(hunting_id=date, target_price=close, order_type='b', kelly=1, market_High=high, market_Low=low)

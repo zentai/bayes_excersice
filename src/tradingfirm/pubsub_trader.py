@@ -46,7 +46,6 @@ class GainsBag:
         self.position = init_position
         self.avg_cost = init_avg_cost
         self.logger.info(f"Create GainsBag: {self:snapshot}")
-        print(f"Create GainsBag: {self:snapshot}")
 
     def get_un_pnl(self, strike):
         return (strike * self.position) + self.cash - self.init_funds
@@ -249,9 +248,9 @@ class xHunter(IHunter):
         # publish_back_to_outsite?
         # FIXME: actually no need, HuntingStory can subscribe same channel
         # self.dispatcher.send(signal="k_channel", message=k)
-
-        # TODO:
-        # gainbags update.
+        if order_status in ("filled"):
+            self.sim_bag.open_position(position, price)
+            print(f"Order filled: {self.sim_bag:snapshot}")
 
     # TODO: using huobi callback
     def attack_feedback(upd_event: "OrderUpdateEvent"):
@@ -310,22 +309,21 @@ class xHunter(IHunter):
             self.sim_bag.get_un_pnl(self.lastest_candlestick.Close)
         )
     
-    def sim_huobi_api(self, hunting_id, target_price, position, trigger_price, order_type, market_High, market_Low):
+    def sim_huobi_api(self, hunting_id, target_price, position, order_type, market_High, market_Low):
         if (market_High <= target_price or market_Low <= target_price):
             target_price = (
                 market_High
                 if market_High <= target_price
                 else target_price
             )
-            print(f"[Buy Filled]: {hunting_id=}, {position=}, {target_price=}")
-            self.sim_bag.open_position(position, target_price)
             self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
             # base_df.loc[s_buy_order, "sBuy"] = target_price
             # base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
             # # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
             # base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
         else:
-            print(f"[Buy Missed]: {hunting_id=}, {market_High=}")
+            print(f"[Buy Missed]: {hunting_id=}, {market_High=}, {target_price=}")
+            self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
 
         # FIXME: cancel order should be somewhere
         # cancel old orders
@@ -358,16 +356,11 @@ class xHunter(IHunter):
 
     # trade_ts, target_price, kelly
     # try to book a order, create an id-orderid mapping for call back
-    def sim_attack(self, hunting_id, target_price, trigger_price, order_type, kelly, market_High, market_Low):
+    def sim_attack(self, hunting_id, target_price, order_type, kelly, market_High, market_Low):
         if self.sim_bag.is_enough_cash() and not self.on_hold:
-            budget = self.sim_bag.discharge(kelly)  # kelly
-            price = target_price  # base_df.tail(self.params.upper_sample).High.max()
-            position = budget / price
-
-            order_id = (
-                f"{hunting_id},{target_price},{position},{trigger_price},{order_type}"
-            )
-            self.sim_huobi_api(hunting_id, target_price, position, trigger_price, order_type, market_High, market_Low)
+            budget = self.sim_bag.discharge(kelly)
+            position = budget / target_price # base_df.tail(self.params.upper_sample).High.max()
+            self.sim_huobi_api(hunting_id, target_price, position, order_type, market_High, market_Low)
 
     def attack(self, base_df):
         # check Limit-buy status

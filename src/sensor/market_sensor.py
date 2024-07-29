@@ -89,14 +89,20 @@ class HuobiMarketSensor(IMarketSensor):
         df = pandas_util.load_symbols_from_huobi(self.symbol, limits, self.interval)
         return df[:-2]
 
-    def fetch(self, base_df):
+    def fetch_one(self):
         new_data = pandas_util.get_history_stick(
             self.symbol, sample=3, interval=self.interval
         )
+        columns = new_data.columns
         new_data = new_data.iloc[1]
         new_data["Matured"] = pd.NaT
+        new_data = pd.DataFrame([new_data], columns=columns)
+        return new_data
+
+    def fetch(self, base_df):
+        new_data = self.fetch_one()
         base_df = pd.concat(
-            [base_df, pd.DataFrame([new_data], columns=base_df.columns)],
+            [base_df, new_data],
             ignore_index=True,
         )
         return base_df
