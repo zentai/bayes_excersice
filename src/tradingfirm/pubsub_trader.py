@@ -244,10 +244,6 @@ class xHunter(IHunter):
         )
 
     def sim_attack_feedback(self, order_id, order_status, price, position):
-        print(f"{order_id, order_status, price, position=}")
-        # publish_back_to_outsite?
-        # FIXME: actually no need, HuntingStory can subscribe same channel
-        # self.dispatcher.send(signal="k_channel", message=k)
         if order_status in ("filled"):
             self.sim_bag.open_position(position, price)
             print(f"Order filled: {self.sim_bag:snapshot}")
@@ -317,13 +313,9 @@ class xHunter(IHunter):
                 else target_price
             )
             self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
-            # base_df.loc[s_buy_order, "sBuy"] = target_price
-            # base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
-            # # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
-            # base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
         else:
             print(f"[Buy Missed]: {hunting_id=}, {market_High=}, {target_price=}")
-            self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
+            # self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
 
         # FIXME: cancel order should be somewhere
         # cancel old orders
@@ -439,11 +431,25 @@ class xHunter(IHunter):
                 print(f"[xHunter.attack()] place order fail: {e}")
         return base_df
 
-    def sim_retreat(self, base_df):
-        cutoff_price = self.params.hard_cutoff * self.sim_bag.avg_cost
-        cutoff_price = max(cutoff_price, self.lastest_candlestick.exit_price)
-        Stop_profit = max(cutoff_price, self.lastest_candlestick.Stop_profit)
+    '''
+    def sim_huobi_api(self, hunting_id, target_price, position, order_type, market_High, market_Low):
+        if (market_High <= target_price or market_Low <= target_price):
+            target_price = (
+                market_High
+                if market_High <= target_price
+                else target_price
+            )
+            self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
+        else:
+            print(f"[Buy Missed]: {hunting_id=}, {market_High=}, {target_price=}")
 
+    '''
+    def sim_retreat(self, hunting_id, target_price, position, order_type, market_High, market_Low, exit_price, Stop_profit):
+        cutoff_price = self.params.hard_cutoff * self.sim_bag.avg_cost
+        cutoff_price = max(cutoff_price, exit_price)
+        Stop_profit = max(cutoff_price, Stop_profit)
+
+        # Findout the pending order dataframe and record down, we should move it upper level
         pending_order = (
             base_df.sBuy.notna() & base_df.sSell.isna() & (base_df.sSellOrder.notna())
         )
@@ -479,6 +485,7 @@ class xHunter(IHunter):
                         base_df.sSell / base_df.sBuy
                     ) - 1
 
+        # here is the real logic
         sell_signal = self.sim_bag.is_enough_position()
         if sell_signal:
             position = self.sim_bag.position
