@@ -4,16 +4,18 @@ from .hunterverse.interface import Symbol
 from pydispatch import dispatcher
 from .sensor.market_sensor import LocalMarketSensor
 
+
 def sim_attack_feedback(order_id, order_status, price, position):
-        print(f"Please update dataframe here: =====>>  {order_id, order_status, price, position=}")
-        # base_df.loc[s_buy_order, "sBuy"] = target_price
-        # base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
-        # # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
-        # base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
+    print(
+        f"Please update dataframe here: =====>>  {order_id, order_status, price, position=}"
+    )
+    # base_df.loc[s_buy_order, "sBuy"] = target_price
+    # base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
+    # # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
+    # base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
 
 
 if __name__ == "__main__":
-    
 
     params = {
         "ATR_sample": 60,
@@ -52,4 +54,28 @@ if __name__ == "__main__":
     for i in range(round):
         base_df = sensor.fetch(base_df)
         date, open, high, low, close, vol = base_df.iloc[-1]
-        hunter.sim_attack(hunting_id=date, target_price=close, order_type='b', kelly=1, market_High=high, market_Low=low)
+        hunter.sim_attack(
+            hunting_id=date,
+            target_price=close,
+            order_type="b",
+            kelly=1,
+            market_High=high,
+            market_Low=low,
+        )
+        hunter.sim_retreat(
+            hunting_id=date,
+            market_High=high,
+            market_Low=low,
+            exit_price=low,
+            Stop_profit=high,
+            strike=close,
+        )
+
+"""
+        hunting_id,
+        market_High,
+        market_Low,
+        exit_price,
+        Stop_profit,
+        strike,
+"""

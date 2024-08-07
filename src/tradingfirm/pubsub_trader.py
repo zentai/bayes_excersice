@@ -244,9 +244,12 @@ class xHunter(IHunter):
         )
 
     def sim_attack_feedback(self, order_id, order_status, price, position):
-        if order_status in ("filled"):
+        if order_status in ("buy_filled"):
             self.sim_bag.open_position(position, price)
-            print(f"Order filled: {self.sim_bag:snapshot}")
+            print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
+        elif order_status in ("sell_filled", "cutoff_filled"):
+            self.sim_bag.close_position(position, price)
+            print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
 
     # TODO: using huobi callback
     def attack_feedback(upd_event: "OrderUpdateEvent"):
@@ -304,15 +307,19 @@ class xHunter(IHunter):
         base_df.loc[base_df.Date == self.lastest_candlestick.Date, "sCash"] = (
             self.sim_bag.get_un_pnl(self.lastest_candlestick.Close)
         )
-    
-    def sim_huobi_api(self, hunting_id, target_price, position, order_type, market_High, market_Low):
-        if (market_High <= target_price or market_Low <= target_price):
-            target_price = (
-                market_High
-                if market_High <= target_price
-                else target_price
+
+    def sim_huobi_api(
+        self, hunting_id, target_price, position, order_type, market_High, market_Low
+    ):
+        if market_High <= target_price or market_Low <= target_price:
+            target_price = market_High if market_High <= target_price else target_price
+            self.dispatcher.send(
+                signal="sim_attack_feedback",
+                order_id=hunting_id,
+                order_status="buy_filled",
+                price=target_price,
+                position=position,
             )
-            self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
         else:
             print(f"[Buy Missed]: {hunting_id=}, {market_High=}, {target_price=}")
             # self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
@@ -348,11 +355,17 @@ class xHunter(IHunter):
 
     # trade_ts, target_price, kelly
     # try to book a order, create an id-orderid mapping for call back
-    def sim_attack(self, hunting_id, target_price, order_type, kelly, market_High, market_Low):
+    def sim_attack(
+        self, hunting_id, target_price, order_type, kelly, market_High, market_Low
+    ):
         if self.sim_bag.is_enough_cash() and not self.on_hold:
             budget = self.sim_bag.discharge(kelly)
-            position = budget / target_price # base_df.tail(self.params.upper_sample).High.max()
-            self.sim_huobi_api(hunting_id, target_price, position, order_type, market_High, market_Low)
+            position = (
+                budget / target_price
+            )  # base_df.tail(self.params.upper_sample).High.max()
+            self.sim_huobi_api(
+                hunting_id, target_price, position, order_type, market_High, market_Low
+            )
 
     def attack(self, base_df):
         # check Limit-buy status
@@ -431,93 +444,128 @@ class xHunter(IHunter):
                 print(f"[xHunter.attack()] place order fail: {e}")
         return base_df
 
-    '''
-    def sim_huobi_api(self, hunting_id, target_price, position, order_type, market_High, market_Low):
-        if (market_High <= target_price or market_Low <= target_price):
-            target_price = (
-                market_High
-                if market_High <= target_price
-                else target_price
-            )
-            self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
-        else:
-            print(f"[Buy Missed]: {hunting_id=}, {market_High=}, {target_price=}")
-
-    '''
-    def sim_retreat(self, hunting_id, target_price, position, order_type, market_High, market_Low, exit_price, Stop_profit):
-        cutoff_price = self.params.hard_cutoff * self.sim_bag.avg_cost
-        cutoff_price = max(cutoff_price, exit_price)
+    """
+    def sim_retreat(self, hunting_id, target_price, position, market_High, market_Low, exit_price, Stop_profit, strike, high, low):
+        # Step 1: Calculate cutoff price and update Stop_profit
+        cutoff_price = max(self.params.hard_cutoff * self.sim_bag.avg_cost, exit_price)
         Stop_profit = max(cutoff_price, Stop_profit)
 
-        # Findout the pending order dataframe and record down, we should move it upper level
-        pending_order = (
-            base_df.sBuy.notna() & base_df.sSell.isna() & (base_df.sSellOrder.notna())
-        )
-        if pending_order.any():
-            order_id = base_df[pending_order].sSellOrder.values
-            order_id = list(order_id)[0] if order_id.any() else ""
-            _order_type, _price, _position, _stop_price, _operator = order_id.split(",")
-            _price = float(_price) if _price else None
-            _stop_price = float(_stop_price) if _stop_price else None
-            _position = float(_position) if _position else None
-            high = self.lastest_candlestick.High
-            low = self.lastest_candlestick.Low
-            if _order_type == "S":  # sell on max profit
-                if high >= _price:
-                    print(f"[Sell Order filled]: {order_id=}, {_position=}, {_price=}")
-                    self.sim_bag.close_position(_position, _price)
-                    print(f"sim_bag: {self.sim_bag:snapshot}")
-                    print(f"mission completed: on hold")
-                    # self.on_hold = True
-                    base_df.loc[pending_order, "sSell"] = _price
-                    base_df.loc[pending_order, "sProfit"] = (
-                        base_df.sSell / base_df.sBuy
-                    ) - 1
-            elif _order_type == "SL":  # sell on cutoff
-                if low <= _stop_price:
-                    print(
-                        f"[Cutoff Order filled]: {order_id=}, {_position=}, {_price=}"
-                    )
-                    self.sim_bag.close_position(_position, _price)
-                    print(f"sim_bag: {self.sim_bag:snapshot}")
-                    base_df.loc[pending_order, "sSell"] = _price
-                    base_df.loc[pending_order, "sProfit"] = (
-                        base_df.sSell / base_df.sBuy
-                    ) - 1
-
-        # here is the real logic
-        sell_signal = self.sim_bag.is_enough_position()
-        if sell_signal:
+        # Step 2: Implement the main logic
+        if self.sim_bag.is_enough_position():
             position = self.sim_bag.position
-            cutoff_price = self.params.hard_cutoff * self.sim_bag.avg_cost
-            exit_price = self.lastest_candlestick.exit_price
-            strike = self.lastest_candlestick.Close
-            cutoff = strike <= (max(cutoff_price, exit_price))
-            if cutoff:
-                trigger_price = strike
-                price = trigger_price
+            is_cutoff = strike <= max(cutoff_price, exit_price)
+
+            if is_cutoff:
+                price = strike
                 order_type = "SL"
-                operator = "lte"
-                order_id = f"SL,{price},{position},{trigger_price},{operator}"
+                order_status = 'cutoff_filled'
+            else:
+                max_loss = self.sim_bag.avg_cost * (1 - self.params.hard_cutoff)
+                min_profit = self.sim_bag.avg_cost + (max_loss * self.params.profit_loss_ratio)
+                Stop_profit = max(Stop_profit, min_profit)
+                price = Stop_profit
+                order_type = "S"
+                order_status = 'profit_filled'
+
+            self.dispatcher.send(
+                signal="sim_attack_feedback",
+                order_id=hunting_id,
+                order_status=order_status,
+                price=price,
+                position=position
+            )
+
+        return
+
+
+
+    """
+
+    def sim_retreat(
+        self,
+        hunting_id,
+        market_High,
+        market_Low,
+        exit_price,
+        Stop_profit,
+        strike,
+    ):
+        # Step 1: Calculate cutoff price and update Stop_profit
+        cutoff_price = max(self.params.hard_cutoff * self.sim_bag.avg_cost, exit_price)
+        Stop_profit = max(cutoff_price, Stop_profit)
+
+        # Step 2: Implement the main logic
+        if self.sim_bag.is_enough_position():
+            position = self.sim_bag.position
+            is_cutoff = strike <= max(cutoff_price, exit_price)
+
+            if is_cutoff:
+                price = market_Low
+                order_type = "S"
+                order_status = "cutoff_filled"
             else:
                 max_loss = self.sim_bag.avg_cost * (1 - self.params.hard_cutoff)
                 min_profit = self.sim_bag.avg_cost + (
                     max_loss * self.params.profit_loss_ratio
                 )
-                if Stop_profit < min_profit:
-                    Stop_profit = min_profit
-                trigger_price = None
-                price = Stop_profit
-                order_type = "S"
-                order_id = f"S,{price},{position},,"
+                Stop_profit = max(Stop_profit, min_profit)
 
-            s_sell = base_df.sBuy.notna() & base_df.sSell.isna()
-            if s_sell.any():  # should skip all False, mean nothing to update
-                base_df.loc[s_sell, "sSellOrder"] = order_id
-            else:
-                base_df.at[base_df.index[-1], "sSellOrder"] = order_id
+                # Check if the market price meets the take profit condition
+                if market_Low <= Stop_profit <= market_High:
+                    price = Stop_profit
+                    order_type = "S"
+                    order_status = "sell_filled"
+                else:
+                    return  # No action if take profit condition is not met
 
-        return base_df
+            self.dispatcher.send(
+                signal="sim_attack_feedback",
+                order_id=hunting_id,
+                order_status=order_status,
+                price=price,
+                position=position,
+            )
+
+        return
+
+    """
+        # # Findout the pending order dataframe and record down, we should move it upper level
+        # pending_order = (
+        #     base_df.sBuy.notna() & base_df.sSell.isna() & (base_df.sSellOrder.notna())
+        # )
+        # if pending_order.any():
+        #     order_id = base_df[pending_order].sSellOrder.values
+        #     order_id = list(order_id)[0] if order_id.any() else ""
+        #     _order_type, _price, _position, _stop_price, _operator = order_id.split(",")
+        #     _price = float(_price) if _price else None
+        #     _stop_price = float(_stop_price) if _stop_price else None
+        #     _position = float(_position) if _position else None
+        #     high = self.lastest_candlestick.High
+        #     low = self.lastest_candlestick.Low
+        #     if _order_type == "S":  # sell on max profit
+        #         if high >= _price:
+        #             print(f"[Sell Order filled]: {order_id=}, {_position=}, {_price=}")
+        #             self.sim_bag.close_position(_position, _price)
+        #             print(f"sim_bag: {self.sim_bag:snapshot}")
+        #             print(f"mission completed: on hold")
+        #             # self.on_hold = True
+        #             base_df.loc[pending_order, "sSell"] = _price
+        #             base_df.loc[pending_order, "sProfit"] = (
+        #                 base_df.sSell / base_df.sBuy
+        #             ) - 1
+        #     elif _order_type == "SL":  # sell on cutoff
+        #         if low <= _stop_price:
+        #             print(
+        #                 f"[Cutoff Order filled]: {order_id=}, {_position=}, {_price=}"
+        #             )
+        #             self.sim_bag.close_position(_position, _price)
+        #             print(f"sim_bag: {self.sim_bag:snapshot}")
+        #             base_df.loc[pending_order, "sSell"] = _price
+        #             base_df.loc[pending_order, "sProfit"] = (
+        #                 base_df.sSell / base_df.sBuy
+        #             ) - 1
+
+    """
 
     def retreat(self, base_df):
         cutoff_price = self.params.hard_cutoff * self.live_bag.avg_cost
@@ -610,5 +658,3 @@ class xHunter(IHunter):
 
     def portfolio(self, pre_strike, strike):
         return self.live_bag.portfolio(pre_strike, strike)
-
-
