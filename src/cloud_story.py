@@ -25,7 +25,8 @@ from .hunterverse.interface import INTERVAL_TO_MIN
 
 from .sensor.market_sensor import LocalMarketSensor
 from .sensor.market_sensor import HuobiMarketSensor
-from .tradingfirm.trader import xHunter
+from .tradingfirm.pubsub_trader import xHunter
+# from .tradingfirm.trader import xHunter
 from pydispatch import dispatcher
 
 DEBUG_COL = [
@@ -168,6 +169,15 @@ class HuntingStory:
         print(self.base_df[DEBUG_COL][-30:])
         return self.base_df, self.hunter.review_mission(self.base_df)
 
+    def sim_attack_feedback(self, order_id, order_status, price, position):
+        print(
+            f"Please update dataframe here: =====>>  {order_id, order_status, price, position=}"
+        )
+        # base_df.loc[s_buy_order, "sBuy"] = target_price
+        # base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
+        # # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
+        # base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
+
 def start_journey(sp):
     base_df = None
     sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
@@ -178,6 +188,7 @@ def start_journey(sp):
 
     story = HuntingStory(sensor, scout, engine, hunter, base_df)
     dispatcher.connect(story.move_forward, signal="k_channel")
+    dispatcher.connect(story.sim_attack_feedback, signal="sim_attack_feedback")
 
     pub_thread = story.pub_market_sensor(sp)
     print("start thread")

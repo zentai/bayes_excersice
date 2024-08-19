@@ -118,6 +118,9 @@ class GainsBag:
             "FinalPnL": market_value + self.cash - self.init_funds,
         }
 
+    def cutoff_price(self, cutoff_ratio=0.95):
+        return self.avg_cost * cutoff_ratio
+
     def __format__(self, format_spec):
         if format_spec == "cash":
             return f"{self.cash}"
@@ -154,6 +157,12 @@ class xHunter(IHunter):
         self.dispatcher = dispatcher
         self.dispatcher.connect(self.sim_attack_feedback, signal="sim_attack_feedback")
         self.dispatcher.connect(self.attack_feedback, signal="attack_feedback")
+
+    def cutoff(self, strike):
+        cutoff_price = self.live_bag.cutoff_price(self.params.hard_cutoff)
+        if cutoff_price and strike <= cutoff_price:
+            pass
+            #TODO: actual cutoff 
 
     def load_memories(self, fetch=True, deals=[]):
         print(f"load_memories(self, fetch={fetch}, deals={deals})")
@@ -490,16 +499,8 @@ class xHunter(IHunter):
         Stop_profit,
         strike,
     ):
-        # Step 1: Calculate cutoff price and update Stop_profit
-        cutoff_price = max(self.params.hard_cutoff * self.sim_bag.avg_cost, exit_price)
-        Stop_profit = max(cutoff_price, Stop_profit)
-
-        # Step 2: Implement the main logic
         if self.sim_bag.is_enough_position():
-            position = self.sim_bag.position
-            is_cutoff = strike <= max(cutoff_price, exit_price)
-
-            if is_cutoff:
+            if strike <= self.sim_bag.cutoff_price(self.params.hard_cutoff):
                 price = market_Low
                 order_type = "S"
                 order_status = "cutoff_filled"
@@ -508,7 +509,7 @@ class xHunter(IHunter):
                 min_profit = self.sim_bag.avg_cost + (
                     max_loss * self.params.profit_loss_ratio
                 )
-                Stop_profit = max(Stop_profit, min_profit)
+                Stop_profit = sorted([exit_price, Stop_profit, min_profit])[-1]
 
                 # Check if the market price meets the take profit condition
                 if market_Low <= Stop_profit <= market_High:
@@ -523,7 +524,7 @@ class xHunter(IHunter):
                 order_id=hunting_id,
                 order_status=order_status,
                 price=price,
-                position=position,
+                position=self.sim_bag.position,
             )
 
         return
