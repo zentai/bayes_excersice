@@ -26,6 +26,7 @@ from .hunterverse.interface import INTERVAL_TO_MIN
 from .sensor.market_sensor import LocalMarketSensor
 from .sensor.market_sensor import HuobiMarketSensor
 from .tradingfirm.pubsub_trader import xHunter
+
 # from .tradingfirm.trader import xHunter
 from pydispatch import dispatcher
 
@@ -43,26 +44,27 @@ DEBUG_COL = [
     "buy",
     "sell",
     "profit",
-    "sBuy",
-    "sSell",
-    "sProfit",
-    "sPosition",
-    "sCash",
-    "sAvgCost",
-    "xBuy",
-    "xSell",
-    "xProfit",
-    "xPosition",
-    "xCash",
-    "xAvgCost",
-    "xBuyOrder",
-    "xSellOrder",
+    "OBV_UP",
+    # "sBuy",
+    # "sSell",
+    # "sProfit",
+    # "sPosition",
+    # "sCash",
+    # "sAvgCost",
+    # "xBuy",
+    # "xSell",
+    # "xProfit",
+    # "xPosition",
+    # "xCash",
+    # "xAvgCost",
+    # "xBuyOrder",
+    # "xSellOrder",
     # "Kelly",
     # "Postrior",
-    "P/L",
+    # "P/L",
     # "likelihood",
-    "profit_margin",
-    "loss_margin",
+    # "profit_margin",
+    # "loss_margin",
 ]
 
 DUMP_COL = [
@@ -146,6 +148,9 @@ class HuntingStory:
         return threading.Thread(target=run_market_sensor)
 
     def move_forward(self, message):
+        # for col in set(self.base_df.columns) - set(message.columns):
+        #     message[col] = np.nan
+
         self.base_df = pd.concat(
             [self.base_df, message],
             ignore_index=True,
@@ -153,9 +158,39 @@ class HuntingStory:
         self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
         self.base_df = self.scout.market_recon(self.base_df)
         self.base_df = self.engine.hunt_plan(self.base_df)
-        self.base_df = self.hunter.strike_phase(self.base_df)
+
+        def _build_hunting_cmd(lastest_candlestick):
+            _High = lastest_candlestick.High
+            _Low = lastest_candlestick.Low
+            hunting_command = {}
+            hunting_command["sell"] = {
+                "hunting_id": lastest_candlestick.Date,
+                "exit_price": lastest_candlestick.exit_price,
+                "Stop_profit": lastest_candlestick.Stop_profit,
+                "strike": lastest_candlestick.Close,
+                "market_High": _High,
+                "market_Low": _Low,
+            }
+            buy_signal = lastest_candlestick.OBV_UP == True
+            if buy_signal:
+
+                price = self.base_df.tail(self.hunter.params.upper_sample).High.max()
+                order_type = "B" if price == lastest_candlestick.High else "BL"
+
+                hunting_command["buy"] = {
+                    "hunting_id": lastest_candlestick.Date,
+                    "target_price": price,
+                    "order_type": order_type,
+                    "kelly": lastest_candlestick.Kelly,
+                    "market_High": _High,
+                    "market_Low": _Low,
+                }
+            return hunting_command
+
+        hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
+        self.hunter.strike_phase(hunting_command)
         print(self.base_df[DEBUG_COL][-30:])
-        return self.base_df, self.hunter.review_mission(self.base_df)
+        # return self.base_df, self.hunter.review_mission(self.base_df)
 
     def price_callback(self, message):
         self.base_df = pd.concat(
@@ -178,6 +213,7 @@ class HuntingStory:
         # # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
         # base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
 
+
 def start_journey(sp):
     base_df = None
     sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
@@ -185,7 +221,6 @@ def start_journey(sp):
     engine = BayesianEngine(params=sp)
     hunter = xHunter(params=sp)
     base_df = sensor.scan(2000 if not sp.simulate else 100)
-
     story = HuntingStory(sensor, scout, engine, hunter, base_df)
     dispatcher.connect(story.move_forward, signal="k_channel")
     dispatcher.connect(story.sim_attack_feedback, signal="sim_attack_feedback")

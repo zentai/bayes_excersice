@@ -21,9 +21,7 @@ def x_times_odd(df, count):
     # print(result_df[['Date', 'BuySignal', 'profit', 'Kelly']][-60:])
     if len(result_df) == 0:
         return 1
-    odd = (result_df.profit > 0).sum() / (
-        (result_df.profit <= 0).sum() or 1 / (10**10)
-    )
+    odd = (result_df.profit > 0).sum() / ((result_df.profit <= 0).sum() or 1 / (10**10))
     return odd
 
 
@@ -155,7 +153,7 @@ class BayesianEngine(IEngine):
             df_clone = df.loc[s_eod].copy()
 
             prior = 1
-            if ((df.Date <= today) & (df.BuySignal==1)).sum() > windows:
+            if ((df.Date <= today) & (df.BuySignal == 1)).sum() > windows:
                 profit_distribution = signal_meter(df[df.Date <= today], 10)
                 # profit_distribution = signal_meter(df[df.Date <= today], windows + 1)
                 signal_count = 0
@@ -188,8 +186,10 @@ class BayesianEngine(IEngine):
 
             kelly_args = {
                 "pwin": posterior,
-                "loss_margin": abs(loss_margin),
-                "profit_margin": profit_margin,
+                "loss_margin": (1 - self._params.hard_cutoff),
+                "profit_margin": (1 - self._params.hard_cutoff) * 2,
+                # "loss_margin": abs(loss_margin),
+                # "profit_margin": profit_margin,
             }
 
             _signal_kelly = kelly_formular(**kelly_args)
@@ -200,11 +200,11 @@ class BayesianEngine(IEngine):
                 #     f"[{today}] {self._latest_prior}! {odd(posterior):.6f} * {_like:.6f} = {prob_odd(odd(posterior) * _like):.10f}"
                 # )
                 df.loc[df.Date == today, "Postrior"] = self._latest_prior
-                df.loc[df.Date == today, "Kelly"] = 1 #_signal_kelly
+                df.loc[df.Date == today, "Kelly"] = _signal_kelly
                 df.loc[df.Date == today, "p_win"] = p_win
-                df.loc[
-                    df.Date == today, "P/L"
-                ] = f"{daily_pnl[daily_pnl>0].count()}/{daily_pnl[daily_pnl<=0].count()}"
+                df.loc[df.Date == today, "P/L"] = (
+                    f"{daily_pnl[daily_pnl>0].count()}/{daily_pnl[daily_pnl<=0].count()}"
+                )
                 df.loc[df.Date == today, "likelihood"] = _like
                 df.loc[df.Date == today, "profit_margin"] = profit_margin
                 df.loc[df.Date == today, "loss_margin"] = loss_margin

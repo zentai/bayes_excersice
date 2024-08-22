@@ -162,7 +162,7 @@ class xHunter(IHunter):
         cutoff_price = self.live_bag.cutoff_price(self.params.hard_cutoff)
         if cutoff_price and strike <= cutoff_price:
             pass
-            #TODO: actual cutoff 
+            # TODO: actual cutoff
 
     def load_memories(self, fetch=True, deals=[]):
         print(f"load_memories(self, fetch={fetch}, deals={deals})")
@@ -239,18 +239,16 @@ class xHunter(IHunter):
     # datetime as id
     # buy_commands: isBuy, target_price, kelly
     # sell_commands: isSell, target_price. percentage
+
     def strike_phase(self, hunting_command):
-        hunting_command.get("buy")
-        (
-            self.sim_attack(hunting_command.get("buy"))
-            if self.simulate
-            else self.attack(hunting_command.get("buy"))
-        )
-        (
-            self.sim_retreat(hunting_command.get("sell"))
-            if self.simulate
-            else self.retreat(hunting_command.get("sell"))
-        )
+        if "buy" in hunting_command:
+            self.sim_attack(**hunting_command.get("buy"))
+            # if not self.simulate:
+            #     self.attack(**hunting_command.get("buy"))
+        if "sell" in hunting_command:
+            self.sim_retreat(**hunting_command.get("sell"))
+            # if not self.simulate:
+            #     self.retreat(**hunting_command.get("sell"))
 
     def sim_attack_feedback(self, order_id, order_status, price, position):
         if order_status in ("buy_filled"):
