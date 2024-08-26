@@ -15,6 +15,7 @@ from .tradingfirm.platforms import huobi_api
 from .strategy.turtle_trading import TurtleScout
 from .engine.probabilistic_engine import BayesianEngine
 
+from .utils import pandas_util
 from .hunterverse.interface import IStrategyScout
 from .hunterverse.interface import IMarketSensor
 from .hunterverse.interface import IEngine
@@ -26,6 +27,12 @@ from .hunterverse.interface import INTERVAL_TO_MIN
 from .sensor.market_sensor import LocalMarketSensor
 from .sensor.market_sensor import HuobiMarketSensor
 from .tradingfirm.pubsub_trader import xHunter
+from .tradingfirm.pubsub_trader import (
+    HUNTER_COLUMNS,
+    BUY_FILLED,
+    SELL_FILLED,
+    CUTOFF_FILLED,
+)
 
 # from .tradingfirm.trader import xHunter
 from pydispatch import dispatcher
@@ -39,18 +46,17 @@ DEBUG_COL = [
     # "BuySignal",
     "Stop_profit",
     "exit_price",
-    # "Matured",
     # "time_cost",
     "buy",
     "sell",
     "profit",
     "OBV_UP",
-    # "sBuy",
-    # "sSell",
-    # "sProfit",
-    # "sPosition",
-    # "sCash",
-    # "sAvgCost",
+    "sBuy",
+    "sSell",
+    "sProfit",
+    "sPosition",
+    "sCash",
+    "sAvgCost",
     # "xBuy",
     # "xSell",
     # "xProfit",
@@ -59,10 +65,10 @@ DEBUG_COL = [
     # "xAvgCost",
     # "xBuyOrder",
     # "xSellOrder",
-    # "Kelly",
+    "Kelly",
     # "Postrior",
-    # "P/L",
-    # "likelihood",
+    "P/L",
+    "likelihood",
     # "profit_margin",
     # "loss_margin",
 ]
@@ -150,7 +156,7 @@ class HuntingStory:
     def move_forward(self, message):
         # for col in set(self.base_df.columns) - set(message.columns):
         #     message[col] = np.nan
-
+        message = pandas_util.equip_fields(message, HUNTER_COLUMNS)
         self.base_df = pd.concat(
             [self.base_df, message],
             ignore_index=True,
@@ -160,6 +166,7 @@ class HuntingStory:
         self.base_df = self.engine.hunt_plan(self.base_df)
 
         def _build_hunting_cmd(lastest_candlestick):
+            print(f"kelly: {lastest_candlestick.Kelly}")
             _High = lastest_candlestick.High
             _Low = lastest_candlestick.Low
             hunting_command = {}
@@ -167,7 +174,6 @@ class HuntingStory:
                 "hunting_id": lastest_candlestick.Date,
                 "exit_price": lastest_candlestick.exit_price,
                 "Stop_profit": lastest_candlestick.Stop_profit,
-                "strike": lastest_candlestick.Close,
                 "market_High": _High,
                 "market_Low": _Low,
             }
@@ -181,7 +187,7 @@ class HuntingStory:
                     "hunting_id": lastest_candlestick.Date,
                     "target_price": price,
                     "order_type": order_type,
-                    "kelly": lastest_candlestick.Kelly,
+                    "kelly": 1,  # lastest_candlestick.Kelly,
                     "market_High": _High,
                     "market_Low": _Low,
                 }
@@ -190,6 +196,7 @@ class HuntingStory:
         hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
         self.hunter.strike_phase(hunting_command)
         print(self.base_df[DEBUG_COL][-30:])
+        print(self.hunter.review_mission(self.base_df))
         # return self.base_df, self.hunter.review_mission(self.base_df)
 
     def price_callback(self, message):
@@ -205,13 +212,24 @@ class HuntingStory:
         return self.base_df, self.hunter.review_mission(self.base_df)
 
     def sim_attack_feedback(self, order_id, order_status, price, position):
-        print(
-            f"Please update dataframe here: =====>>  {order_id, order_status, price, position=}"
-        )
-        # base_df.loc[s_buy_order, "sBuy"] = target_price
-        # base_df.loc[s_buy_order, "sPosition"] = self.sim_bag.position
-        # # base_df.loc[s_buy_order, "sCash"] = self.sim_bag.cash
-        # base_df.loc[s_buy_order, "sAvgCost"] = self.sim_bag.avg_cost
+        if order_status in (BUY_FILLED):
+            s_buy_order = self.base_df.Date == order_id
+            self.base_df.loc[s_buy_order, "sBuyOrder"] = order_id
+            self.base_df.loc[s_buy_order, "sBuy"] = price
+            self.base_df.loc[s_buy_order, "sPosition"] = self.hunter.sim_bag.position
+            self.base_df.loc[s_buy_order, "sCash"] = self.hunter.sim_bag.cash
+            self.base_df.loc[s_buy_order, "sAvgCost"] = self.hunter.sim_bag.avg_cost
+        elif order_status in (SELL_FILLED, CUTOFF_FILLED):
+            s_sell_order = self.base_df.Date == order_id
+            self.base_df.loc[s_sell_order, "sSellOrder"] = order_id
+            self.base_df.loc[s_sell_order, "sBuy"] = self.hunter.sim_bag.avg_cost
+            self.base_df.loc[s_sell_order, "sSell"] = price
+            self.base_df.loc[s_sell_order, "sProfit"] = (
+                price / self.hunter.sim_bag.avg_cost
+            ) - 1
+            self.base_df.loc[s_sell_order, "sPosition"] = self.hunter.sim_bag.position
+            self.base_df.loc[s_sell_order, "sCash"] = self.hunter.sim_bag.cash
+            self.base_df.loc[s_sell_order, "sAvgCost"] = self.hunter.sim_bag.avg_cost
 
 
 def start_journey(sp):
@@ -224,7 +242,6 @@ def start_journey(sp):
     story = HuntingStory(sensor, scout, engine, hunter, base_df)
     dispatcher.connect(story.move_forward, signal="k_channel")
     dispatcher.connect(story.sim_attack_feedback, signal="sim_attack_feedback")
-
     pub_thread = story.pub_market_sensor(sp)
     print("start thread")
     pub_thread.start()
@@ -233,17 +250,17 @@ def start_journey(sp):
 
 params = {
     "ATR_sample": 60,
-    "atr_loss_margin": 3.5,
+    "atr_loss_margin": 1.5,
     "hard_cutoff": 0.95,
-    "profit_loss_ratio": 3.0,
-    "bayes_windows": 10,
+    "profit_loss_ratio": 2.0,
+    "bayes_windows": 30,
     "lower_sample": 30.0,
     "upper_sample": 30.0,
-    "interval": "1day",
+    "interval": "1min",
     "funds": 100,
-    "stake_cap": 10.5,
+    "stake_cap": 50,
     "symbol": None,
-    "surfing_level": 6,
+    "surfing_level": 4,
     "fetch_huobi": True,
     "simulate": False,
 }
@@ -258,4 +275,5 @@ if __name__ == "__main__":
         }
     )
     sp = StrategyParam(**params)
+    print(sp)
     start_journey(sp)

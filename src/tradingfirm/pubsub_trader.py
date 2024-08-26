@@ -14,6 +14,9 @@ from .platforms import huobi_api
 from config import config
 
 ZERO = config.zero
+BUY_FILLED = "Buy_filled"
+SELL_FILLED = "Sell_filled"
+CUTOFF_FILLED = "Cutoff_filled"
 
 HUNTER_COLUMNS = [
     "sBuy",
@@ -38,14 +41,25 @@ HUNTER_COLUMNS = [
 class GainsBag:
     MIN_STAKE_CAP = 10.01  # huobi limitation
 
-    def __init__(self, symbol, init_funds, stake_cap, init_position=0, init_avg_cost=0):
+    def __init__(
+        self,
+        symbol,
+        init_funds,
+        stake_cap,
+        init_position=0,
+        init_avg_cost=0,
+        is_sim=True,
+    ):
         self.logger = logging.getLogger(f"GainsBag_{symbol.name}")
         self.symbol = symbol
         self.stake_cap = stake_cap
         self.init_funds = self.cash = init_funds
         self.position = init_position
         self.avg_cost = init_avg_cost
-        self.logger.info(f"Create GainsBag: {self:snapshot}")
+        self.is_sim = is_sim
+        self.logger.info(
+            f"Create {'Sim' if self.is_sim else 'Live'  }GainsBag: {self:snapshot}"
+        )
 
     def get_un_pnl(self, strike):
         return (strike * self.position) + self.cash - self.init_funds
@@ -130,7 +144,7 @@ class GainsBag:
             snapshot_avg_cost = round(self.avg_cost, self.symbol.price_prec)  # USDT
             snapshot_position = round(self.position, self.symbol.amount_prec)
             snapshot_cash = round(self.cash, 2)  # USDT
-            return f"![{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
+            return f"![{'Sim' if self.is_sim else 'Live'  }:{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
         elif format_spec == "review":
             pass
         else:
@@ -251,10 +265,10 @@ class xHunter(IHunter):
             #     self.retreat(**hunting_command.get("sell"))
 
     def sim_attack_feedback(self, order_id, order_status, price, position):
-        if order_status in ("buy_filled"):
+        if order_status in (BUY_FILLED):
             self.sim_bag.open_position(position, price)
             print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
-        elif order_status in ("sell_filled", "cutoff_filled"):
+        elif order_status in (SELL_FILLED, CUTOFF_FILLED):
             self.sim_bag.close_position(position, price)
             print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
 
@@ -318,18 +332,39 @@ class xHunter(IHunter):
     def sim_huobi_api(
         self, hunting_id, target_price, position, order_type, market_High, market_Low
     ):
-        if market_High <= target_price or market_Low <= target_price:
-            target_price = market_High if market_High <= target_price else target_price
-            self.dispatcher.send(
-                signal="sim_attack_feedback",
-                order_id=hunting_id,
-                order_status="buy_filled",
-                price=target_price,
-                position=position,
-            )
-        else:
-            print(f"[Buy Missed]: {hunting_id=}, {market_High=}, {target_price=}")
-            # self.dispatcher.send(signal="sim_attack_feedback", order_id=hunting_id, order_status='filled', price=target_price, position=position)
+        if order_type in ("B", "BL"):
+            if market_High <= target_price:
+                print(f"sim_huobi_api: [{order_type}] {hunting_id=}, {target_price=}")
+                target_price = (
+                    market_High if market_High <= target_price else target_price
+                )
+                self.dispatcher.send(
+                    signal="sim_attack_feedback",
+                    order_id=hunting_id,
+                    order_status=BUY_FILLED,
+                    price=target_price,
+                    position=position,
+                )
+            else:
+                print(f"[Buy Missed]: {hunting_id=}, {market_High=}, {target_price=}")
+        elif order_type in ("S", "SL"):
+            order_status = None
+            if order_type == "S" and market_High >= target_price:  # sell on max profit
+                order_status = SELL_FILLED
+                print(f"mission completed: on hold")
+                # self.on_hold = True
+            elif _order_type == "SL" and market_Low <= target_price:  # sell on cutoff
+                order_status = CUTOFF_FILLED
+
+            if order_status:
+                print(f"sim_huobi_api: [{order_status}] {hunting_id=}, {target_price=}")
+                self.dispatcher.send(
+                    signal="sim_attack_feedback",
+                    order_id=hunting_id,
+                    order_status=order_status,
+                    price=target_price,
+                    position=position,
+                )
 
         # FIXME: cancel order should be somewhere
         # cancel old orders
@@ -356,9 +391,6 @@ class xHunter(IHunter):
             stop_price = price * 0.9995
             order_id = f"BL,{price},{position},{stop_price},gte"
         """
-        # TODO: df manuplate should be move to HUnting story
-        # s_buy = base_df.Date == self.lastest_candlestick.Date
-        # base_df.loc[s_buy, "sBuyOrder"] = order_id
 
     # trade_ts, target_price, kelly
     # try to book a order, create an id-orderid mapping for call back
@@ -367,9 +399,7 @@ class xHunter(IHunter):
     ):
         if self.sim_bag.is_enough_cash() and not self.on_hold:
             budget = self.sim_bag.discharge(kelly)
-            position = (
-                budget / target_price
-            )  # base_df.tail(self.params.upper_sample).High.max()
+            position = budget / target_price
             self.sim_huobi_api(
                 hunting_id, target_price, position, order_type, market_High, market_Low
             )
@@ -495,36 +525,57 @@ class xHunter(IHunter):
         market_Low,
         exit_price,
         Stop_profit,
-        strike,
     ):
         if self.sim_bag.is_enough_position():
-            if strike <= self.sim_bag.cutoff_price(self.params.hard_cutoff):
-                price = market_Low
-                order_type = "S"
-                order_status = "cutoff_filled"
-            else:
-                max_loss = self.sim_bag.avg_cost * (1 - self.params.hard_cutoff)
-                min_profit = self.sim_bag.avg_cost + (
-                    max_loss * self.params.profit_loss_ratio
-                )
-                Stop_profit = sorted([exit_price, Stop_profit, min_profit])[-1]
-
-                # Check if the market price meets the take profit condition
-                if market_Low <= Stop_profit <= market_High:
-                    price = Stop_profit
-                    order_type = "S"
-                    order_status = "sell_filled"
-                else:
-                    return  # No action if take profit condition is not met
-
-            self.dispatcher.send(
-                signal="sim_attack_feedback",
-                order_id=hunting_id,
-                order_status=order_status,
-                price=price,
-                position=self.sim_bag.position,
+            min_profit = self.sim_bag.avg_cost * (
+                1 + (1 - self.params.hard_cutoff) * self.params.profit_loss_ratio
             )
+            final_stop_price = max(Stop_profit, min_profit)
 
+            print(f"[CUTOFF] {self.sim_bag.cutoff_price(self.params.hard_cutoff)}")
+            print("==========================")
+            print(f"[Exit_P] {exit_price}")
+            print("==========================")
+            print(f"[STOP_P] {Stop_profit}")
+            print(f"[MIN_P] {min_profit}")
+            print("==========================")
+            print(f"[END_P] {final_stop_price}")
+
+            if market_Low <= self.sim_bag.cutoff_price(self.params.hard_cutoff):
+                price = self.sim_bag.cutoff_price(self.params.hard_cutoff)
+                order_type = "S"
+                self.sim_huobi_api(
+                    hunting_id,
+                    price,
+                    self.sim_bag.position,
+                    order_type,
+                    market_High,
+                    market_Low,
+                )
+            elif market_Low <= exit_price:
+                price = exit_price
+                order_type = "S"
+                self.sim_huobi_api(
+                    hunting_id,
+                    price,
+                    self.sim_bag.position,
+                    order_type,
+                    market_High,
+                    market_Low,
+                )
+            else:
+                # Check if the market price meets the take profit condition
+                if market_High >= final_stop_price:
+                    price = final_stop_price
+                    order_type = "S"
+                    self.sim_huobi_api(
+                        hunting_id,
+                        price,
+                        self.sim_bag.position,
+                        order_type,
+                        market_High,
+                        market_Low,
+                    )
         return
 
     """
@@ -657,3 +708,89 @@ class xHunter(IHunter):
 
     def portfolio(self, pre_strike, strike):
         return self.live_bag.portfolio(pre_strike, strike)
+
+    def review_mission(self, base_df):
+        df = base_df[base_df.BuySignal == 1]
+        sample = len(df)
+        profit_sample = len(df[df.xProfit > 0])
+        profit_mean = (df.sProfit > 0).mean() or ZERO
+        loss_mean = (df.sProfit <= 0).mean() or ZERO
+        profit_loss_ratio = profit_mean / loss_mean
+        cost = self.sim_bag.init_funds
+        strike = base_df.iloc[-1].Close
+        profit = self.sim_bag.cash + (self.sim_bag.position * strike) - cost
+        time_cost, w_daily_return = weighted_daily_return(df)
+        avg_time_cost = time_cost / sample if sample else 0
+        avg_profit = profit / sample if sample else 0
+        drawdown = df.sProfit.min()
+
+        _annual_return, _sortino_ratio = calc_annual_return_and_sortino_ratio(
+            cost, profit, df
+        )
+        return pd.DataFrame(
+            [
+                [
+                    profit,
+                    cost,
+                    profit_loss_ratio,
+                    sample,
+                    profit_sample,
+                    avg_time_cost,
+                    avg_profit,
+                    drawdown,
+                    _annual_return,
+                    _sortino_ratio,
+                    self.sim_bag.cash,
+                    self.sim_bag.position,
+                    self.sim_bag.avg_cost,
+                    self.on_hold,
+                ]
+            ],
+            columns=[
+                "Profit",
+                "Cost",
+                "ProfitLossRatio",
+                "Sample",
+                "ProfitSample",
+                "Avg.Timecost",
+                "Avg.Profit",
+                "Drawdown",
+                "Annual.Return",
+                "SortinoRatio",
+                "Cash",
+                "Position",
+                "Avg.Cost",
+                "Onhold",
+            ],
+        )
+
+
+def weighted_daily_return(df_subset):
+    total_time_cost = df_subset["time_cost"].sum() or 1
+    weighted_return = np.sum(
+        (1 + df_subset["xProfit"]) ** (1 / df_subset["time_cost"])
+        * df_subset["time_cost"]
+    )
+    wd_return = (weighted_return / total_time_cost) - 1
+    return total_time_cost, wd_return
+
+
+def calc_annual_return_and_sortino_ratio(cost, profit, df):
+    if df.empty:
+        return 0, 0
+    _yield_curve_1yr = 0.0419
+    _start_date = df.iloc[0].Date
+    _end_date = df.iloc[-1].Date
+    _trade_count = len(df[df.Kelly > 0])
+    _trade_minutes = (
+        pd.to_datetime(_end_date) - pd.to_datetime(_start_date)
+    ).total_seconds() / 60 or ZERO
+    _annual_trade_count = (_trade_count / _trade_minutes) * 365 * 24 * 60
+    _downside_risk_stdv = df[
+        (df.Kelly > 0) & (df.xProfit < _yield_curve_1yr)
+    ].xProfit.std(ddof=1)
+    _annual_downside_risk_stdv = _downside_risk_stdv * np.sqrt(_annual_trade_count)
+    t = _trade_minutes / (365 * 24 * 60)
+    _annual_return = (profit / cost) ** (1 / t) - 1 if (profit / cost > 0) else 0
+    _sortino_ratio = (_annual_return - _yield_curve_1yr) / _annual_downside_risk_stdv
+    return _annual_return, _sortino_ratio
