@@ -27,6 +27,7 @@ HUNTER_COLUMNS = [
     "sAvgCost",
     "sBuyOrder",
     "sSellOrder",
+    "sPnLRatio",
     "xBuy",
     "xSell",
     "xProfit",
@@ -353,7 +354,7 @@ class xHunter(IHunter):
                 order_status = SELL_FILLED
                 print(f"mission completed: on hold")
                 # self.on_hold = True
-            elif _order_type == "SL" and market_Low <= target_price:  # sell on cutoff
+            elif order_type == "SL" and market_Low <= target_price:  # sell on cutoff
                 order_status = CUTOFF_FILLED
 
             if order_status:
