@@ -26,6 +26,7 @@ from .hunterverse.interface import INTERVAL_TO_MIN
 
 from .sensor.market_sensor import LocalMarketSensor
 from .sensor.market_sensor import HuobiMarketSensor
+from .sensor.market_sensor import MongoMarketSensor
 from .tradingfirm.pubsub_trader import xHunter
 from .tradingfirm.pubsub_trader import (
     HUNTER_COLUMNS,
@@ -149,7 +150,7 @@ class HuntingStory:
 
     def pub_market_sensor(self, sp):
         def run_market_sensor():
-            while True:
+            while self.sensor.left():
                 k = self.sensor.fetch_one()
                 dispatcher.send(signal="k_channel", message=k)
                 hunterPause(sp)
@@ -167,7 +168,6 @@ class HuntingStory:
         self.base_df = self.engine.hunt_plan(self.base_df)
 
         def _build_hunting_cmd(lastest_candlestick):
-            print(f"kelly: {lastest_candlestick.Kelly}")
             _High = lastest_candlestick.High
             _Low = lastest_candlestick.Low
             hunting_command = {}
@@ -198,7 +198,7 @@ class HuntingStory:
         hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
         self.hunter.strike_phase(hunting_command)
         # print(self.base_df[DEBUG_COL][-30:])
-        print(self.hunter.review_mission(self.base_df))
+        # print(self.hunter.review_mission(self.base_df))
         # return self.base_df, self.hunter.review_mission(self.base_df)
 
     def sim_attack_feedback(self, order_id, order_status, price, position):
@@ -227,7 +227,8 @@ class HuntingStory:
 def start_journey(sp):
     base_df = None
     # sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
-    sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
+    # sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
+    sensor = MongoMarketSensor(symbol=sp.symbol, interval=sp.interval)
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
     hunter = xHunter(params=sp)
@@ -239,9 +240,35 @@ def start_journey(sp):
     print("start thread")
     pub_thread.start()
     pub_thread.join()
-    print(story.base_df)
+    print(story.base_df[DUMP_COL])
+    review = story.hunter.review_mission(story.base_df)
+    sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
     story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp.symbol.name}.csv", index=False)
     print(f"created: {REPORTS_DIR}/{sp.symbol.name}.csv")
+
+
+def params_to_filename(params):
+    # Step 1: 筛选重要参数
+    important_params = {
+        "interval": f"{params['interval']}",
+        "ATR_sample": f"ATR{params['ATR_sample']}",
+        "atr_loss_margin": f"ALM{params['atr_loss_margin']}",
+        "hard_cutoff": f"HC{params['hard_cutoff']}",
+        "profit_loss_ratio": f"PLR{params['profit_loss_ratio']}",
+        "bayes_windows": f"BW{params['bayes_windows']}",
+        "surfing_level": f"SL{params['surfing_level']}",
+    }
+
+    # Step 2: 简化命名并组合成文件名
+    filename = "_".join(important_params.values())
+
+    # Step 3: 处理特殊字符
+    filename = filename.replace("/", "-").replace("\\", "-")
+
+    # Step 4: 添加文件扩展名
+    filename += ".csv"
+
+    return filename
 
 
 params = {
@@ -267,7 +294,7 @@ if __name__ == "__main__":
             "interval": "1day",
             "funds": 100,
             "stake_cap": 50,
-            "symbol": Symbol("nvda"),
+            "symbol": Symbol("btcusdt"),
         }
     )
     sp = StrategyParam(**params)

@@ -1,4 +1,5 @@
 import pandas as pd
+import pymongo
 from ..hunterverse.interface import IMarketSensor
 from ..utils import pandas_util
 import yfinance as yf
@@ -106,3 +107,60 @@ class HuobiMarketSensor(IMarketSensor):
             ignore_index=True,
         )
         return base_df
+
+
+class MongoDBHandler:
+    def __init__(self, db_name="quant_database"):
+        self.client = pymongo.MongoClient("mongodb://localhost:27017/")
+        self.db = self.client[db_name]
+
+    def save(self, collection_name, df):
+        collection = self.db[collection_name]
+        records = df.to_dict("records")
+        collection.insert_many(records)
+        print(f"Data saved to {self.db.name}.{collection.name} collection.")
+
+    def load(self, collection_name):
+        collection = self.db[collection_name]
+        data = list(collection.find({}, {"_id": 0}))
+        df = pd.DataFrame(data)
+        print(f"Data loaded from {self.db.name}.{collection.name} collection.")
+        return df
+
+
+class MongoMarketSensor(IMarketSensor):
+    def __init__(self, symbol, interval):
+        super().__init__(symbol, interval)
+        self.update_idx = 0
+        self.test_df = None
+        self.interval_sec = 0.01
+        self.db = MongoDBHandler()
+
+    def scan(self, limits):
+        df = self.db.load(collection_name=f"{self.symbol.name}_raw")
+        length = len(df)
+        limits = 0 if length < limits else limits
+        self.test_df = df[limits:]
+        df = df[:limits] if limits else df
+        return df
+
+    def fetch_one(self):
+        new_data = (
+            self.test_df.iloc[self.update_idx].copy()
+            if not self.test_df.empty
+            else self.test_df
+        )
+        new_data["Matured"] = pd.NaT
+        self.update_idx += 1
+        return pd.DataFrame([new_data], columns=self.test_df.columns)
+
+    def fetch(self, base_df):
+        new_data = self.fetch_one()
+        base_df = pd.concat(
+            [base_df, pd.DataFrame([new_data], columns=base_df.columns)],
+            ignore_index=True,
+        )
+        return base_df
+
+    def left(self):
+        return len(self.test_df) - (self.update_idx + 1)
