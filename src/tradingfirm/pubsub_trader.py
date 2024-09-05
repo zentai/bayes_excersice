@@ -230,12 +230,12 @@ class xHunter(IHunter):
             if order.type in self.buy_types:
                 self.sim_bag.open_position(position, price)
                 self.live_bag.open_position(position, price)
-                print(f"[B] {self.sim_bag:snapshot}")
+                # print(f"[B] {self.sim_bag:snapshot}")
                 msg.append(["-", round(filled_cash_amount, 2), round(price, 8)])
             elif order.type in self.sell_types:
                 self.sim_bag.close_position(position, price)
                 self.live_bag.close_position(position, price)
-                print(f"[S] {self.sim_bag:snapshot}")
+                # print(f"[S] {self.sim_bag:snapshot}")
                 msg.append(["+", round(filled_cash_amount, 2), round(price, 8)])
 
         if msg:
@@ -246,7 +246,7 @@ class xHunter(IHunter):
             market_value = strike - cost
             msg.append(["$", market_value * position, strike])
             msg_df = pd.DataFrame(msg, columns=["@", "USDT", "Price"])
-            print(msg_df)
+            # print(msg_df)
 
     # should be call back here,
     # datetime as id
@@ -266,10 +266,10 @@ class xHunter(IHunter):
     def sim_attack_feedback(self, order_id, order_status, price, position):
         if order_status in (BUY_FILLED):
             self.sim_bag.open_position(position, price)
-            print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
+            # print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
         elif order_status in (SELL_FILLED, CUTOFF_FILLED):
             self.sim_bag.close_position(position, price)
-            print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
+            # print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
 
     # TODO: using huobi callback
     def attack_feedback(upd_event: "OrderUpdateEvent"):
@@ -333,7 +333,7 @@ class xHunter(IHunter):
     ):
         if order_type in ("B", "BL"):
             if market_High <= target_price:
-                print(f"sim_huobi_api: [{order_type}] {hunting_id=}, {target_price=}")
+                # print(f"sim_huobi_api: [{order_type}] {hunting_id=}, {target_price=}")
                 target_price = (
                     market_High if market_High <= target_price else target_price
                 )
@@ -350,13 +350,13 @@ class xHunter(IHunter):
             order_status = None
             if order_type == "S" and market_High >= target_price:  # sell on max profit
                 order_status = SELL_FILLED
-                print(f"mission completed: on hold")
+                # print(f"mission completed: on hold")
                 # self.on_hold = True
             elif order_type == "SL" and market_Low <= target_price:  # sell on cutoff
                 order_status = CUTOFF_FILLED
 
             if order_status:
-                print(f"sim_huobi_api: [{order_status}] {hunting_id=}, {target_price=}")
+                # print(f"sim_huobi_api: [{order_status}] {hunting_id=}, {target_price=}")
                 self.dispatcher.send(
                     signal="sim_attack_feedback",
                     order_id=hunting_id,
@@ -424,9 +424,9 @@ class xHunter(IHunter):
                 ]
                 position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
                 price = cash / position
-                print(f"[Buy Filled]: {order_id=}, {position=}, {price=}")
+                # print(f"[Buy Filled]: {order_id=}, {position=}, {price=}")
                 self.live_bag.open_position(position, price)
-                print(f"live_bag: {self.live_bag:snapshot}")
+                # print(f"live_bag: {self.live_bag:snapshot}")
                 base_df.loc[s_buy_order, "xBuy"] = price
                 base_df.loc[s_buy_order, "xPosition"] = self.live_bag.position
                 base_df.loc[s_buy_order, "xCash"] = self.live_bag.cash
