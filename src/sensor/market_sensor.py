@@ -60,29 +60,32 @@ class LocalMarketSensor(IMarketSensor):
 
     def scan(self, limits):
         df = pandas_util.load_symbols(self.symbol)
-        df = df[-365:]  # Hack !! @fixme take 1 years
         length = len(df)
         limits = 0 if length < limits else limits
         self.test_df = df[limits:]
         df = df[:limits] if limits else df
         return df
 
-    def fetch(self, base_df):
+    def fetch_one(self):
         new_data = (
             self.test_df.iloc[self.update_idx].copy()
             if not self.test_df.empty
             else self.test_df
         )
         new_data["Matured"] = pd.NaT
+        self.update_idx += 1
+        return pd.DataFrame([new_data], columns=self.test_df.columns)
+
+    def fetch(self, base_df):
+        new_data = self.fetch_one()
         base_df = pd.concat(
             [base_df, pd.DataFrame([new_data], columns=base_df.columns)],
             ignore_index=True,
         )
-        self.update_idx += 1
         return base_df
 
     def left(self):
-        return len(self.test_df)
+        return len(self.test_df) - (self.update_idx + 1)
 
 
 class HuobiMarketSensor(IMarketSensor):
@@ -97,8 +100,7 @@ class HuobiMarketSensor(IMarketSensor):
         columns = new_data.columns
         new_data = new_data.iloc[1]
         new_data["Matured"] = pd.NaT
-        new_data = pd.DataFrame([new_data], columns=columns)
-        return new_data
+        return pd.DataFrame([new_data], columns=columns)
 
     def fetch(self, base_df):
         new_data = self.fetch_one()
@@ -107,6 +109,9 @@ class HuobiMarketSensor(IMarketSensor):
             ignore_index=True,
         )
         return base_df
+
+    def left(self):
+        return 1
 
 
 class MongoDBHandler:

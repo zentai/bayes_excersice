@@ -120,9 +120,9 @@ DUMP_COL = [
 
 
 def hunterPause(sp):
-    if sp.simulate:
+    if sp.backtest:
         return
-    if sp.fetch_huobi:
+    else:
         now = datetime.datetime.now()
         minutes_interval = INTERVAL_TO_MIN.get(sp.interval)
         next_whole_point = now.replace(second=0, microsecond=0) + datetime.timedelta(
@@ -197,9 +197,11 @@ class HuntingStory:
 
         hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
         self.hunter.strike_phase(hunting_command)
-        # print(self.base_df[DEBUG_COL][-30:])
-        # print(self.hunter.review_mission(self.base_df))
-        # return self.base_df, self.hunter.review_mission(self.base_df)
+        print(self.base_df[DEBUG_COL][-30:])
+        print(self.hunter.review_mission(self.base_df))
+        if not sp.backtest:
+            self.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
+            print(f"created: {REPORTS_DIR}/{sp}.csv")
 
     def sim_attack_feedback(self, order_id, order_status, price, position):
         if order_status in (BUY_FILLED):
@@ -226,13 +228,15 @@ class HuntingStory:
 
 def start_journey(sp):
     base_df = None
-    # sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
-    # sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
-    sensor = MongoMarketSensor(symbol=sp.symbol, interval=sp.interval)
+    if sp.backtest:
+        sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
+        # sensor = MongoMarketSensor(symbol=sp.symbol, interval=sp.interval)
+    else:
+        sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
     hunter = xHunter(params=sp)
-    base_df = sensor.scan(2000 if not sp.simulate else 100)
+    base_df = sensor.scan(2000 if not sp.backtest else 100)
     story = HuntingStory(sensor, scout, engine, hunter, base_df)
     dispatcher.connect(story.move_forward, signal="k_channel")
     dispatcher.connect(story.sim_attack_feedback, signal="sim_attack_feedback")
@@ -240,63 +244,59 @@ def start_journey(sp):
     print("start thread")
     pub_thread.start()
     pub_thread.join()
-    print(story.base_df[DUMP_COL])
-    review = story.hunter.review_mission(story.base_df)
-    sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
-    story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp.symbol.name}.csv", index=False)
-    print(f"created: {REPORTS_DIR}/{sp.symbol.name}.csv")
+    # print(story.base_df[DUMP_COL])
+    # review = story.hunter.review_mission(story.base_df)
+    # sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
+    story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
+    print(f"created: {REPORTS_DIR}/{sp}.csv")
 
 
-def params_to_filename(params):
-    # Step 1: 筛选重要参数
-    important_params = {
-        "interval": f"{params['interval']}",
-        "ATR_sample": f"ATR{params['ATR_sample']}",
-        "atr_loss_margin": f"ALM{params['atr_loss_margin']}",
-        "hard_cutoff": f"HC{params['hard_cutoff']}",
-        "profit_loss_ratio": f"PLR{params['profit_loss_ratio']}",
-        "bayes_windows": f"BW{params['bayes_windows']}",
-        "surfing_level": f"SL{params['surfing_level']}",
-    }
-
-    # Step 2: 简化命名并组合成文件名
-    filename = "_".join(important_params.values())
-
-    # Step 3: 处理特殊字符
-    filename = filename.replace("/", "-").replace("\\", "-")
-
-    # Step 4: 添加文件扩展名
-    filename += ".csv"
-
-    return filename
-
+# very good for BTCUSDT day K
+# params = {
+#     "ATR_sample": 15,
+#     "atr_loss_margin": 3,
+#     "hard_cutoff": 0.9,
+#     "profit_loss_ratio": 2,
+#     "bayes_windows": 15,
+#     "lower_sample": 15.0,
+#     "upper_sample": 15.0,
+#     "interval": "1min",
+#     "funds": 100,
+#     "stake_cap": 50,
+#     "symbol": None,
+#     "surfing_level": 3,
+#     "fetch_huobi": False,
+#     "simulate": True,
+# }
 
 params = {
-    "ATR_sample": 7,
-    "atr_loss_margin": 1.5,
-    "hard_cutoff": 0.95,
-    "profit_loss_ratio": 3.0,
-    "bayes_windows": 30,
-    "lower_sample": 30.0,
-    "upper_sample": 30.0,
+    # Buy
+    "ATR_sample": 15,
+    "bayes_windows": 15,
+    "lower_sample": 15,
+    "upper_sample": 15,
+    # Sell
+    "hard_cutoff": 0.99,
+    "profit_loss_ratio": 2,
+    "atr_loss_margin": 3,
+    "surfing_level": 3,
+    # Period
     "interval": "1min",
     "funds": 100,
     "stake_cap": 50,
     "symbol": None,
-    "surfing_level": 7,
-    "fetch_huobi": False,
-    "simulate": True,
+    "backtest": False,
 }
+
 
 if __name__ == "__main__":
     params.update(
         {
-            "interval": "1day",
+            "interval": "1min",
             "funds": 100,
-            "stake_cap": 50,
+            "stake_cap": 100,
             "symbol": Symbol("btcusdt"),
         }
     )
     sp = StrategyParam(**params)
-    print(sp)
     start_journey(sp)

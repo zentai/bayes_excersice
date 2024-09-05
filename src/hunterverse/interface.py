@@ -105,11 +105,20 @@ class StrategyParam:
     funds: float = 100
     stake_cap: int = 50
     interval: str = "1min"
-    fetch_huobi: bool = False
-    simulate: bool = False
+    backtest: bool = False
 
     def __post_init__(self):
         self.ATR_sample = int(self.ATR_sample)
         self.bayes_windows = int(self.bayes_windows)
         self.lower_sample = int(self.lower_sample)
         self.upper_sample = int(self.upper_sample)
+
+    def __str__(self):
+        return self.__repr__()
+
+    def __repr__(self):
+        # btcusdt1min_atrw15bw15up15lw15_cut0.99pnl2ext3stp3
+        header = f"{self.symbol.name}{self.interval}"
+        buy_params = f"atr{self.ATR_sample}bw{self.bayes_windows}up{self.upper_sample}lw{self.lower_sample}"
+        sell_params = f"cut{self.hard_cutoff}pnl{self.profit_loss_ratio}ext{self.atr_loss_margin}stp{self.surfing_level}"
+        return f"{header}_{buy_params}_{sell_params}"

@@ -81,7 +81,7 @@ class GainsBag:
         snapshot_avg_cost = round(self.avg_cost, self.symbol.price_prec)  # USDT
         snapshot_position = round(self.position, self.symbol.amount_prec)
         snapshot_cash = round(self.cash, 2)  # USDT
-        print(f"{self:snapshot}")
+        # print(f"{self:snapshot}")
         self.logger.info(f"{self:snapshot}")
 
     def discharge(self, ratio):
@@ -159,8 +159,6 @@ class xHunter(IHunter):
         self.sell_types = ("sell-limit", "sell-stop-limit", "sell-market")
         self.status = ("filled", "partial-canceled", "partial-filled")
         self.params = params
-        self.fetch_huobi = params.fetch_huobi
-        self.simulate = params.simulate
         self.sim_bag = GainsBag(
             symbol=params.symbol, init_funds=params.funds, stake_cap=params.stake_cap
         )
@@ -533,14 +531,14 @@ class xHunter(IHunter):
             )
             final_stop_price = max(Stop_profit, min_profit)
 
-            print(f"[CUTOFF] {self.sim_bag.cutoff_price(self.params.hard_cutoff)}")
-            print("==========================")
-            print(f"[Exit_P] {exit_price}")
-            print("==========================")
-            print(f"[STOP_P] {Stop_profit}")
-            print(f"[MIN_P] {min_profit}")
-            print("==========================")
-            print(f"[END_P] {final_stop_price}")
+            # print(f"[CUTOFF] {self.sim_bag.cutoff_price(self.params.hard_cutoff)}")
+            # print("==========================")
+            # print(f"[Exit_P] {exit_price}")
+            # print("==========================")
+            # print(f"[STOP_P] {Stop_profit}")
+            # print(f"[MIN_P] {min_profit}")
+            # print("==========================")
+            # print(f"[END_P] {final_stop_price}")
 
             if market_Low <= self.sim_bag.cutoff_price(self.params.hard_cutoff):
                 price = self.sim_bag.cutoff_price(self.params.hard_cutoff)
@@ -639,11 +637,11 @@ class xHunter(IHunter):
                 cash = _order.filled_cash_amount
                 position = _order.filled_amount
                 price = cash / position
-                print(f"[Sell Order filled]: {order_id=}, {position=}, {price=}")
+                # print(f"[Sell Order filled]: {order_id=}, {position=}, {price=}")
                 self.live_bag.close_position(position, price)
-                print(f"live_bag: {self.live_bag:snapshot}")
+                # print(f"live_bag: {self.live_bag:snapshot}")
                 if _order.type == "sell-limit":
-                    print(f"mission completed: on hold")
+                    # print(f"mission completed: on hold")
                     self.on_hold = True
                 base_df.loc[pending_order, "xSell"] = price
                 base_df.loc[pending_order, "xProfit"] = (
@@ -711,12 +709,16 @@ class xHunter(IHunter):
         return self.live_bag.portfolio(pre_strike, strike)
 
     def review_mission(self, base_df):
-        df = base_df[base_df.BuySignal == 1]
-        sample = len(df)
-        profit_sample = len(df[df.xProfit > 0])
-        profit_mean = (df.sProfit > 0).mean() or ZERO
-        loss_mean = (df.sProfit <= 0).mean() or ZERO
-        profit_loss_ratio = profit_mean / loss_mean
+        # df = base_df[base_df.BuySignal == 1]
+        df = base_df
+        sample = len(df[df.sBuy.notna()]) or 0.00001
+        profit_sample = (
+            f"{len(df[df.sProfit > 0])/sample:.2f}({len(df[df.sProfit > 0])}/{sample})"
+        )
+        profit_mean = df[df.sProfit >= 0].sProfit.median() or ZERO
+        loss_mean = abs(df[df.sProfit < 0].sProfit.median() or ZERO)
+        profit_loss_ratio = f"{profit_mean / loss_mean:.3f}"
+        # profit_loss_ratio = len(df[df.sProfit > 0]) / sample
         cost = self.sim_bag.init_funds
         strike = base_df.iloc[-1].Close
         profit = self.sim_bag.cash + (self.sim_bag.position * strike) - cost
