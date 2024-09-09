@@ -21,6 +21,9 @@ TURTLE_COLUMNS = [
     "Stop_profit",
     "exit_price",
     "OBV_UP",
+    "VWMA",
+    "Slope",
+    "Slope_Diff",
     "buy",
     "sell",
     "profit",
@@ -28,6 +31,8 @@ TURTLE_COLUMNS = [
     "Matured",
     "BuySignal",
     "P/L",
+    "PRICE_VOL_reduce",
+    "Rolling_Std",
 ]
 
 
@@ -142,7 +147,8 @@ class TurtleScout(IStrategyScout):
         surfing_profit = mean + (self.params.surfing_level * stdv)
         base_df.iloc[-1, base_df.columns.get_loc("Stop_profit")] = surfing_profit
         cut_off = base_df.Close.shift(1) - base_df.ATR.shift(1) * atr_loss_margin
-        base_df.loc[idx, "exit_price"] = np.maximum(base_df["turtle_l"], cut_off)
+        base_df.loc[idx, "exit_price"] = cut_off
+        # base_df.loc[idx, "exit_price"] = np.maximum(base_df["turtle_l"], cut_off)
         return base_df
 
     def _calc_OBV(self, base_df, multiplier=3.4):
@@ -170,6 +176,18 @@ class TurtleScout(IStrategyScout):
         # Calculate relative difference between bounds
         df["bound_diff"] = (df["upper_bound"] - df["lower_bound"]) / df["OBV_MA"]
 
+        df["PRICE_UP"] = df["High"] >= (
+            df["Close"].rolling(window=self.params.upper_sample).mean()
+            + 3 * df["Close"].rolling(window=self.params.upper_sample).std()
+        )
+
+        # 计算滚动窗口内的标准差
+        df["Rolling_Std"] = df["Close"].rolling(window=self.params.upper_sample).std()
+        df["Rolling_Std_Percent"] = (
+            df["Rolling_Std"]
+            / df["Close"].rolling(window=self.params.upper_sample).mean()
+        ) * 100
+
         # Identify significant points where OBV crosses the upper bound
         df["OBV_UP"] = (
             (df["OBV"] > df["upper_bound"])
@@ -180,7 +198,17 @@ class TurtleScout(IStrategyScout):
 
         # Combine the new 'OBV_UP' column back to the original dataframe
         base_df["OBV"] = df["OBV"]
-        base_df["OBV_UP"] = df["OBV_UP"]
+        # base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_UP"]
+        # base_df["OBV_UP"] = df["OBV_UP"]
+        base_df.at[df.index[-1], "OBV_UP"] = (
+            df["Rolling_Std_Percent"].iloc[-1]
+            <= df["Rolling_Std_Percent"]
+            .rolling(window=self.params.bayes_windows)
+            .min()
+            .iloc[-1]
+        )
+
+        base_df["Rolling_Std"] = df["Rolling_Std_Percent"]
         base_df["upper_bound"] = df["upper_bound"]
         base_df["lower_bound"] = df["lower_bound"]
         return base_df
@@ -192,6 +220,16 @@ class TurtleScout(IStrategyScout):
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         base_df = self._calc_ATR(base_df)
+        base_df = self._calc_VWMA(base_df, window=self.params.upper_sample)
         base_df = self._calc_OBV(base_df, multiplier=2)
         base_df = self._calc_profit(base_df)
         return base_df
+
+    def _calc_VWMA(self, df, window):
+        df["VWMA"] = (df.Close * df.Vol).rolling(window=window).sum() / df.Vol.rolling(
+            window=window
+        ).sum()
+        df["Slope"] = (df.Close - df.VWMA.shift(window)) / window
+        df["Slope_Diff"] = df.Slope - df.Slope.shift(1)
+        df["OBV_UP"] = df["OBV_UP"] & (df["Slope"] >= 0)
+        return df

@@ -254,14 +254,14 @@ class xHunter(IHunter):
     # sell_commands: isSell, target_price. percentage
 
     def strike_phase(self, hunting_command):
-        if "buy" in hunting_command:
-            self.sim_attack(**hunting_command.get("buy"))
-            # if not self.simulate:
-            #     self.attack(**hunting_command.get("buy"))
         if "sell" in hunting_command:
             self.sim_retreat(**hunting_command.get("sell"))
             # if not self.simulate:
             #     self.retreat(**hunting_command.get("sell"))
+        if "buy" in hunting_command:
+            self.sim_attack(**hunting_command.get("buy"))
+            # if not self.simulate:
+            #     self.attack(**hunting_command.get("buy"))
 
     def sim_attack_feedback(self, order_id, order_status, price, position):
         if order_status in (BUY_FILLED):
