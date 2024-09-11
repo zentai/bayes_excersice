@@ -50,9 +50,9 @@ DEBUG_COL = [
     "Stop_profit",
     "exit_price",
     # "time_cost",
-    "buy",
-    "sell",
-    "profit",
+    # "buy",
+    # "sell",
+    # "profit",
     "OBV_UP",
     "sBuy",
     "sSell",
@@ -61,6 +61,7 @@ DEBUG_COL = [
     "sCash",
     "sAvgCost",
     "sPnLRatio",
+    "sStatus",
     # "xBuy",
     # "xSell",
     # "xProfit",
@@ -69,10 +70,10 @@ DEBUG_COL = [
     # "xAvgCost",
     # "xBuyOrder",
     # "xSellOrder",
-    "Kelly",
+    # "Kelly",
     # "Postrior",
-    "P/L",
-    "likelihood",
+    # "P/L",
+    # "likelihood",
     # "profit_margin",
     # "loss_margin",
 ]
@@ -84,14 +85,14 @@ DUMP_COL = [
     "Low",
     "Close",
     "Vol",
-    "BuySignal",
+    # "BuySignal",
     "Stop_profit",
     "exit_price",
-    "Matured",
-    "time_cost",
-    "buy",
-    "sell",
-    "profit",
+    # "Matured",
+    # "time_cost",
+    # "buy",
+    # "sell",
+    # "profit",
     # "turtle_l",
     # "turtle_h",
     "OBV_UP",
@@ -102,6 +103,7 @@ DUMP_COL = [
     "sCash",
     "sAvgCost",
     "sPnLRatio",
+    "sStatus",
     # "xBuy",
     # "xSell",
     # "xProfit",
@@ -110,12 +112,12 @@ DUMP_COL = [
     # "xAvgCost",
     # "xBuyOrder",
     # "xSellOrder",
-    "Kelly",
-    "Postrior",
-    "P/L",
-    "likelihood",
-    "profit_margin",
-    "loss_margin",
+    # "Kelly",
+    # "Postrior",
+    # "P/L",
+    # "likelihood",
+    # "profit_margin",
+    # "loss_margin",
 ]
 
 
@@ -197,9 +199,9 @@ class HuntingStory:
 
         hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
         self.hunter.strike_phase(hunting_command)
-        print(self.base_df[DEBUG_COL][-30:])
-        print(self.hunter.review_mission(self.base_df))
-        if not sp.backtest:
+        # print(self.base_df[DEBUG_COL][-30:])
+        # print(self.hunter.review_mission(self.base_df))
+        if not self.hunter.params.backtest:
             self.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
             print(f"created: {REPORTS_DIR}/{sp}.csv")
 
@@ -211,7 +213,8 @@ class HuntingStory:
             self.base_df.loc[s_buy_order, "sPosition"] = self.hunter.sim_bag.position
             self.base_df.loc[s_buy_order, "sCash"] = self.hunter.sim_bag.cash
             self.base_df.loc[s_buy_order, "sAvgCost"] = self.hunter.sim_bag.avg_cost
-        elif order_status in (SELL_FILLED, CUTOFF_FILLED):
+            self.base_df.loc[s_buy_order, "sStatus"] = order_status
+        elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
             s_sell_order = self.base_df.Date == order_id
             self.base_df.loc[s_sell_order, "sSellOrder"] = order_id
             self.base_df.loc[s_sell_order, "sBuy"] = self.hunter.sim_bag.avg_cost
@@ -221,6 +224,7 @@ class HuntingStory:
             self.base_df.loc[s_sell_order, "sPosition"] = self.hunter.sim_bag.position
             self.base_df.loc[s_sell_order, "sCash"] = self.hunter.sim_bag.cash
             self.base_df.loc[s_sell_order, "sAvgCost"] = self.hunter.sim_bag.avg_cost
+            self.base_df.loc[s_sell_order, "sStatus"] = order_status
             self.base_df.loc[s_sell_order, "sPnLRatio"] = profit / (
                 1 - self.hunter.params.hard_cutoff
             )
@@ -241,7 +245,6 @@ def start_journey(sp):
     dispatcher.connect(story.move_forward, signal="k_channel")
     dispatcher.connect(story.sim_attack_feedback, signal="sim_attack_feedback")
     pub_thread = story.pub_market_sensor(sp)
-    print("start thread")
     pub_thread.start()
     pub_thread.join()
     # print(story.base_df[DUMP_COL])
@@ -249,6 +252,7 @@ def start_journey(sp):
     # sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
     story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
     print(f"created: {REPORTS_DIR}/{sp}.csv")
+    return story.base_df[DUMP_COL], story.hunter.review_mission(story.base_df)
 
 
 # very good for BTCUSDT day K
@@ -276,7 +280,7 @@ params = {
     "lower_sample": 15,
     "upper_sample": 15,
     # Sell
-    "hard_cutoff": 0.99,
+    "hard_cutoff": 0.95,
     "profit_loss_ratio": 2,
     "atr_loss_margin": 3,
     "surfing_level": 3,
@@ -285,7 +289,7 @@ params = {
     "funds": 100,
     "stake_cap": 50,
     "symbol": None,
-    "backtest": False,
+    "backtest": True,
 }
 
 
@@ -295,7 +299,7 @@ if __name__ == "__main__":
             "interval": "1min",
             "funds": 100,
             "stake_cap": 100,
-            "symbol": Symbol("btcusdt"),
+            "symbol": Symbol("0018.KL"),
         }
     )
     sp = StrategyParam(**params)

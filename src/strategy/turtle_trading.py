@@ -198,15 +198,16 @@ class TurtleScout(IStrategyScout):
 
         # Combine the new 'OBV_UP' column back to the original dataframe
         base_df["OBV"] = df["OBV"]
+        base_df["OBV_UP"] = df["OBV_UP"] & (df["Slope"] >= 0)
         # base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_UP"]
         # base_df["OBV_UP"] = df["OBV_UP"]
-        base_df.at[df.index[-1], "OBV_UP"] = (
-            df["Rolling_Std_Percent"].iloc[-1]
-            <= df["Rolling_Std_Percent"]
-            .rolling(window=self.params.bayes_windows)
-            .min()
-            .iloc[-1]
-        )
+        # base_df.at[df.index[-1], "OBV_UP"] = (
+        #     df["Rolling_Std_Percent"].iloc[-1]
+        #     <= df["Rolling_Std_Percent"]
+        #     .rolling(window=self.params.bayes_windows)
+        #     .min()
+        #     .iloc[-1]
+        # )
 
         base_df["Rolling_Std"] = df["Rolling_Std_Percent"]
         base_df["upper_bound"] = df["upper_bound"]
@@ -231,5 +232,4 @@ class TurtleScout(IStrategyScout):
         ).sum()
         df["Slope"] = (df.Close - df.VWMA.shift(window)) / window
         df["Slope_Diff"] = df.Slope - df.Slope.shift(1)
-        df["OBV_UP"] = df["OBV_UP"] & (df["Slope"] >= 0)
         return df

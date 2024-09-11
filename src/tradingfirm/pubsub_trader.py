@@ -254,11 +254,13 @@ class xHunter(IHunter):
     # sell_commands: isSell, target_price. percentage
 
     def strike_phase(self, hunting_command):
+
+        sim_retreat = False
         if "sell" in hunting_command:
-            self.sim_retreat(**hunting_command.get("sell"))
+            sim_retreat = self.sim_retreat(**hunting_command.get("sell"))
             # if not self.simulate:
             #     self.retreat(**hunting_command.get("sell"))
-        if "buy" in hunting_command:
+        if "buy" in hunting_command and not sim_retreat:
             self.sim_attack(**hunting_command.get("buy"))
             # if not self.simulate:
             #     self.attack(**hunting_command.get("buy"))
@@ -267,7 +269,8 @@ class xHunter(IHunter):
         if order_status in (BUY_FILLED):
             self.sim_bag.open_position(position, price)
             # print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
-        elif order_status in (SELL_FILLED, CUTOFF_FILLED):
+        # elif order_status in (SELL_FILLED, CUTOFF_FILLED):
+        elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
             self.sim_bag.close_position(position, price)
             # print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
 
@@ -346,14 +349,19 @@ class xHunter(IHunter):
                 )
             else:
                 print(f"[Buy Missed]: {hunting_id=}, {market_High=}, {target_price=}")
-        elif order_type in ("S", "SL"):
+        elif order_type in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
             order_status = None
-            if order_type == "S" and market_High >= target_price:  # sell on max profit
-                order_status = SELL_FILLED
+            if (
+                order_type in ("Profit_LEAVE", "ATR_EXIT")
+                and market_High >= target_price
+            ):  # sell on max profit
+                order_status = order_type
                 # print(f"mission completed: on hold")
                 # self.on_hold = True
-            elif order_type == "SL" and market_Low <= target_price:  # sell on cutoff
-                order_status = CUTOFF_FILLED
+            elif (
+                order_type == "CUTOFF" and market_Low <= target_price
+            ):  # sell on cutoff
+                order_status = "CUTOFF"
 
             if order_status:
                 # print(f"sim_huobi_api: [{order_status}] {hunting_id=}, {target_price=}")
@@ -542,7 +550,7 @@ class xHunter(IHunter):
 
             if market_Low <= self.sim_bag.cutoff_price(self.params.hard_cutoff):
                 price = self.sim_bag.cutoff_price(self.params.hard_cutoff)
-                order_type = "S"
+                order_type = "CUTOFF"
                 self.sim_huobi_api(
                     hunting_id,
                     price,
@@ -551,9 +559,10 @@ class xHunter(IHunter):
                     market_High,
                     market_Low,
                 )
+                return True
             elif market_Low <= exit_price:
                 price = exit_price
-                order_type = "S"
+                order_type = "ATR_EXIT"
                 self.sim_huobi_api(
                     hunting_id,
                     price,
@@ -562,11 +571,12 @@ class xHunter(IHunter):
                     market_High,
                     market_Low,
                 )
+                return True
             else:
                 # Check if the market price meets the take profit condition
                 if market_High >= final_stop_price:
                     price = final_stop_price
-                    order_type = "S"
+                    order_type = "Profit_LEAVE"
                     self.sim_huobi_api(
                         hunting_id,
                         price,
@@ -575,7 +585,8 @@ class xHunter(IHunter):
                         market_High,
                         market_Low,
                     )
-        return
+                    return True
+        return False
 
     """
         # # Findout the pending order dataframe and record down, we should move it upper level
@@ -712,9 +723,10 @@ class xHunter(IHunter):
         # df = base_df[base_df.BuySignal == 1]
         df = base_df
         sample = len(df[df.sBuy.notna()]) or 0.00001
-        profit_sample = (
-            f"{len(df[df.sProfit > 0])/sample:.2f}({len(df[df.sProfit > 0])}/{sample})"
-        )
+        profit_sample = "0.00"
+        # profit_sample = (
+        #     f"{len(df[df.sProfit > 0])/sample:.2f}({len(df[df.sProfit > 0])}/{sample})"
+        # )
         profit_mean = df[df.sProfit >= 0].sProfit.median() or ZERO
         loss_mean = abs(df[df.sProfit < 0].sProfit.median() or ZERO)
         profit_loss_ratio = f"{profit_mean / loss_mean:.3f}"
@@ -730,6 +742,34 @@ class xHunter(IHunter):
         _annual_return, _sortino_ratio = calc_annual_return_and_sortino_ratio(
             cost, profit, df
         )
+
+        exit_stats = pd.DataFrame(
+            {"ATR_Profit": [0], "ATR_Loss": [0], "CUTOFF": [0], "Profit_LEAVE": [0]},
+            index=["Percentage"],
+        ).loc["Percentage"]
+
+        if "sStatus" in df.columns:
+            df = df[df.sStatus != "Buy_filled"]
+            atr_cutoff_counts = df.apply(
+                lambda row: (
+                    "ATR_Profit"
+                    if row["sStatus"] == "ATR_EXIT" and row["sProfit"] > 0
+                    else (
+                        "ATR_Loss"
+                        if row["sStatus"] == "ATR_EXIT" and row["sProfit"] < 0
+                        else row["sStatus"]
+                    )
+                ),
+                axis=1,
+            ).value_counts()
+
+            for category in ["ATR_Profit", "ATR_Loss", "CUTOFF", "Profit_LEAVE"]:
+                if category not in atr_cutoff_counts:
+                    atr_cutoff_counts[category] = 0.0
+            atr_percentages = atr_cutoff_counts / atr_cutoff_counts.sum()
+            exit_stats = pd.DataFrame({"Percentage": atr_percentages}).T.iloc[-1]
+            profit_sample = f"{(exit_stats.Profit_LEAVE + exit_stats.ATR_Profit):.2f}"
+
         return pd.DataFrame(
             [
                 [
@@ -746,7 +786,10 @@ class xHunter(IHunter):
                     self.sim_bag.cash,
                     self.sim_bag.position,
                     self.sim_bag.avg_cost,
-                    self.on_hold,
+                    exit_stats.Profit_LEAVE,
+                    exit_stats.ATR_Profit,
+                    exit_stats.ATR_Loss,
+                    exit_stats.CUTOFF,
                 ]
             ],
             columns=[
@@ -763,7 +806,10 @@ class xHunter(IHunter):
                 "Cash",
                 "Position",
                 "Avg.Cost",
-                "Onhold",
+                "Profit_LEAVE",
+                "ATR_Profit",
+                "ATR_loss",
+                "CUTOFF",
             ],
         )
 
