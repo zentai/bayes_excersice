@@ -60,6 +60,7 @@ class LocalMarketSensor(IMarketSensor):
 
     def scan(self, limits):
         df = pandas_util.load_symbols(self.symbol)
+        # df = df[-365:]
         length = len(df)
         limits = 0 if length < limits else limits
         self.test_df = df[limits:]

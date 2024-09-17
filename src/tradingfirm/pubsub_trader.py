@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import numpy as np
 import logging
+from datetime import datetime
 
 from pydispatch import dispatcher
 from huobi.constant.definition import OrderType, OrderState
@@ -28,6 +29,7 @@ HUNTER_COLUMNS = [
     "sBuyOrder",
     "sSellOrder",
     "sPnLRatio",
+    "sStatus",
     "xBuy",
     "xSell",
     "xProfit",
@@ -152,6 +154,117 @@ class GainsBag:
             return self.name
 
 
+from dataclasses import dataclass, field
+from typing import Optional, List
+
+
+@dataclass
+class SimOrder:
+    order_id: str
+    position: float
+
+
+@dataclass
+class SimBuyOrder(SimOrder):
+    target_price: float
+    order_type: str = "B"  # 默认订单类型为买入
+    status: str = "unfilled"
+    timestamp: datetime = field(default_factory=datetime.now)
+    executed_price: Optional[float] = None  # 成交价格
+
+
+@dataclass
+class SimSellOrder(SimOrder):
+    cutoff_price: float
+    atr_exit_price: float
+    profit_leave_price: float
+    order_type: str = "S"  # 默认订单类型为卖出
+    status: str = "unfilled"
+    timestamp: datetime = field(default_factory=datetime.now)
+    executed_price: Optional[float] = None  # 成交价格
+
+
+class SimHuobi:
+    def __init__(self):
+        self.buy_order: Optional[SimBuyOrder] = None  # 当前的买入订单
+        self.sell_order: Optional[SimSellOrder] = None  # 当前的卖出订单
+        self.dispatcher = dispatcher
+        self.dispatcher.connect(self.match_orders, signal="k_channel")
+
+    def place_order(self, order):
+
+        if isinstance(order, SimBuyOrder):
+            # print(f"1. place order {order}")
+            self.buy_order = order
+            self.buy_order.timestamp = order.order_id
+        elif isinstance(order, SimSellOrder):
+            self.sell_order = order
+            self.sell_order.timestamp = order.order_id
+
+    def match_orders(self, message):
+        market_high, market_low = message.iloc[-1].High, message.iloc[-1].Low
+        execute_timestamp = message.iloc[-1].Date
+        # print(f">>Received: {message.iloc[-1].Date}")
+        # 检查卖出订单
+        if self.sell_order and self.sell_order.status == "unfilled":
+            order = self.sell_order
+
+            # 按优先级检查出场价格
+            if market_low <= order.cutoff_price:
+                order.status = "CUTOFF"
+                order.timestamp = execute_timestamp
+                order.executed_price = order.cutoff_price
+                # print(f"2. match order {order}")
+                self.dispatcher.send(
+                    signal="sim_order_update",
+                    order_id=order.order_id,
+                    order_status=order.status,
+                    price=order.cutoff_price,
+                    position=order.position,
+                )
+            elif market_low <= order.atr_exit_price:
+                order.status = "ATR_EXIT"
+                order.executed_price = order.atr_exit_price
+                order.timestamp = execute_timestamp
+                # print(f"2. match order {order}")
+                self.dispatcher.send(
+                    signal="sim_order_update",
+                    order_id=order.order_id,
+                    order_status=order.status,
+                    price=order.atr_exit_price,
+                    position=order.position,
+                )
+
+            elif market_high >= order.profit_leave_price:
+                order.status = "Profit_LEAVE"
+                order.executed_price = order.profit_leave_price
+                order.timestamp = execute_timestamp
+                # print(f"2. match order {order}")
+                self.dispatcher.send(
+                    signal="sim_order_update",
+                    order_id=order.order_id,
+                    order_status=order.status,
+                    price=order.profit_leave_price,
+                    position=order.position,
+                )
+
+        # 检查买入订单
+        if self.buy_order and self.buy_order.status == "unfilled":
+            if market_low <= self.buy_order.target_price:
+                order = self.buy_order
+                order.status = BUY_FILLED
+                order.executed_price = order.target_price
+                order.timestamp = execute_timestamp
+                # print(f"2. match order {order}")
+                self.dispatcher.send(
+                    signal="sim_order_update",
+                    order_id=order.order_id,
+                    order_status=order.status,
+                    price=order.target_price,
+                    position=order.position,
+                )
+
+
 class xHunter(IHunter):
     def __init__(self, params):
         super().__init__()
@@ -168,8 +281,11 @@ class xHunter(IHunter):
         self.on_hold = False
         # move dispatcher connect to function call
         self.dispatcher = dispatcher
-        self.dispatcher.connect(self.sim_attack_feedback, signal="sim_attack_feedback")
+        self.dispatcher.connect(self.sim_order_update, signal="sim_order_update")
         self.dispatcher.connect(self.attack_feedback, signal="attack_feedback")
+
+        # for sim huobi api
+        self.sim_huobi = SimHuobi()
 
     def cutoff(self, strike):
         cutoff_price = self.live_bag.cutoff_price(self.params.hard_cutoff)
@@ -248,11 +364,6 @@ class xHunter(IHunter):
             msg_df = pd.DataFrame(msg, columns=["@", "USDT", "Price"])
             # print(msg_df)
 
-    # should be call back here,
-    # datetime as id
-    # buy_commands: isBuy, target_price, kelly
-    # sell_commands: isSell, target_price. percentage
-
     def strike_phase(self, hunting_command):
 
         sim_retreat = False
@@ -265,14 +376,14 @@ class xHunter(IHunter):
             # if not self.simulate:
             #     self.attack(**hunting_command.get("buy"))
 
-    def sim_attack_feedback(self, order_id, order_status, price, position):
+    def sim_order_update(self, order_id, order_status, price, position):
         if order_status in (BUY_FILLED):
             self.sim_bag.open_position(position, price)
-            # print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
+            # print(f"3. {order_status}: {order_id}: {self.sim_bag:snapshot}")
         # elif order_status in (SELL_FILLED, CUTOFF_FILLED):
         elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
             self.sim_bag.close_position(position, price)
-            # print(f"{order_status}: {order_id}: {self.sim_bag:snapshot}")
+            # print(f"3. {order_status}: {order_id}: {self.sim_bag:snapshot}")
 
     # TODO: using huobi callback
     def attack_feedback(upd_event: "OrderUpdateEvent"):
@@ -331,61 +442,6 @@ class xHunter(IHunter):
             self.sim_bag.get_un_pnl(self.lastest_candlestick.Close)
         )
 
-    def sim_huobi_api(
-        self, hunting_id, target_price, position, order_type, market_High, market_Low
-    ):
-        if order_type in ("B", "BL"):
-            if market_High <= target_price:
-                # print(f"sim_huobi_api: [{order_type}] {hunting_id=}, {target_price=}")
-                target_price = (
-                    market_High if market_High <= target_price else target_price
-                )
-                self.dispatcher.send(
-                    signal="sim_attack_feedback",
-                    order_id=hunting_id,
-                    order_status=BUY_FILLED,
-                    price=target_price,
-                    position=position,
-                )
-            else:
-                print(f"[Buy Missed]: {hunting_id=}, {market_High=}, {target_price=}")
-        elif order_type in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
-            order_status = None
-            if (
-                order_type in ("Profit_LEAVE", "ATR_EXIT")
-                and market_High >= target_price
-            ):  # sell on max profit
-                order_status = order_type
-                # print(f"mission completed: on hold")
-                # self.on_hold = True
-            elif (
-                order_type == "CUTOFF" and market_Low <= target_price
-            ):  # sell on cutoff
-                order_status = "CUTOFF"
-
-            if order_status:
-                # print(f"sim_huobi_api: [{order_status}] {hunting_id=}, {target_price=}")
-                self.dispatcher.send(
-                    signal="sim_attack_feedback",
-                    order_id=hunting_id,
-                    order_status=order_status,
-                    price=target_price,
-                    position=position,
-                )
-
-        # FIXME: cancel order should be somewhere
-        # cancel old orders
-        # s_buy_order = (
-        #     base_df.sBuyOrder.notna()
-        #     & (base_df.sBuyOrder != "Cancel")
-        #     & base_df.sBuy.isna()
-        # )
-        # base_df.loc[s_buy_order, "sBuyOrder"] = "Cancel"
-
-        # base_df.loc[base_df.Date == self.lastest_candlestick.Date, "sCash"] = (
-        #     self.sim_bag.get_un_pnl(self.lastest_candlestick.Close)
-        # )
-
     def ready_to_move_turtle_scout(self):
         # TODO: is_fly should be done be turtle scout, trader only executed one price.
         """
@@ -401,15 +457,17 @@ class xHunter(IHunter):
 
     # trade_ts, target_price, kelly
     # try to book a order, create an id-orderid mapping for call back
-    def sim_attack(
-        self, hunting_id, target_price, order_type, kelly, market_High, market_Low
-    ):
+    def sim_attack(self, hunting_id, target_price, order_type, kelly):
         if self.sim_bag.is_enough_cash() and not self.on_hold:
             budget = self.sim_bag.discharge(kelly)
             position = budget / target_price
-            self.sim_huobi_api(
-                hunting_id, target_price, position, order_type, market_High, market_Low
+            buy_order = SimBuyOrder(
+                order_id=hunting_id,
+                target_price=target_price,
+                position=position,
+                order_type=order_type,
             )
+            self.sim_huobi.place_order(buy_order)
 
     def attack(self, base_df):
         # check Limit-buy status
@@ -488,144 +546,24 @@ class xHunter(IHunter):
                 print(f"[xHunter.attack()] place order fail: {e}")
         return base_df
 
-    """
-    def sim_retreat(self, hunting_id, target_price, position, market_High, market_Low, exit_price, Stop_profit, strike, high, low):
-        # Step 1: Calculate cutoff price and update Stop_profit
-        cutoff_price = max(self.params.hard_cutoff * self.sim_bag.avg_cost, exit_price)
-        Stop_profit = max(cutoff_price, Stop_profit)
-
-        # Step 2: Implement the main logic
+    def sim_retreat(self, hunting_id, exit_price, Stop_profit):
         if self.sim_bag.is_enough_position():
             position = self.sim_bag.position
-            is_cutoff = strike <= max(cutoff_price, exit_price)
-
-            if is_cutoff:
-                price = strike
-                order_type = "SL"
-                order_status = 'cutoff_filled'
-            else:
-                max_loss = self.sim_bag.avg_cost * (1 - self.params.hard_cutoff)
-                min_profit = self.sim_bag.avg_cost + (max_loss * self.params.profit_loss_ratio)
-                Stop_profit = max(Stop_profit, min_profit)
-                price = Stop_profit
-                order_type = "S"
-                order_status = 'profit_filled'
-
-            self.dispatcher.send(
-                signal="sim_attack_feedback",
-                order_id=hunting_id,
-                order_status=order_status,
-                price=price,
-                position=position
-            )
-
-        return
-
-
-
-    """
-
-    def sim_retreat(
-        self,
-        hunting_id,
-        market_High,
-        market_Low,
-        exit_price,
-        Stop_profit,
-    ):
-        if self.sim_bag.is_enough_position():
-            min_profit = self.sim_bag.avg_cost * (
+            avg_cost = self.sim_bag.avg_cost
+            min_profit = avg_cost * (
                 1 + (1 - self.params.hard_cutoff) * self.params.profit_loss_ratio
             )
             final_stop_price = max(Stop_profit, min_profit)
 
-            # print(f"[CUTOFF] {self.sim_bag.cutoff_price(self.params.hard_cutoff)}")
-            # print("==========================")
-            # print(f"[Exit_P] {exit_price}")
-            # print("==========================")
-            # print(f"[STOP_P] {Stop_profit}")
-            # print(f"[MIN_P] {min_profit}")
-            # print("==========================")
-            # print(f"[END_P] {final_stop_price}")
-
-            if market_Low <= self.sim_bag.cutoff_price(self.params.hard_cutoff):
-                price = self.sim_bag.cutoff_price(self.params.hard_cutoff)
-                order_type = "CUTOFF"
-                self.sim_huobi_api(
-                    hunting_id,
-                    price,
-                    self.sim_bag.position,
-                    order_type,
-                    market_High,
-                    market_Low,
-                )
-                return True
-            elif market_Low <= exit_price:
-                price = exit_price
-                order_type = "ATR_EXIT"
-                self.sim_huobi_api(
-                    hunting_id,
-                    price,
-                    self.sim_bag.position,
-                    order_type,
-                    market_High,
-                    market_Low,
-                )
-                return True
-            else:
-                # Check if the market price meets the take profit condition
-                if market_High >= final_stop_price:
-                    price = final_stop_price
-                    order_type = "Profit_LEAVE"
-                    self.sim_huobi_api(
-                        hunting_id,
-                        price,
-                        self.sim_bag.position,
-                        order_type,
-                        market_High,
-                        market_Low,
-                    )
-                    return True
-        return False
-
-    """
-        # # Findout the pending order dataframe and record down, we should move it upper level
-        # pending_order = (
-        #     base_df.sBuy.notna() & base_df.sSell.isna() & (base_df.sSellOrder.notna())
-        # )
-        # if pending_order.any():
-        #     order_id = base_df[pending_order].sSellOrder.values
-        #     order_id = list(order_id)[0] if order_id.any() else ""
-        #     _order_type, _price, _position, _stop_price, _operator = order_id.split(",")
-        #     _price = float(_price) if _price else None
-        #     _stop_price = float(_stop_price) if _stop_price else None
-        #     _position = float(_position) if _position else None
-        #     high = self.lastest_candlestick.High
-        #     low = self.lastest_candlestick.Low
-        #     if _order_type == "S":  # sell on max profit
-        #         if high >= _price:
-        #             print(f"[Sell Order filled]: {order_id=}, {_position=}, {_price=}")
-        #             self.sim_bag.close_position(_position, _price)
-        #             print(f"sim_bag: {self.sim_bag:snapshot}")
-        #             print(f"mission completed: on hold")
-        #             # self.on_hold = True
-        #             base_df.loc[pending_order, "sSell"] = _price
-        #             base_df.loc[pending_order, "sProfit"] = (
-        #                 base_df.sSell / base_df.sBuy
-        #             ) - 1
-        #     elif _order_type == "SL":  # sell on cutoff
-        #         if low <= _stop_price:
-        #             print(
-        #                 f"[Cutoff Order filled]: {order_id=}, {_position=}, {_price=}"
-        #             )
-        #             self.sim_bag.close_position(_position, _price)
-        #             print(f"sim_bag: {self.sim_bag:snapshot}")
-        #             base_df.loc[pending_order, "sSell"] = _price
-        #             base_df.loc[pending_order, "sProfit"] = (
-        #                 base_df.sSell / base_df.sBuy
-        #             ) - 1
-
-    """
+            sell_order = SimSellOrder(
+                order_id=hunting_id,
+                cutoff_price=avg_cost * self.params.hard_cutoff,
+                atr_exit_price=exit_price,
+                profit_leave_price=final_stop_price,
+                position=position,
+                order_type="S",
+            )
+            self.sim_huobi.place_order(sell_order)
 
     def retreat(self, base_df):
         cutoff_price = self.params.hard_cutoff * self.live_bag.avg_cost

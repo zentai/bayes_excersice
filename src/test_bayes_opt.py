@@ -19,6 +19,16 @@ DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports
 
 def optimize_func(**kwargs):
     params = {
+        # Buy
+        "ATR_sample": 15,
+        "bayes_windows": 15,
+        "lower_sample": 15,
+        "upper_sample": 15,
+        # Sell
+        "hard_cutoff": 0.99,
+        "profit_loss_ratio": 2,
+        "atr_loss_margin": 7,
+        "surfing_level": 3,
         # Period
         "interval": "1day",
         "funds": 100,
@@ -28,7 +38,6 @@ def optimize_func(**kwargs):
     }
     params.update(kwargs)
     sp = StrategyParam(**params)
-
     base_df = None
     if sp.backtest:
         sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
@@ -51,20 +60,36 @@ def optimize_func(**kwargs):
     story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
     # print(f"created: {REPORTS_DIR}/{sp}.csv")
     review = story.hunter.review_mission(story.base_df)
-    return review.Profit
+    return review.iloc[-1].Profit
 
 
 def run():
-
+    # very good for BTCUSDT day K
+    # params = {
+    #     "ATR_sample": 15,
+    #     "atr_loss_margin": 3,
+    #     "hard_cutoff": 0.9,
+    #     "profit_loss_ratio": 2,
+    #     "bayes_windows": 15,
+    #     "lower_sample": 15.0,
+    #     "upper_sample": 15.0,
+    #     "interval": "1min",
+    #     "funds": 100,
+    #     "stake_cap": 50,
+    #     "symbol": None,
+    #     "surfing_level": 3,
+    #     "fetch_huobi": False,
+    #     "simulate": True,
+    # }
     params = {
-        "ATR_sample": (3, 30),
-        "bayes_windows": (3, 30),
-        "lower_sample": (3, 30),
-        "upper_sample": (3, 30),
-        "hard_cutoff": (0.5, 0.99),
-        "profit_loss_ratio": (0.5, 10),
-        "atr_loss_margin": (1, 10),
-        "surfing_level": (1, 10),
+        "ATR_sample": (10, 365),
+        # "bayes_windows": (10, 365),
+        "lower_sample": (10, 365),
+        "upper_sample": (10, 365),
+        "hard_cutoff": (0.8, 0.999),
+        "profit_loss_ratio": (1, 3),
+        "atr_loss_margin": (1, 5),
+        "surfing_level": (1, 5),
     }
 
     optimizer = BayesianOptimization(

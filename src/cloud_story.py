@@ -177,14 +177,13 @@ class HuntingStory:
                 "hunting_id": lastest_candlestick.Date,
                 "exit_price": lastest_candlestick.exit_price,
                 "Stop_profit": lastest_candlestick.Stop_profit,
-                "market_High": _High,
-                "market_Low": _Low,
             }
             buy_signal = lastest_candlestick.OBV_UP == True
             # buy_signal = lastest_candlestick.BuySignal == 1
             if buy_signal:
-
-                price = self.base_df.tail(self.hunter.params.upper_sample).High.max()
+                # price = self.base_df.tail(self.hunter.params.upper_sample).High.max()
+                price = self.base_df.tail(self.hunter.params.upper_sample).Low.min()
+                # price = lastest_candlestick.High
                 order_type = "B" if price == lastest_candlestick.High else "BL"
 
                 hunting_command["buy"] = {
@@ -192,20 +191,19 @@ class HuntingStory:
                     "target_price": price,
                     "order_type": order_type,
                     "kelly": 1,  # lastest_candlestick.Kelly,
-                    "market_High": _High,
-                    "market_Low": _Low,
                 }
+            # print(hunting_command)
             return hunting_command
 
         hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
         self.hunter.strike_phase(hunting_command)
-        # print(self.base_df[DEBUG_COL][-30:])
-        # print(self.hunter.review_mission(self.base_df))
+        print(self.base_df[DEBUG_COL][-30:])
+        print(self.hunter.review_mission(self.base_df))
         if not self.hunter.params.backtest:
             self.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
             print(f"created: {REPORTS_DIR}/{sp}.csv")
 
-    def sim_attack_feedback(self, order_id, order_status, price, position):
+    def sim_order_update(self, order_id, order_status, price, position):
         if order_status in (BUY_FILLED):
             s_buy_order = self.base_df.Date == order_id
             self.base_df.loc[s_buy_order, "sBuyOrder"] = order_id
@@ -243,7 +241,7 @@ def start_journey(sp):
     base_df = sensor.scan(2000 if not sp.backtest else 100)
     story = HuntingStory(sensor, scout, engine, hunter, base_df)
     dispatcher.connect(story.move_forward, signal="k_channel")
-    dispatcher.connect(story.sim_attack_feedback, signal="sim_attack_feedback")
+    dispatcher.connect(story.sim_order_update, signal="sim_order_update")
     pub_thread = story.pub_market_sensor(sp)
     pub_thread.start()
     pub_thread.join()
@@ -277,19 +275,19 @@ params = {
     # Buy
     "ATR_sample": 15,
     "bayes_windows": 15,
-    "lower_sample": 15,
+    "lower_sample": 30,
     "upper_sample": 15,
     # Sell
-    "hard_cutoff": 0.95,
+    "hard_cutoff": 0.9,
     "profit_loss_ratio": 2,
     "atr_loss_margin": 3,
-    "surfing_level": 3,
+    "surfing_level": 5,
     # Period
-    "interval": "1min",
+    "interval": "1day",
     "funds": 100,
     "stake_cap": 50,
     "symbol": None,
-    "backtest": True,
+    "backtest": False,
 }
 
 
@@ -299,7 +297,7 @@ if __name__ == "__main__":
             "interval": "1min",
             "funds": 100,
             "stake_cap": 100,
-            "symbol": Symbol("0018.KL"),
+            "symbol": Symbol("btcusdt"),
         }
     )
     sp = StrategyParam(**params)

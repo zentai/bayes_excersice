@@ -178,7 +178,11 @@ class TurtleScout(IStrategyScout):
 
         df["PRICE_UP"] = df["High"] >= (
             df["Close"].rolling(window=self.params.upper_sample).mean()
-            + 3 * df["Close"].rolling(window=self.params.upper_sample).std()
+            + multiplier * df["Close"].rolling(window=self.params.upper_sample).std()
+        )
+        df["PRICE_LOW"] = df["Low"] <= (
+            df["Close"].rolling(window=self.params.lower_sample).mean()
+            + multiplier * df["Close"].rolling(window=self.params.lower_sample).std()
         )
 
         # 计算滚动窗口内的标准差
@@ -198,8 +202,9 @@ class TurtleScout(IStrategyScout):
 
         # Combine the new 'OBV_UP' column back to the original dataframe
         base_df["OBV"] = df["OBV"]
-        base_df["OBV_UP"] = df["OBV_UP"] & (df["Slope"] >= 0)
+        # base_df["OBV_UP"] = df["OBV_UP"] & (df["Slope"] >= 0)
         # base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_UP"]
+        base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_LOW"]
         # base_df["OBV_UP"] = df["OBV_UP"]
         # base_df.at[df.index[-1], "OBV_UP"] = (
         #     df["Rolling_Std_Percent"].iloc[-1]
@@ -222,7 +227,7 @@ class TurtleScout(IStrategyScout):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_VWMA(base_df, window=self.params.upper_sample)
-        base_df = self._calc_OBV(base_df, multiplier=2)
+        base_df = self._calc_OBV(base_df, multiplier=self.params.atr_loss_margin)
         base_df = self._calc_profit(base_df)
         return base_df
 

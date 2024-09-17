@@ -42,7 +42,7 @@ params = {
     "interval": "1day",
     "funds": 100,
     "stake_cap": 10.5,
-    "symbol": Symbol("duskusdt"),
+    "symbol": Symbol("flokiusdt"),
     "surfing_level": 6,
     "fetch_huobi": True,
     "simulate": True,
