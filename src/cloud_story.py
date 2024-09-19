@@ -62,6 +62,7 @@ DEBUG_COL = [
     "sAvgCost",
     "sPnLRatio",
     "sStatus",
+    "Matured",
     # "xBuy",
     # "xSell",
     # "xProfit",
@@ -88,7 +89,7 @@ DUMP_COL = [
     # "BuySignal",
     "Stop_profit",
     "exit_price",
-    # "Matured",
+    "Matured",
     # "time_cost",
     # "buy",
     # "sell",
@@ -189,6 +190,8 @@ class HuntingStory:
                 hunting_command["buy"] = {
                     "hunting_id": lastest_candlestick.Date,
                     "target_price": price,
+                    "exit_price": lastest_candlestick.exit_price,
+                    "Stop_profit": lastest_candlestick.Stop_profit,
                     "order_type": order_type,
                     "kelly": 1,  # lastest_candlestick.Kelly,
                 }
@@ -197,13 +200,17 @@ class HuntingStory:
 
         hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
         self.hunter.strike_phase(hunting_command)
-        print(self.base_df[DEBUG_COL][-30:])
-        print(self.hunter.review_mission(self.base_df))
-        if not self.hunter.params.backtest:
+        if "statement" in self.hunter.params.debug_mode:
+            print(self.base_df[DEBUG_COL][-30:])
+        if "mission_review" in self.hunter.params.debug_mode:
+            print(self.hunter.review_mission(self.base_df))
+        if "statement_to_csv" in self.hunter.params.debug_mode:
             self.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
             print(f"created: {REPORTS_DIR}/{sp}.csv")
 
-    def sim_order_update(self, order_id, order_status, price, position):
+    def sim_order_update(
+        self, order_id, order_status, price, position, execute_timestamp
+    ):
         if order_status in (BUY_FILLED):
             s_buy_order = self.base_df.Date == order_id
             self.base_df.loc[s_buy_order, "sBuyOrder"] = order_id
@@ -212,6 +219,7 @@ class HuntingStory:
             self.base_df.loc[s_buy_order, "sCash"] = self.hunter.sim_bag.cash
             self.base_df.loc[s_buy_order, "sAvgCost"] = self.hunter.sim_bag.avg_cost
             self.base_df.loc[s_buy_order, "sStatus"] = order_status
+            self.base_df.loc[s_buy_order, "Matured"] = execute_timestamp
         elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
             s_sell_order = self.base_df.Date == order_id
             self.base_df.loc[s_sell_order, "sSellOrder"] = order_id
@@ -226,6 +234,7 @@ class HuntingStory:
             self.base_df.loc[s_sell_order, "sPnLRatio"] = profit / (
                 1 - self.hunter.params.hard_cutoff
             )
+            self.base_df.loc[s_sell_order, "Matured"] = execute_timestamp
 
 
 def start_journey(sp):
@@ -248,8 +257,9 @@ def start_journey(sp):
     # print(story.base_df[DUMP_COL])
     # review = story.hunter.review_mission(story.base_df)
     # sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
-    story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
-    print(f"created: {REPORTS_DIR}/{sp}.csv")
+    if "final_statement_to_csv" in sp.debug_mode:
+        story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
+        print(f"created: {REPORTS_DIR}/{sp}.csv")
     return story.base_df[DUMP_COL], story.hunter.review_mission(story.base_df)
 
 
@@ -275,7 +285,7 @@ params = {
     # Buy
     "ATR_sample": 15,
     "bayes_windows": 15,
-    "lower_sample": 30,
+    "lower_sample": 15,
     "upper_sample": 15,
     # Sell
     "hard_cutoff": 0.9,
@@ -287,17 +297,31 @@ params = {
     "funds": 100,
     "stake_cap": 50,
     "symbol": None,
-    "backtest": False,
+    "backtest": True,
+    "debug_mode": [
+        # "statement",
+        # "statement_to_csv",
+        "mission_review",
+        "final_statement_to_csv",
+    ],
 }
 
 
 if __name__ == "__main__":
     params.update(
         {
-            "interval": "1min",
             "funds": 100,
             "stake_cap": 100,
             "symbol": Symbol("btcusdt"),
+            # "symbol": Symbol("BTM.SI"),
+            "interval": "1day",
+            "backtest": False,
+            "debug_mode": [
+                "statement",
+                "statement_to_csv",
+                "mission_review",
+                "final_statement_to_csv",
+            ],
         }
     )
     sp = StrategyParam(**params)

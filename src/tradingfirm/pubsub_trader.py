@@ -167,6 +167,8 @@ class SimOrder:
 @dataclass
 class SimBuyOrder(SimOrder):
     target_price: float
+    atr_exit_price: float
+    profit_leave_price: float
     order_type: str = "B"  # 默认订单类型为买入
     status: str = "unfilled"
     timestamp: datetime = field(default_factory=datetime.now)
@@ -221,6 +223,7 @@ class SimHuobi:
                     order_status=order.status,
                     price=order.cutoff_price,
                     position=order.position,
+                    execute_timestamp=order.timestamp,
                 )
             elif market_low <= order.atr_exit_price:
                 order.status = "ATR_EXIT"
@@ -233,6 +236,7 @@ class SimHuobi:
                     order_status=order.status,
                     price=order.atr_exit_price,
                     position=order.position,
+                    execute_timestamp=order.timestamp,
                 )
 
             elif market_high >= order.profit_leave_price:
@@ -246,12 +250,16 @@ class SimHuobi:
                     order_status=order.status,
                     price=order.profit_leave_price,
                     position=order.position,
+                    execute_timestamp=order.timestamp,
                 )
 
         # 检查买入订单
         if self.buy_order and self.buy_order.status == "unfilled":
-            if market_low <= self.buy_order.target_price:
-                order = self.buy_order
+            order = self.buy_order
+            if market_low <= order.atr_exit_price:
+                # Maket price lower than ATR_exit, no point to buy.
+                pass
+            elif market_low <= self.buy_order.target_price:
                 order.status = BUY_FILLED
                 order.executed_price = order.target_price
                 order.timestamp = execute_timestamp
@@ -262,6 +270,7 @@ class SimHuobi:
                     order_status=order.status,
                     price=order.target_price,
                     position=order.position,
+                    execute_timestamp=order.timestamp,
                 )
 
 
@@ -376,7 +385,9 @@ class xHunter(IHunter):
             # if not self.simulate:
             #     self.attack(**hunting_command.get("buy"))
 
-    def sim_order_update(self, order_id, order_status, price, position):
+    def sim_order_update(
+        self, order_id, order_status, price, position, execute_timestamp
+    ):
         if order_status in (BUY_FILLED):
             self.sim_bag.open_position(position, price)
             # print(f"3. {order_status}: {order_id}: {self.sim_bag:snapshot}")
@@ -457,13 +468,23 @@ class xHunter(IHunter):
 
     # trade_ts, target_price, kelly
     # try to book a order, create an id-orderid mapping for call back
-    def sim_attack(self, hunting_id, target_price, order_type, kelly):
+    def sim_attack(
+        self,
+        hunting_id,
+        target_price,
+        exit_price,
+        Stop_profit,
+        order_type,
+        kelly,
+    ):
         if self.sim_bag.is_enough_cash() and not self.on_hold:
             budget = self.sim_bag.discharge(kelly)
             position = budget / target_price
             buy_order = SimBuyOrder(
                 order_id=hunting_id,
                 target_price=target_price,
+                atr_exit_price=exit_price,
+                profit_leave_price=Stop_profit,
                 position=position,
                 order_type=order_type,
             )
@@ -658,6 +679,21 @@ class xHunter(IHunter):
         return self.live_bag.portfolio(pre_strike, strike)
 
     def review_mission(self, base_df):
+        def count_consecutive_losses(df):
+            profits = df["sProfit"].dropna().astype(float).values
+            negative = profits < 0
+            neg_indices = np.where(negative)[0]
+
+            if len(neg_indices) == 0:
+                max_consecutive_losses = 0
+            else:
+                diff = np.diff(neg_indices)
+                consecutive = np.split(neg_indices, np.where(diff != 1)[0] + 1)
+                lengths = [len(c) for c in consecutive]
+                max_consecutive_losses = max(lengths)
+
+            return max_consecutive_losses
+
         # df = base_df[base_df.BuySignal == 1]
         df = base_df
         sample = len(df[df.sBuy.notna()]) or 0.00001
@@ -707,6 +743,7 @@ class xHunter(IHunter):
             atr_percentages = atr_cutoff_counts / atr_cutoff_counts.sum()
             exit_stats = pd.DataFrame({"Percentage": atr_percentages}).T.iloc[-1]
             profit_sample = f"{(exit_stats.Profit_LEAVE + exit_stats.ATR_Profit):.2f}"
+            drawdownCount = count_consecutive_losses(df)
 
         return pd.DataFrame(
             [
@@ -719,6 +756,7 @@ class xHunter(IHunter):
                     avg_time_cost,
                     avg_profit,
                     drawdown,
+                    drawdownCount,
                     _annual_return,
                     _sortino_ratio,
                     self.sim_bag.cash,
@@ -739,6 +777,7 @@ class xHunter(IHunter):
                 "Avg.Timecost",
                 "Avg.Profit",
                 "Drawdown",
+                "DrawdownCount",
                 "Annual.Return",
                 "SortinoRatio",
                 "Cash",

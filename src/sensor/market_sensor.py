@@ -39,7 +39,6 @@ class YahooMarketSensor(IMarketSensor):
     def fetch(self, base_df):
         today = datetime.datetime.today().date()
         last_date = base_df.index[-1].date()
-
         data = yf.download(self.symbol.name, start=str(last_date), end=str(today))
         data = data.rename(columns={"Volume": "Vol"})
         data.index = data.index.map(lambda x: pd.Timestamp(x))
@@ -60,7 +59,6 @@ class LocalMarketSensor(IMarketSensor):
 
     def scan(self, limits):
         df = pandas_util.load_symbols(self.symbol)
-        # df = df[-365:]
         length = len(df)
         limits = 0 if length < limits else limits
         self.test_df = df[limits:]
