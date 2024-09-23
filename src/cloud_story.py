@@ -258,6 +258,8 @@ def start_journey(sp):
     # review = story.hunter.review_mission(story.base_df)
     # sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
     if "final_statement_to_csv" in sp.debug_mode:
+        review = story.hunter.review_mission(story.base_df)
+        print(review)
         story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
         print(f"created: {REPORTS_DIR}/{sp}.csv")
     return story.base_df[DUMP_COL], story.hunter.review_mission(story.base_df)
@@ -291,7 +293,7 @@ params = {
     "hard_cutoff": 0.9,
     "profit_loss_ratio": 2,
     "atr_loss_margin": 3,
-    "surfing_level": 5,
+    "surfing_level": 1000000,
     # Period
     "interval": "1day",
     "funds": 100,
@@ -301,7 +303,7 @@ params = {
     "debug_mode": [
         # "statement",
         # "statement_to_csv",
-        "mission_review",
+        # "mission_review",
         "final_statement_to_csv",
     ],
 }
@@ -312,9 +314,9 @@ if __name__ == "__main__":
         {
             "funds": 100,
             "stake_cap": 100,
-            "symbol": Symbol("btcusdt"),
+            "symbol": Symbol("adausdt"),
             # "symbol": Symbol("BTM.SI"),
-            "interval": "1day",
+            "interval": "1min",
             "backtest": False,
             "debug_mode": [
                 "statement",
