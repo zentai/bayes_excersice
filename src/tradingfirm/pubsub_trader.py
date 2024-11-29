@@ -703,7 +703,9 @@ class xHunter(IHunter):
         # )
         profit_mean = df[df.sProfit >= 0].sProfit.median() or ZERO
         loss_mean = abs(df[df.sProfit < 0].sProfit.median() or ZERO)
-        profit_loss_ratio = f"{profit_mean / loss_mean:.3f}"
+        strategy_profit = ((df["P/L"] > 3) & df.BuySignal).sum()
+        total_profit = (df["P/L"] > 3).sum()
+        strategy_performance = f"{strategy_profit / total_profit:.3f}"
         # profit_loss_ratio = len(df[df.sProfit > 0]) / sample
         cost = self.sim_bag.init_funds
         strike = base_df.iloc[-1].Close
@@ -750,7 +752,7 @@ class xHunter(IHunter):
                 [
                     profit,
                     cost,
-                    profit_loss_ratio,
+                    strategy_performance,
                     sample,
                     profit_sample,
                     avg_time_cost,
@@ -771,7 +773,7 @@ class xHunter(IHunter):
             columns=[
                 "Profit",
                 "Cost",
-                "ProfitLossRatio",
+                "StrategyPerformance",
                 "Sample",
                 "ProfitSample",
                 "Avg.Timecost",

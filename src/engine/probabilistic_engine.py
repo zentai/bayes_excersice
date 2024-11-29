@@ -202,9 +202,6 @@ class BayesianEngine(IEngine):
                 df.loc[df.Date == today, "Postrior"] = self._latest_prior
                 df.loc[df.Date == today, "Kelly"] = _signal_kelly
                 df.loc[df.Date == today, "p_win"] = p_win
-                df.loc[df.Date == today, "P/L"] = (
-                    f"{daily_pnl[daily_pnl>0].count()}/{daily_pnl[daily_pnl<=0].count()}"
-                )
                 df.loc[df.Date == today, "likelihood"] = _like
                 df.loc[df.Date == today, "profit_margin"] = profit_margin
                 df.loc[df.Date == today, "loss_margin"] = loss_margin

@@ -60,7 +60,7 @@ class BollingerBandsSurfer:
         return bs_conf
 
 
-class TurtleScout(IStrategyScout):
+class MixScout(IStrategyScout):
     def __init__(self, params):
         self.params = params
         ma_window = 10
@@ -238,3 +238,101 @@ class TurtleScout(IStrategyScout):
         df["Slope"] = (df.Close - df.VWMA.shift(window)) / window
         df["Slope_Diff"] = df.Slope - df.Slope.shift(1)
         return df
+
+
+class TurtleScout(IStrategyScout):
+    def __init__(self, params, buy_signal_func=None):
+        self.params = params
+        ATR_sample = self.params.ATR_sample
+        upper_sample = self.params.upper_sample
+        lower_sample = self.params.lower_sample
+        self.window = max(ATR_sample, upper_sample, lower_sample) * 2
+        # Set the buy_signal_func, default to the simple_turtle_strategy if none is provided
+        self.buy_signal_func = buy_signal_func or self._simple_turtle_strategy
+
+    def _calc_profit(self, base_df):
+
+        surfing_df = base_df.tail(self.window).copy()
+        idx = surfing_df.Stop_profit.isna().index
+        prices = surfing_df.High.values.tolist()
+        mean = statistics.mean(prices)
+        stdv = statistics.stdev(prices)
+        surfing_profit = mean + (self.params.surfing_level * stdv)
+        surfing_df.loc[idx, "Stop_profit"] = surfing_profit
+        surfing_df.loc[idx, "exit_price"] = (
+            surfing_df.Close.shift(1)
+            - surfing_df.ATR.shift(1) * self.params.atr_loss_margin
+        )
+        surfing_df.loc[idx, "atr_buy"] = surfing_df.Close.shift(
+            1
+        ) + surfing_df.ATR.shift(1)
+        base_df.update(surfing_df)
+
+        resume_idx = base_df.sell.isna().idxmax()
+        df = base_df.loc[resume_idx:].copy()
+        df = df[df.exit_price.notna()]
+
+        # Use the pre-calculated BuySignal using buy_signal_func
+        s_buy = df.buy.isna()
+        df.loc[s_buy, "buy"] = df.Close
+        df.loc[:, "BuySignal"] = self.buy_signal_func(df, self.params)
+
+        # Sell condition:
+        s_sell = df.buy.notna() & (df.Low < df.exit_price)
+
+        df.loc[s_sell, "sell"] = df.exit_price.where(s_sell)
+        df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.where(s_sell))
+
+        # Backfill sell and Matured columns
+        df.sell.bfill(inplace=True)
+        df.Matured.bfill(inplace=True)
+
+        # Compute profit and time_cost columns
+        s_profit = df.buy.notna() & df.sell.notna() & df.profit.isna()
+        df.loc[s_profit, "profit"] = (df.sell / df.buy) - 1
+        df.loc[s_profit, "P/L"] = (df.sell - df.buy) / (
+            df.ATR * self.params.atr_loss_margin
+        )
+        df.loc[s_profit, "time_cost"] = [
+            int(x.seconds / 60 / pandas_util.INTERVAL_TO_MIN.get(self.params.interval))
+            for x in (
+                pd.to_datetime(df.loc[s_profit, "Matured"])
+                - pd.to_datetime(df.loc[s_profit, "Date"])
+            )
+        ]
+
+        # Clear sell and Matured values where buy is NaN
+        df.loc[df.buy.isna(), "sell"] = np.nan
+        df.loc[df.buy.isna(), "Matured"] = pd.NaT
+        base_df.update(df)
+        return base_df
+
+    def _calc_ATR(self, base_df):
+        ATR_sample = self.params.ATR_sample
+        upper_sample = self.params.upper_sample
+        lower_sample = self.params.lower_sample
+
+        df = base_df.tail(self.window).copy()
+        idx = df.ATR.isna().index
+        df.loc[idx, "turtle_h"] = df.High.shift(1).rolling(upper_sample).max()
+        df.loc[idx, "turtle_l"] = df.Low.shift(1).rolling(lower_sample).min()
+        df.loc[idx, "h_l"] = df.High - df.Low
+        df.loc[idx, "c_h"] = (df.Close.shift(1) - df.High).abs()
+        df.loc[idx, "c_l"] = (df.Close.shift(1) - df.Low).abs()
+        df.loc[idx, "TR"] = df[["h_l", "c_h", "c_l"]].max(axis=1)
+        df.loc[idx, "ATR"] = df["TR"].rolling(ATR_sample).mean()
+        df.loc[idx, "ATR_STDV"] = df["TR"].rolling(ATR_sample).std()
+        base_df.update(df)
+        return base_df
+
+    def market_recon(self, base_df):
+        base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
+        base_df = self._calc_ATR(base_df)
+        base_df = self._calc_profit(base_df)
+        return base_df
+
+    def _simple_turtle_strategy(self, df, params):
+        """
+        Default simple turtle strategy to generate BuySignal.
+        """
+        return df.High > df.turtle_h
