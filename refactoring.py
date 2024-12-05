@@ -1,334 +1,591 @@
-import sys
+TODO: refactoring Header columns, a flexi way to return columns with prefix in sequence. 
+
+# from icecream import ic
 import os
-import numpy as np
 import pandas as pd
-import statistics
-from datetime import datetime
-from collections import deque
+import numpy as np
 import logging
+from datetime import datetime
 
-from ..hunterverse.interface import IStrategyScout
+from pydispatch import dispatcher
+from huobi.constant.definition import OrderType, OrderState
+
+from ..hunterverse.interface import IHunter
 from ..utils import pandas_util
+from .platforms import huobi_api
 
-logger = logging.getLogger(__name__)
+from config import config
 
+ZERO = config.zero
+BUY_FILLED = "Buy_filled"
+SELL_FILLED = "Sell_filled"
+CUTOFF_FILLED = "Cutoff_filled"
 
-# FIXME: move some columns to IEngine
-TURTLE_COLUMNS = [
-    "ATR",
-    "turtle_h",
-    "turtle_l",
-    "Stop_profit",
-    "exit_price",
-    "OBV_UP",
-    "VWMA",
-    "Slope",
-    "Slope_Diff",
-    "buy",
-    "sell",
-    "profit",
-    "time_cost",
-    "Matured",
-    "BuySignal",
-    "P/L",
-    "PRICE_VOL_reduce",
-    "Rolling_Std",
+HUNTER_COLUMNS = [
+    "sBuy",
+    "sSell",
+    "sProfit",
+    "sPosition",
+    "sCash",
+    "sAvgCost",
+    "sBuyOrder",
+    "sSellOrder",
+    "sPnLRatio",
+    "sStatus",
+    "xBuy",
+    "xSell",
+    "xProfit",
+    "xPosition",
+    "xCash",
+    "xAvgCost",
+    "xBuyOrder",
+    "xSellOrder",
 ]
 
 
-class BollingerBandsSurfer:
-    def __init__(self, symbol, buy_sell_conf, buffer_size=30):
+class GainsBag:
+    MIN_STAKE_CAP = 10.01  # huobi limitation
+
+    def __init__(
+        self,
+        symbol,
+        init_funds,
+        stake_cap,
+        init_position=0,
+        init_avg_cost=0,
+        is_sim=True,
+    ):
+        self.logger = logging.getLogger(f"GainsBag_{symbol.name}")
         self.symbol = symbol
-        self.buy_sell_conf = buy_sell_conf
-        self.stdv_ring_buffer = deque(maxlen=buffer_size)
-
-    def create_plan(self, prices_df, min_profit_price):
-        prices = prices_df.Close.values.tolist()
-        mean = statistics.mean(prices)
-        stdv = statistics.stdev(prices)
-        self.stdv_ring_buffer.append(stdv)
-        if stdv < statistics.median(self.stdv_ring_buffer):
-            logger.info(
-                f"Stdv: {stdv} < Median Stdv: {statistics.median(self.stdv_ring_buffer)}, stop buy sell plan"
-            )
-            return pd.DataFrame()
-        bs_conf = self.buy_sell_conf.copy()
-        bs_conf.loc[bs_conf.Action == "S", "price"] = min_profit_price + (
-            bs_conf["level"] * stdv
+        self.stake_cap = stake_cap
+        self.init_funds = self.cash = init_funds
+        self.position = init_position
+        self.avg_cost = init_avg_cost
+        self.is_sim = is_sim
+        self.logger.info(
+            f"Create {'Sim' if self.is_sim else 'Live'  }GainsBag: {self:snapshot}"
         )
-        bs_conf.loc[bs_conf.Action == "B", "price"] = mean + (bs_conf["level"] * stdv)
-        return bs_conf
+
+    def get_un_pnl(self, strike):
+        return (strike * self.position) + self.cash - self.init_funds
+
+    def log_action(self, action, price, position, cash):
+        price = round(price, self.symbol.price_prec)
+        position = round(position, self.symbol.amount_prec)
+        cash = round(cash, 2)  # USDT
+        unpnl = round(self.get_un_pnl(price), 2)  # USDT
+        msg = f"[{self.symbol.name}] ∆ {price} $ {cash} Ⓒ {position} unPNL: {unpnl}"
+        if action == "open_position":
+            msg = f"+{msg}"
+        elif action == "close_position":
+            msg = f"-{msg}"
+        self.logger.info(msg)
+
+        # dump snapshot
+        snapshot_avg_cost = round(self.avg_cost, self.symbol.price_prec)  # USDT
+        snapshot_position = round(self.position, self.symbol.amount_prec)
+        snapshot_cash = round(self.cash, 2)  # USDT
+        # print(f"{self:snapshot}")
+        self.logger.info(f"{self:snapshot}")
+
+    def discharge(self, ratio):
+        stake_amount = self.stake_cap if self.cash > self.stake_cap else self.cash
+        if stake_amount < self.MIN_STAKE_CAP:
+            self.logger.warning(f"Run out of budget, {self.cash}")
+            return 0
+        return (
+            stake_amount * ratio
+            if stake_amount * ratio > self.MIN_STAKE_CAP
+            else self.MIN_STAKE_CAP
+        )
+
+    def open_position(self, position, price):
+        cash = position * price
+        self.avg_cost = ((self.avg_cost * self.position) + cash) / (
+            self.position + position
+        )
+        self.cash -= cash
+        self.position += position
+        self.log_action("open_position", price, position, cash)
+
+    def close_position(self, position, price):
+        cash = position * price
+        self.cash += cash
+        self.position -= position
+        self.log_action("close_position", price, position, cash)
+
+    def is_enough_position(self):
+        return (self.position * self.avg_cost) > self.MIN_STAKE_CAP
+
+    def is_enough_cash(self):
+        return self.cash > self.MIN_STAKE_CAP
+
+    def portfolio(self, pre_strike, strike):
+        market_value = self.position * strike
+        cost = self.position * self.avg_cost
+        return {
+            "Pair": self.symbol.name,
+            "MarketValue": market_value,
+            "BuyValue": cost,
+            "ProfitLoss": market_value - cost,
+            "ProfitLossPercent": (market_value / cost) - 1,
+            "Hr24": (strike / pre_strike) - 1,
+            "Position": self.position,
+            "AvgCost": self.avg_cost,
+            "Strikle": strike,
+            "Cash": self.cash,
+            "FinalPnL": market_value + self.cash - self.init_funds,
+        }
+
+    def cutoff_price(self, cutoff_ratio=0.95):
+        return self.avg_cost * cutoff_ratio
+
+    def __format__(self, format_spec):
+        if format_spec == "cash":
+            return f"{self.cash}"
+        elif format_spec == "avg_cost":
+            return f"{self.avg_cost}"
+        elif format_spec == "snapshot":
+            snapshot_avg_cost = round(self.avg_cost, self.symbol.price_prec)  # USDT
+            snapshot_position = round(self.position, self.symbol.amount_prec)
+            snapshot_cash = round(self.cash, 2)  # USDT
+            return f"![{'Sim' if self.is_sim else 'Live'  }:{self.symbol.name}] ∆ {snapshot_avg_cost} $ {snapshot_cash} Ⓒ {snapshot_position}"
+        elif format_spec == "review":
+            pass
+        else:
+            return self.name
 
 
-class MixScout(IStrategyScout):
-    def __init__(self, params):
+from dataclasses import dataclass, field
+from typing import Optional, List
+
+
+@dataclass
+class xOrder:
+    client: str
+    order_id: str
+    position: float
+
+
+@dataclass
+class xBuyOrder(xOrder):
+    target_price: float
+    atr_exit_price: float
+    profit_leave_price: float
+    order_type: str = "B"  # 默认订单类型为买入
+    status: str = "unfilled"
+    timestamp: datetime = field(default_factory=datetime.now)
+    executed_price: Optional[float] = None  # 成交价格
+
+
+@dataclass
+class xSellOrder(xOrder):
+    cutoff_price: float
+    atr_exit_price: float
+    profit_leave_price: float
+    order_type: str = "S"  # 默认订单类型为卖出
+    status: str = "unfilled"
+    timestamp: datetime = field(default_factory=datetime.now)
+    executed_price: Optional[float] = None  # 成交价格
+
+
+class SimHuobi:
+    def __init__(self):
+        self.dispatcher = dispatcher
+        self.dispatcher.connect(self.match_orders, signal="k_channel")
+        self.TOPIC_ORDER_MATCHED = "sim_order_update"
+        self.order_book = {
+            # client: {
+            #     Buy: xBuyOrder,
+            #     Sell: xSellOrder,
+            # }
+        }
+
+    def place_order(self, order):
+        client = order.client
+
+        if client not in self.order_book:
+            self.order_book[client] = {"Buy": None, "Sell": None}
+
+        if isinstance(order, xBuyOrder):
+            self.order_book[client]["Buy"] = order
+        elif isinstance(order, xSellOrder):
+            self.order_book[client]["Sell"] = order
+
+    def match_orders(self, message):
+        market_high, market_low = message.iloc[-1].High, message.iloc[-1].Low
+        execute_timestamp = message.iloc[-1].Date
+
+        for orders in self.order_book.values():
+            if orders["Sell"] and orders["Sell"].status == "unfilled":
+                order = orders["Sell"]
+
+                # 按优先级检查出场价格
+                if market_low <= order.cutoff_price:
+                    order.status = "CUTOFF"
+                    order.timestamp = execute_timestamp
+                    order.executed_price = order.cutoff_price
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.cutoff_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+                elif market_low <= order.atr_exit_price:
+                    order.status = "ATR_EXIT"
+                    order.executed_price = order.atr_exit_price
+                    order.timestamp = execute_timestamp
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.atr_exit_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+
+                elif market_high >= order.profit_leave_price:
+                    order.status = "Profit_LEAVE"
+                    order.executed_price = order.profit_leave_price
+                    order.timestamp = execute_timestamp
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.profit_leave_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+
+            # 检查买入订单
+            if orders["Buy"] and orders["Buy"].status == "unfilled":
+                order = orders["Buy"]
+                if market_low <= order.atr_exit_price:
+                    # Maket price lower than ATR_exit, no point to buy.
+                    pass
+                elif market_low <= order.target_price:
+                    order.status = BUY_FILLED
+                    order.executed_price = order.target_price
+                    order.timestamp = execute_timestamp
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.target_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+
+
+class xHunter(IHunter):
+    def __init__(self, client, params, platform=None):
+        super().__init__()
+        self.client = client
+        self.buy_types = ("buy-stop-limit", "buy-limit", "buy-market")
+        self.sell_types = ("sell-limit", "sell-stop-limit", "sell-market")
+        self.status = ("filled", "partial-canceled", "partial-filled")
         self.params = params
-        ma_window = 10
-        trade_conf = [
-            ["S", 10, 0.25],
-            ["S", 7, 0.25],
-            ["S", 5, 0.5],
-            ["B", -5, 0.125],
-            ["B", -7, 0.125],
-            ["B", -9, 0.25],
-            ["B", -11, 0.5],
-        ]
-        trade_conf = pd.DataFrame(trade_conf, columns=["Action", "level", "ratio"])
-        self.sufer = BollingerBandsSurfer(params.symbol.name, trade_conf, ma_window)
-
-    def _calc_profit(self, base_df):
-        resume_idx = base_df.sell.isna().idxmax()
-        df = base_df.loc[resume_idx:].copy()
-
-        # Buy daily basic when the market price is higher than Stop profit
-        s_buy = (
-            # df.buy.isna() & df.exit_price.notna() & (df.exit_price < df.Open.shift(-1))
-            # df.buy.isna() & df.exit_price.notna() & (df.exit_price < df.Close)
-            df.buy.isna()
-            & df.exit_price.notna()
+        self.gainsbag = GainsBag(
+            symbol=params.symbol, init_funds=params.funds, stake_cap=params.stake_cap
         )
-        # df.loc[s_buy, "buy"] = df.Open.shift(-1)
-        df.loc[s_buy, "buy"] = df.Close
-        df.loc[:, "BuySignal"] = df.High > df.turtle_h
-        # Sell condition:
-        # s_sell = df.buy.notna() & (df.Low.shift(-1) < df.exit_price)
-        s_sell = df.buy.notna() & (df.Close < df.exit_price)
-        df.loc[s_sell, "sell"] = df.exit_price.where(s_sell)
-        # df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.shift(-1).where(s_sell))
-        df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.where(s_sell))
+        self.on_hold = False
+        # move dispatcher connect to function call
+        self.platform = platform or SimHuobi()
+        self.dispatcher = dispatcher
+        self.dispatcher.connect(
+            self.callback_order_matched, signal=self.platform.TOPIC_ORDER_MATCHED
+        )
 
-        # Backfill sell and Matured columns
-        df.sell.bfill(inplace=True)
-        df.Matured.bfill(inplace=True)
+    def cutoff(self, strike):
+        cutoff_price = self.live_bag.cutoff_price(self.params.hard_cutoff)
+        if cutoff_price and strike <= cutoff_price:
+            pass
+            # TODO: actual cutoff
 
-        # Compute profit and time_cost columns
-        s_profit = df.buy.notna() & df.sell.notna() & df.profit.isna()
-        df.loc[s_profit, "profit"] = (df.sell / df.buy) - 1
-        df.loc[s_profit, "time_cost"] = [
-            int(x.seconds / 60 / pandas_util.INTERVAL_TO_MIN.get(self.params.interval))
-            for x in (
-                pd.to_datetime(df.loc[s_profit, "Matured"])
-                - pd.to_datetime(df.loc[s_profit, "Date"])
+    def load_memories(self, fetch=True, deals=[]):
+        print(f"load_memories(self, fetch={fetch}, deals={deals})")
+
+        cached_order_ids = []
+        if os.path.exists(db_path := f"{config.data_dir}/{self.params.symbol}.csv"):
+            cached_order_ids = pd.read_csv(db_path).id.tolist()
+
+        if fetch:
+            orders = huobi_api.get_orders(
+                set(
+                    [
+                        str(i)
+                        for i in (
+                            cached_order_ids
+                            + deals
+                            + huobi_api.load_history_orders(f"{self.params.symbol}")
+                        )
+                    ]
+                )
             )
-        ]
 
-        # Clear sell and Matured values where buy is NaN
-        df.loc[df.buy.isna(), "sell"] = np.nan
-        df.loc[df.buy.isna(), "Matured"] = pd.NaT
-        base_df.update(df)
-        return base_df
+        """Process and enrich orders DataFrame with positions and prices."""
+        orders = orders[orders.state.isin(self.status)]
+        pd.DataFrame(orders).to_csv(db_path, index=False)
 
-    def _calc_ATR(self, base_df):
-        ATR_sample = self.params.ATR_sample
-        upper_sample = self.params.upper_sample
-        lower_sample = self.params.lower_sample
-        ATR_sample = self.params.ATR_sample
-        atr_loss_margin = self.params.atr_loss_margin
+        buy_mask = orders.type.isin(self.buy_types)
+        sell_mask = orders.type.isin(self.sell_types)
 
-        # performance: only re-calc nessasary part.
-        idx = (
-            base_df.index
-            if base_df.ATR.isna().all()
-            else base_df.ATR.iloc[ATR_sample:].isna().index
+        # 计算买入和卖出订单的 position 和 price
+        # 买入订单的 position 减去手续费，卖出订单的 position 不变
+        # 所有订单的价格计算为成交金额除以 position
+        orders.loc[buy_mask, "position"] = (
+            orders.loc[buy_mask, "filled_amount"] - orders.loc[buy_mask, "filled_fees"]
         )
-        base_df.loc[idx, "turtle_h"] = base_df.High.shift(1).rolling(upper_sample).max()
-        base_df.loc[idx, "turtle_l"] = base_df.Low.shift(1).rolling(lower_sample).min()
-        base_df.loc[idx, "h_l"] = base_df.High - base_df.Low
-        base_df.loc[idx, "c_h"] = (base_df.Close.shift(1) - base_df.High).abs()
-        base_df.loc[idx, "c_l"] = (base_df.Close.shift(1) - base_df.Low).abs()
-        base_df.loc[idx, "TR"] = base_df[["h_l", "c_h", "c_l"]].max(axis=1)
-        base_df.loc[idx, "ATR"] = base_df["TR"].rolling(ATR_sample).mean()
-
-        # Single Bollinger band take profit solution
-        surfing_df = base_df.tail(upper_sample)
-        prices = surfing_df.High.values.tolist()
-        mean = statistics.mean(prices)
-        stdv = statistics.stdev(prices)
-        surfing_profit = mean + (self.params.surfing_level * stdv)
-        base_df.iloc[-1, base_df.columns.get_loc("Stop_profit")] = surfing_profit
-        cut_off = base_df.Close.shift(1) - base_df.ATR.shift(1) * atr_loss_margin
-        base_df.loc[idx, "exit_price"] = cut_off
-        # base_df.loc[idx, "exit_price"] = np.maximum(base_df["turtle_l"], cut_off)
-        return base_df
-
-    def _calc_OBV(self, base_df, multiplier=3.4):
-        window = self.params.upper_sample
-        df = base_df.copy()
-
-        # Calculate price difference and direction
-        df["price_diff"] = df["Close"].diff()
-        df["direction"] = df["price_diff"].apply(
-            lambda x: 1 if x > 0 else -1 if x < 0 else 0
+        orders.loc[sell_mask, "position"] = orders.loc[sell_mask, "filled_amount"]
+        orders.loc[buy_mask, "price"] = (
+            orders["filled_cash_amount"] / orders["position"]
         )
-        df["Vol"] *= df["direction"]
+        orders.loc[sell_mask, "price"] = (
+            orders["filled_cash_amount"] - orders["filled_fees"]
+        ) / orders["position"]
 
-        # Calculate OBV
-        df["OBV"] = df["Vol"].cumsum()
+        msg = []
+        for order in orders.itertuples():
+            position, price, filled_cash_amount = (
+                order.position,
+                order.price,
+                order.filled_cash_amount,
+            )
 
-        # Calculate moving average and standard deviation for OBV
-        df["OBV_MA"] = df["OBV"].rolling(window=window).mean()
-        df["OBV_std"] = df["OBV"].rolling(window=window).std()
+            if order.type in self.buy_types:
+                self.sim_bag.open_position(position, price)
+                self.live_bag.open_position(position, price)
+                # print(f"[B] {self.sim_bag:snapshot}")
+                msg.append(["-", round(filled_cash_amount, 2), round(price, 8)])
+            elif order.type in self.sell_types:
+                self.sim_bag.close_position(position, price)
+                self.live_bag.close_position(position, price)
+                # print(f"[S] {self.sim_bag:snapshot}")
+                msg.append(["+", round(filled_cash_amount, 2), round(price, 8)])
 
-        # Calculate upper and lower bounds
-        df["upper_bound"] = df["OBV_MA"] + (multiplier * df["OBV_std"])
-        df["lower_bound"] = df["OBV_MA"] - (multiplier * df["OBV_std"])
+        if msg:
+            fund = f"{self.sim_bag:cash}"
+            cost = float(f"{self.sim_bag:avg_cost}")
+            msg.append(["=", fund, cost])
+            strike = huobi_api.get_strike(f"{self.params.symbol}")
+            market_value = strike - cost
+            msg.append(["$", market_value * position, strike])
+            msg_df = pd.DataFrame(msg, columns=["@", "USDT", "Price"])
+            # print(msg_df)
 
-        # Calculate relative difference between bounds
-        df["bound_diff"] = (df["upper_bound"] - df["lower_bound"]) / df["OBV_MA"]
+    def strike_phase(self, hunting_command):
 
-        df["PRICE_UP"] = df["High"] >= (
-            df["Close"].rolling(window=self.params.upper_sample).mean()
-            + multiplier * df["Close"].rolling(window=self.params.upper_sample).std()
-        )
-        df["PRICE_LOW"] = df["Low"] <= (
-            df["Close"].rolling(window=self.params.lower_sample).mean()
-            + multiplier * df["Close"].rolling(window=self.params.lower_sample).std()
-        )
+        retreat = False
+        if "sell" in hunting_command:
+            retreat = self.retreat(**hunting_command.get("sell"))
+        if "buy" in hunting_command and not retreat:
+            self.attack(**hunting_command.get("buy"))
 
-        # 计算滚动窗口内的标准差
-        df["Rolling_Std"] = df["Close"].rolling(window=self.params.upper_sample).std()
-        df["Rolling_Std_Percent"] = (
-            df["Rolling_Std"]
-            / df["Close"].rolling(window=self.params.upper_sample).mean()
-        ) * 100
+    def callback_order_matched(
+        self, client, order_id, order_status, price, position, execute_timestamp
+    ):
+        if client != self.client:
+            return
+        if order_status in (BUY_FILLED):
+            self.gainsbag.open_position(position, price)
+        elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
+            self.gainsbag.close_position(position, price)
 
-        # Identify significant points where OBV crosses the upper bound
-        df["OBV_UP"] = (
-            (df["OBV"] > df["upper_bound"])
-            & (df["OBV"].shift(1) <= df["upper_bound"])
-            # & (df["bound_diff"] > 0.07)
-        )
-        # print(df["bound_diff"])
+    # trade_ts, target_price, kelly
+    # try to book a order, create an id-orderid mapping for call back
+    def attack(
+        self,
+        hunting_id,
+        target_price,
+        exit_price,
+        Stop_profit,
+        order_type,
+        kelly,
+    ):
+        if self.gainsbag.is_enough_cash() and not self.on_hold:
+            budget = self.gainsbag.discharge(kelly)
+            position = budget / target_price
+            buy_order = xBuyOrder(
+                client=self.client,
+                order_id=hunting_id,
+                target_price=target_price,
+                atr_exit_price=exit_price,
+                profit_leave_price=Stop_profit,
+                position=position,
+                order_type=order_type,
+            )
+            self.platform.place_order(buy_order)
 
-        # Combine the new 'OBV_UP' column back to the original dataframe
-        base_df["OBV"] = df["OBV"]
-        # base_df["OBV_UP"] = df["OBV_UP"] & (df["Slope"] >= 0)
-        # base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_UP"]
-        base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_LOW"]
-        # base_df["OBV_UP"] = df["OBV_UP"]
-        # base_df.at[df.index[-1], "OBV_UP"] = (
-        #     df["Rolling_Std_Percent"].iloc[-1]
-        #     <= df["Rolling_Std_Percent"]
-        #     .rolling(window=self.params.bayes_windows)
-        #     .min()
-        #     .iloc[-1]
+    def retreat(self, hunting_id, exit_price, Stop_profit):
+        if self.gainsbag.is_enough_position():
+            position = self.gainsbag.position
+            avg_cost = self.gainsbag.avg_cost
+            min_profit = avg_cost * (
+                1 + (1 - self.params.hard_cutoff) * self.params.profit_loss_ratio
+            )
+            final_stop_price = max(Stop_profit, min_profit)
+
+            sell_order = xSellOrder(
+                client=self.client,
+                order_id=hunting_id,
+                cutoff_price=avg_cost * self.params.hard_cutoff,
+                atr_exit_price=exit_price,
+                profit_leave_price=final_stop_price,
+                position=position,
+                order_type="S",
+            )
+            self.platform.place_order(sell_order)
+
+    def portfolio(self, pre_strike, strike):
+        return self.gainsbag.portfolio(pre_strike, strike)
+
+    def review_mission(self, base_df):
+        def count_consecutive_losses(df):
+            profits = df["sProfit"].dropna().astype(float).values
+            negative = profits < 0
+            neg_indices = np.where(negative)[0]
+
+            if len(neg_indices) == 0:
+                max_consecutive_losses = 0
+            else:
+                diff = np.diff(neg_indices)
+                consecutive = np.split(neg_indices, np.where(diff != 1)[0] + 1)
+                lengths = [len(c) for c in consecutive]
+                max_consecutive_losses = max(lengths)
+
+            return max_consecutive_losses
+
+        # df = base_df[base_df.BuySignal == 1]
+        df = base_df
+        sample = len(df[df.sBuy.notna()]) or 0.00001
+        profit_sample = "0.00"
+        # profit_sample = (
+        #     f"{len(df[df.sProfit > 0])/sample:.2f}({len(df[df.sProfit > 0])}/{sample})"
         # )
+        profit_mean = df[df.sProfit >= 0].sProfit.median() or ZERO
+        loss_mean = abs(df[df.sProfit < 0].sProfit.median() or ZERO)
+        strategy_profit = ((df["P/L"] > 3) & df.BuySignal).sum()
+        total_profit = (df["P/L"] > 3).sum()
+        strategy_performance = f"{strategy_profit / total_profit:.3f}"
+        # profit_loss_ratio = len(df[df.sProfit > 0]) / sample
+        cost = self.gainsbag.init_funds
+        strike = base_df.iloc[-1].Close
+        profit = self.gainsbag.cash + (self.gainsbag.position * strike) - cost
+        time_cost, w_daily_return = weighted_daily_return(df)
+        avg_time_cost = time_cost / sample if sample else 0
+        avg_profit = profit / sample if sample else 0
+        drawdown = df.sProfit.min()
 
-        base_df["Rolling_Std"] = df["Rolling_Std_Percent"]
-        base_df["upper_bound"] = df["upper_bound"]
-        base_df["lower_bound"] = df["lower_bound"]
-        return base_df
-
-    def _surfing(self, base_df):
-        plan_df = self.sufer.create_plan(base_df, 0)
-        return plan_df
-
-    def market_recon(self, base_df):
-        base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
-        base_df = self._calc_ATR(base_df)
-        base_df = self._calc_VWMA(base_df, window=self.params.upper_sample)
-        base_df = self._calc_OBV(base_df, multiplier=self.params.atr_loss_margin)
-        base_df = self._calc_profit(base_df)
-        return base_df
-
-    def _calc_VWMA(self, df, window):
-        df["VWMA"] = (df.Close * df.Vol).rolling(window=window).sum() / df.Vol.rolling(
-            window=window
-        ).sum()
-        df["Slope"] = (df.Close - df.VWMA.shift(window)) / window
-        df["Slope_Diff"] = df.Slope - df.Slope.shift(1)
-        return df
-
-
-class TurtleScout(IStrategyScout):
-    def __init__(self, params, buy_signal_func=None):
-        self.params = params
-        ATR_sample = self.params.ATR_sample
-        upper_sample = self.params.upper_sample
-        lower_sample = self.params.lower_sample
-        self.window = max(ATR_sample, upper_sample, lower_sample)
-        # Set the buy_signal_func, default to the simple_turtle_strategy if none is provided
-        self.buy_signal_func = buy_signal_func or self._simple_turtle_strategy
-
-    def _calc_profit(self, base_df):
-
-        surfing_df = base_df.tail(self.window).copy()
-        idx = surfing_df.Stop_profit.isna().index
-        prices = surfing_df.High.values.tolist()
-        mean = statistics.mean(prices)
-        stdv = statistics.stdev(prices)
-        surfing_profit = mean + (self.params.surfing_level * stdv)
-        surfing_df.loc[idx, "Stop_profit"] = surfing_profit
-        surfing_df.loc[idx, "exit_price"] = (
-            surfing_df.Close.shift(1)
-            - surfing_df.ATR.shift(1) * self.params.atr_loss_margin
+        _annual_return, _sortino_ratio = calc_annual_return_and_sortino_ratio(
+            cost, profit, df
         )
-        surfing_df.loc[idx, "atr_buy"] = surfing_df.Close.shift(
-            1
-        ) + surfing_df.ATR.shift(1)
-        base_df.update(surfing_df)
 
-        resume_idx = base_df.sell.isna().idxmax()
-        df = base_df.loc[resume_idx:].copy()
-        df = df[df.exit_price.notna()]
+        exit_stats = pd.DataFrame(
+            {"ATR_Profit": [0], "ATR_Loss": [0], "CUTOFF": [0], "Profit_LEAVE": [0]},
+            index=["Percentage"],
+        ).loc["Percentage"]
 
-        # Use the pre-calculated BuySignal using buy_signal_func
-        s_buy = df.buy.isna()
-        df["BuySignal"] = self.buy_signal_func(df, self.params)
-        df.loc[s_buy, "buy"] = df.Close.where(df["BuySignal"])
+        if "sStatus" in df.columns:
+            df = df[df.sStatus != "Buy_filled"]
+            atr_cutoff_counts = df.apply(
+                lambda row: (
+                    "ATR_Profit"
+                    if row["sStatus"] == "ATR_EXIT" and row["sProfit"] > 0
+                    else (
+                        "ATR_Loss"
+                        if row["sStatus"] == "ATR_EXIT" and row["sProfit"] < 0
+                        else row["sStatus"]
+                    )
+                ),
+                axis=1,
+            ).value_counts()
 
-        # Sell condition:
-        s_sell = df.buy.notna() & (df.Close < df.exit_price)
-        df.loc[s_sell, "sell"] = df.exit_price.where(s_sell)
-        df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.where(s_sell))
+            for category in ["ATR_Profit", "ATR_Loss", "CUTOFF", "Profit_LEAVE"]:
+                if category not in atr_cutoff_counts:
+                    atr_cutoff_counts[category] = 0.0
+            atr_percentages = atr_cutoff_counts / atr_cutoff_counts.sum()
+            exit_stats = pd.DataFrame({"Percentage": atr_percentages}).T.iloc[-1]
+            profit_sample = f"{(exit_stats.Profit_LEAVE + exit_stats.ATR_Profit):.2f}"
+            drawdownCount = count_consecutive_losses(df)
 
-        # Backfill sell and Matured columns
-        df.sell.bfill(inplace=True)
-        df.Matured.bfill(inplace=True)
+        return pd.DataFrame(
+            [
+                [
+                    profit,
+                    cost,
+                    strategy_performance,
+                    sample,
+                    profit_sample,
+                    avg_time_cost,
+                    avg_profit,
+                    drawdown,
+                    drawdownCount,
+                    _annual_return,
+                    _sortino_ratio,
+                    self.gainsbag.cash,
+                    self.gainsbag.position,
+                    self.gainsbag.avg_cost,
+                    exit_stats.Profit_LEAVE,
+                    exit_stats.ATR_Profit,
+                    exit_stats.ATR_Loss,
+                    exit_stats.CUTOFF,
+                ]
+            ],
+            columns=[
+                "Profit",
+                "Cost",
+                "StrategyPerformance",
+                "Sample",
+                "ProfitSample",
+                "Avg.Timecost",
+                "Avg.Profit",
+                "Drawdown",
+                "DrawdownCount",
+                "Annual.Return",
+                "SortinoRatio",
+                "Cash",
+                "Position",
+                "Avg.Cost",
+                "Profit_LEAVE",
+                "ATR_Profit",
+                "ATR_loss",
+                "CUTOFF",
+            ],
+        )
 
-        # Compute profit and time_cost columns
-        s_profit = df.buy.notna() & df.sell.notna() & df.profit.isna()
-        df.loc[s_profit, "profit"] = (df.sell / df.buy) - 1
-        df.loc[s_profit, "time_cost"] = [
-            int(x.seconds / 60 / pandas_util.INTERVAL_TO_MIN.get(self.params.interval))
-            for x in (
-                pd.to_datetime(df.loc[s_profit, "Matured"])
-                - pd.to_datetime(df.loc[s_profit, "Date"])
-            )
-        ]
 
-        # Clear sell and Matured values where buy is NaN
-        df.loc[df.buy.isna(), "sell"] = np.nan
-        df.loc[df.buy.isna(), "Matured"] = pd.NaT
-        base_df.update(df)
-        return base_df
+def weighted_daily_return(df_subset):
+    total_time_cost = df_subset["time_cost"].sum() or 1
+    weighted_return = np.sum(
+        (1 + df_subset["xProfit"]) ** (1 / df_subset["time_cost"])
+        * df_subset["time_cost"]
+    )
+    wd_return = (weighted_return / total_time_cost) - 1
+    return total_time_cost, wd_return
 
-    def _calc_ATR(self, base_df):
-        ATR_sample = self.params.ATR_sample
-        upper_sample = self.params.upper_sample
-        lower_sample = self.params.lower_sample
 
-        df = base_df.tail(self.window).copy()
-        idx = df.ATR.tail(self.window).isna().index
-        df.loc[idx, "turtle_h"] = df.High.shift(1).rolling(upper_sample).max()
-        df.loc[idx, "turtle_l"] = df.Low.shift(1).rolling(lower_sample).min()
-        df.loc[idx, "h_l"] = df.High - df.Low
-        df.loc[idx, "c_h"] = (df.Close.shift(1) - df.High).abs()
-        df.loc[idx, "c_l"] = (df.Close.shift(1) - df.Low).abs()
-        df.loc[idx, "TR"] = df[["h_l", "c_h", "c_l"]].max(axis=1)
-        df.loc[idx, "ATR"] = df["TR"].rolling(ATR_sample).mean()
-        df.loc[idx, "ATR_STDV"] = df["TR"].rolling(ATR_sample).std()
-        base_df.update(df)
-        return base_df
-
-    def market_recon(self, base_df):
-        base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
-        base_df = self._calc_ATR(base_df)
-        base_df = self._calc_profit(base_df)
-        return base_df
-
-    def _simple_turtle_strategy(self, df, params):
-        """
-        Default simple turtle strategy to generate BuySignal.
-        """
-        return df.High > df.turtle_h
+def calc_annual_return_and_sortino_ratio(cost, profit, df):
+    if df.empty:
+        return 0, 0
+    _yield_curve_1yr = 0.0419
+    _start_date = df.iloc[0].Date
+    _end_date = df.iloc[-1].Date
+    _trade_count = len(df[df.Kelly > 0])
+    _trade_minutes = (
+        pd.to_datetime(_end_date) - pd.to_datetime(_start_date)
+    ).total_seconds() / 60 or ZERO
+    _annual_trade_count = (_trade_count / _trade_minutes) * 365 * 24 * 60
+    _downside_risk_stdv = df[
+        (df.Kelly > 0) & (df.xProfit < _yield_curve_1yr)
+    ].xProfit.std(ddof=1)
+    _annual_downside_risk_stdv = _downside_risk_stdv * np.sqrt(_annual_trade_count)
+    t = _trade_minutes / (365 * 24 * 60)
+    _annual_return = (profit / cost) ** (1 / t) - 1 if (profit / cost > 0) else 0
+    _sortino_ratio = (_annual_return - _yield_curve_1yr) / _annual_downside_risk_stdv
+    return _annual_return, _sortino_ratio
