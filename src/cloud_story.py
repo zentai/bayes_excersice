@@ -7,6 +7,7 @@ import datetime
 from dataclasses import dataclass
 import pandas as pd
 import numpy as np
+from typing import Dict
 
 from config import config
 from huobi.constant.definition import OrderType
@@ -28,8 +29,10 @@ from .hunterverse.storage import HuntingCamp
 from .sensor.market_sensor import LocalMarketSensor
 from .sensor.market_sensor import HuobiMarketSensor
 from .sensor.market_sensor import MongoMarketSensor
-from .tradingfirm.pubsub_trader import xHunter
-from .tradingfirm.pubsub_trader import (
+
+# from .tradingfirm.pubsub_trader import xHunter
+from .tradingfirm.xtrader import xHunter
+from .tradingfirm.xtrader import (
     HUNTER_COLUMNS,
     BUY_FILLED,
     SELL_FILLED,
@@ -153,10 +156,11 @@ def hunterPause(sp):
 
 @dataclass
 class HuntingStory:
+    params: StrategyParam
     sensor: IMarketSensor
     scout: IStrategyScout
     engine: IEngine
-    hunter: IHunter
+    hunter: Dict[str, IHunter]
     base_df: pd.DataFrame
 
     def pub_market_sensor(self, sp):
@@ -172,7 +176,10 @@ class HuntingStory:
         return threading.Thread(target=run_market_sensor)
 
     def move_forward(self, message):
-        message = pandas_util.equip_fields(message, HUNTER_COLUMNS)
+
+        for h in self.hunter.values():
+            message = pandas_util.equip_fields(message, h.columns)
+
         self.base_df = pd.concat(
             [self.base_df, message],
             ignore_index=True,
@@ -194,7 +201,7 @@ class HuntingStory:
             # buy_signal = lastest_candlestick.OBV_UP | lastest_candlestick.OBV_DOWN
             # buy_signal = (
             #     lastest_candlestick.Close
-            #     > self.base_df.tail(self.hunter.params.upper_sample).High.mean()
+            #     > self.base_df.tail(self.params.upper_sample).High.mean()
             # )
 
             buy_signal = lastest_candlestick.BuySignal
@@ -202,9 +209,9 @@ class HuntingStory:
             # buy_signal = lastest_candlestick.OBV_DOWN
             if buy_signal:
 
-                price = self.base_df.tail(self.hunter.params.upper_sample).Close.max()
+                price = self.base_df.tail(self.params.upper_sample).Close.max()
                 print(f"BUY {price=}")
-                # price = self.base_df.tail(self.hunter.params.lower_sample).Low.min()
+                # price = self.base_df.tail(self.params.lower_sample).Low.min()
                 # price = lastest_candlestick.Close
                 order_type = "B" if price == lastest_candlestick.High else "BL"
 
@@ -220,42 +227,46 @@ class HuntingStory:
             return hunting_command
 
         hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
-        self.hunter.strike_phase(hunting_command)
-        if "statement" in self.hunter.params.debug_mode:
+        for _, hunter in self.hunter.items():
+            hunter.strike_phase(hunting_command)
+
+        if "statement" in self.params.debug_mode:
             print(self.base_df[DEBUG_COL][-30:])
-        if "mission_review" in self.hunter.params.debug_mode:
-            print(self.hunter.review_mission(self.base_df))
-        if "statement_to_csv" in self.hunter.params.debug_mode:
+        if "mission_review" in self.params.debug_mode:
+            print(hunter.review_mission(self.base_df))
+        if "statement_to_csv" in self.params.debug_mode:
             self.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
             print(f"created: {REPORTS_DIR}/{sp}.csv")
 
-    def sim_order_update(
-        self, order_id, order_status, price, position, execute_timestamp
+    def callback_order_matched(
+        self, client, order_id, order_status, price, position, execute_timestamp
     ):
+        p = client
+        hunter = self.hunter[client]
         if order_status in (BUY_FILLED):
             s_buy_order = self.base_df.Date == order_id
-            self.base_df.loc[s_buy_order, "sBuyOrder"] = order_id
-            self.base_df.loc[s_buy_order, "sBuy"] = price
-            self.base_df.loc[s_buy_order, "sPosition"] = self.hunter.sim_bag.position
-            self.base_df.loc[s_buy_order, "sCash"] = self.hunter.sim_bag.cash
-            self.base_df.loc[s_buy_order, "sAvgCost"] = self.hunter.sim_bag.avg_cost
-            self.base_df.loc[s_buy_order, "sStatus"] = order_status
-            self.base_df.loc[s_buy_order, "Matured"] = execute_timestamp
+            self.base_df.loc[s_buy_order, f"{p}BuyOrder"] = order_id
+            self.base_df.loc[s_buy_order, f"{p}Buy"] = price
+            self.base_df.loc[s_buy_order, f"{p}Position"] = hunter.gainsbag.position
+            self.base_df.loc[s_buy_order, f"{p}Cash"] = hunter.gainsbag.cash
+            self.base_df.loc[s_buy_order, f"{p}AvgCost"] = hunter.gainsbag.avg_cost
+            self.base_df.loc[s_buy_order, f"{p}Status"] = order_status
+            self.base_df.loc[s_buy_order, f"{p}Matured"] = execute_timestamp
         elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
             s_sell_order = self.base_df.Date == order_id
-            self.base_df.loc[s_sell_order, "sSellOrder"] = order_id
-            self.base_df.loc[s_sell_order, "sBuy"] = self.hunter.sim_bag.avg_cost
-            self.base_df.loc[s_sell_order, "sSell"] = price
-            profit = (price / self.hunter.sim_bag.avg_cost) - 1
-            self.base_df.loc[s_sell_order, "sProfit"] = profit
-            self.base_df.loc[s_sell_order, "sPosition"] = self.hunter.sim_bag.position
-            self.base_df.loc[s_sell_order, "sCash"] = self.hunter.sim_bag.cash
-            self.base_df.loc[s_sell_order, "sAvgCost"] = self.hunter.sim_bag.avg_cost
-            self.base_df.loc[s_sell_order, "sStatus"] = order_status
-            self.base_df.loc[s_sell_order, "sPnLRatio"] = profit / (
-                1 - self.hunter.params.hard_cutoff
+            self.base_df.loc[s_sell_order, f"{p}SellOrder"] = order_id
+            self.base_df.loc[s_sell_order, f"{p}Buy"] = hunter.gainsbag.avg_cost
+            self.base_df.loc[s_sell_order, f"{p}Sell"] = price
+            profit = (price / hunter.gainsbag.avg_cost) - 1
+            self.base_df.loc[s_sell_order, f"{p}Profit"] = profit
+            self.base_df.loc[s_sell_order, f"{p}Position"] = hunter.gainsbag.position
+            self.base_df.loc[s_sell_order, f"{p}Cash"] = hunter.gainsbag.cash
+            self.base_df.loc[s_sell_order, f"{p}AvgCost"] = hunter.gainsbag.avg_cost
+            self.base_df.loc[s_sell_order, f"{p}Status"] = order_status
+            self.base_df.loc[s_sell_order, f"{p}PnLRatio"] = profit / (
+                1 - hunter.params.hard_cutoff
             )
-            self.base_df.loc[s_sell_order, "Matured"] = execute_timestamp
+            self.base_df.loc[s_sell_order, f"{p}Matured"] = execute_timestamp
 
 
 def start_journey(sp):
@@ -278,11 +289,17 @@ def start_journey(sp):
 
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
-    hunter = xHunter(params=sp)
+    hunter = {
+        "s": xHunter("s", params=sp),
+        "b": xHunter("b", params=sp),
+    }
     base_df = sensor.scan(2000 if not sp.backtest else 100)
-    story = HuntingStory(sensor, scout, engine, hunter, base_df)
+    story = HuntingStory(sp, sensor, scout, engine, hunter, base_df)
     dispatcher.connect(story.move_forward, signal="k_channel")
-    dispatcher.connect(story.sim_order_update, signal="sim_order_update")
+    for h in hunter.values():
+        dispatcher.connect(
+            story.callback_order_matched, signal=h.platform.TOPIC_ORDER_MATCHED
+        )
     pub_thread = story.pub_market_sensor(sp)
     pub_thread.start()
     pub_thread.join()
@@ -290,12 +307,13 @@ def start_journey(sp):
     # review = story.hunter.review_mission(story.base_df)
     # sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
     if "final_statement_to_csv" in sp.debug_mode:
-        review = story.hunter.review_mission(story.base_df)
+        review = story.hunter["s"].review_mission(story.base_df)
         print(review)
-        story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
+        story.base_df.to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
+        # story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
         print(f"created: {REPORTS_DIR}/{sp}.csv")
-    visualize_backtest(story.base_df)
-    return story.base_df[DUMP_COL], story.hunter.review_mission(story.base_df)
+    # visualize_backtest(story.base_df)
+    return story.base_df[DUMP_COL], story.hunter["s"].review_mission(story.base_df)
 
 
 import matplotlib.pyplot as plt
