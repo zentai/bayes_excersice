@@ -189,6 +189,117 @@ class xSellOrder(xOrder):
     executed_price: Optional[float] = None  # 成交价格
 
 
+class Huobi:
+    def __init__(self, params):
+        self.params = params
+        self.dispatcher = dispatcher
+        self.dispatcher.connect(self.match_orders, signal="k_channel")
+        self.TOPIC_ORDER_MATCHED = "sim_order_update"
+        self.order_book = {
+            # client: {
+            #     Buy: xBuyOrder,
+            #     Sell: xSellOrder,
+            # }
+        }
+
+    def place_order(self, order):
+        client = order.client
+
+        if client not in self.order_book:
+            self.order_book[client] = {"Buy": None, "Sell": None}
+
+        if isinstance(order, xBuyOrder):
+            # buy_order = xBuyOrder(
+            #     client=self.client,
+            #     order_id=hunting_id,
+            #     target_price=target_price,
+            #     atr_exit_price=exit_price,
+            #     profit_leave_price=Stop_profit,
+            #     position=position,
+            #     order_type=order_type,
+            # )
+            order_id = huobi_api.place_order(
+                symbol=self.params.symbol,
+                amount=order.position,
+                price=order.price,
+                order_type="B",
+            )
+            self.order_book[client]["Buy"] = order
+        elif isinstance(order, xSellOrder):
+            self.order_book[client]["Sell"] = order
+
+    def match_orders(self, message):
+        market_high, market_low = message.iloc[-1].High, message.iloc[-1].Low
+        execute_timestamp = message.iloc[-1].Date
+
+        for orders in self.order_book.values():
+            if orders["Sell"] and orders["Sell"].status == "unfilled":
+                order = orders["Sell"]
+
+                # 按优先级检查出场价格
+                if market_low <= order.cutoff_price:
+                    order.status = "CUTOFF"
+                    order.timestamp = execute_timestamp
+                    order.executed_price = order.cutoff_price
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.cutoff_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+                elif market_low <= order.atr_exit_price:
+                    order.status = "ATR_EXIT"
+                    order.executed_price = order.atr_exit_price
+                    order.timestamp = execute_timestamp
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.atr_exit_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+
+                elif market_high >= order.profit_leave_price:
+                    order.status = "Profit_LEAVE"
+                    order.executed_price = order.profit_leave_price
+                    order.timestamp = execute_timestamp
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.profit_leave_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+
+            # 检查买入订单
+            if orders["Buy"] and orders["Buy"].status == "unfilled":
+                order = orders["Buy"]
+                if market_low <= order.atr_exit_price:
+                    # Maket price lower than ATR_exit, no point to buy.
+                    pass
+                elif market_low <= order.target_price:
+                    order.status = BUY_FILLED
+                    order.executed_price = order.target_price
+                    order.timestamp = execute_timestamp
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.target_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+
+
+
 class SimHuobi:
     def __init__(self):
         self.dispatcher = dispatcher
