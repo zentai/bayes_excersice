@@ -3,12 +3,12 @@ import os
 import pandas as pd
 import numpy as np
 import logging
-from datetime import datetime
 
 from pydispatch import dispatcher
 from huobi.constant.definition import OrderType, OrderState
 
 from ..hunterverse.interface import IHunter
+from ..hunterverse.interface import xOrder, xBuyOrder, xSellOrder
 from ..utils import pandas_util
 from .platforms import huobi_api
 
@@ -146,37 +146,119 @@ class GainsBag:
             return self.name
 
 
-from dataclasses import dataclass, field
-from typing import Optional, List
+class Huobi:
+    def __init__(self, params, api_key=None, secret_key=None):
+        self.params = params
+        self.dispatcher = dispatcher
+        self.dispatcher.connect(self.match_orders, signal="k_channel")
+        self.TOPIC_ORDER_MATCHED = "sim_order_update"
+        self.api_key = api_key or "fefd13a1-bg2hyw2dfg-440b3c64-576f2"
+        self.secret_key = secret_key or "1a437824-042aa429-0beff3ba-03e26"
 
+        self.order_book = {
+            # client: {
+            #     Buy: xBuyOrder,
+            #     Sell: xSellOrder,
+            # }
+        }
 
-@dataclass
-class xOrder:
-    client: str
-    order_id: str
-    position: float
+    def place_order(self, order):
+        client = order.client
 
+        if client not in self.order_book:
+            self.order_book[client] = {"Buy": None, "Sell": None}
 
-@dataclass
-class xBuyOrder(xOrder):
-    target_price: float
-    atr_exit_price: float
-    profit_leave_price: float
-    order_type: str = "B"  # 默认订单类型为买入
-    status: str = "unfilled"
-    timestamp: datetime = field(default_factory=datetime.now)
-    executed_price: Optional[float] = None  # 成交价格
+        if isinstance(order, xBuyOrder):
+            # buy_order = xBuyOrder(
+            #     client=self.client,
+            #     order_id=hunting_id,
+            #     target_price=target_price,
+            #     atr_exit_price=exit_price,
+            #     profit_leave_price=Stop_profit,
+            #     position=position,
+            #     order_type=order_type,
+            # )
+            order_id = huobi_api.place_order(
+                symbol=self.params.symbol,
+                amount=order.position,
+                price=order.price,
+                order_type="B",
+                api_key=self.api_key,
+                secret_key=self.secret_key,
+            )
+            self.order_book[client]["Buy"] = order
+        elif isinstance(order, xSellOrder):
+            self.order_book[client]["Sell"] = order
 
+    def match_orders(self, message):
+        market_high, market_low = message.iloc[-1].High, message.iloc[-1].Low
+        execute_timestamp = message.iloc[-1].Date
 
-@dataclass
-class xSellOrder(xOrder):
-    cutoff_price: float
-    atr_exit_price: float
-    profit_leave_price: float
-    order_type: str = "S"  # 默认订单类型为卖出
-    status: str = "unfilled"
-    timestamp: datetime = field(default_factory=datetime.now)
-    executed_price: Optional[float] = None  # 成交价格
+        for orders in self.order_book.values():
+            if orders["Sell"] and orders["Sell"].status == "unfilled":
+                order = orders["Sell"]
+
+                # 按优先级检查出场价格
+                if market_low <= order.cutoff_price:
+                    order.status = "CUTOFF"
+                    order.timestamp = execute_timestamp
+                    order.executed_price = order.cutoff_price
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.cutoff_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+                elif market_low <= order.atr_exit_price:
+                    order.status = "ATR_EXIT"
+                    order.executed_price = order.atr_exit_price
+                    order.timestamp = execute_timestamp
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.atr_exit_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+
+                elif market_high >= order.profit_leave_price:
+                    order.status = "Profit_LEAVE"
+                    order.executed_price = order.profit_leave_price
+                    order.timestamp = execute_timestamp
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.profit_leave_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
+
+            # 检查买入订单
+            if orders["Buy"] and orders["Buy"].status == "unfilled":
+                order = orders["Buy"]
+                if market_low <= order.atr_exit_price:
+                    # Maket price lower than ATR_exit, no point to buy.
+                    pass
+                elif market_low <= order.target_price:
+                    order.status = BUY_FILLED
+                    order.executed_price = order.target_price
+                    order.timestamp = execute_timestamp
+                    self.dispatcher.send(
+                        client=order.client,
+                        signal=self.TOPIC_ORDER_MATCHED,
+                        order_id=order.order_id,
+                        order_status=order.status,
+                        price=order.target_price,
+                        position=order.position,
+                        execute_timestamp=order.timestamp,
+                    )
 
 
 class SimHuobi:

@@ -1,5 +1,8 @@
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Optional, List
+from datetime import datetime
 
 INTERVAL_TO_MIN = {
     "1min": 1,
@@ -123,3 +126,32 @@ class StrategyParam:
         buy_params = f"atr{self.ATR_sample}bw{self.bayes_windows}up{self.upper_sample}lw{self.lower_sample}"
         sell_params = f"cut{self.hard_cutoff}pnl{self.profit_loss_ratio}ext{self.atr_loss_margin}stp{self.surfing_level}"
         return f"{header}_{buy_params}_{sell_params}"
+
+
+@dataclass
+class xOrder:
+    client: str
+    order_id: str
+    position: float
+
+
+@dataclass
+class xBuyOrder(xOrder):
+    target_price: float
+    atr_exit_price: float
+    profit_leave_price: float
+    order_type: str = "B"
+    status: str = "unfilled"
+    timestamp: datetime = field(default_factory=datetime.now)
+    executed_price: Optional[float] = None
+
+
+@dataclass
+class xSellOrder(xOrder):
+    cutoff_price: float
+    atr_exit_price: float
+    profit_leave_price: float
+    order_type: str = "S"
+    status: str = "unfilled"
+    timestamp: datetime = field(default_factory=datetime.now)
+    executed_price: Optional[float] = None

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from datetime import datetime
 import pandas as pd
 
-
 from huobi.client.trade import TradeClient
 from huobi.client.account import AccountClient
 from huobi.client.market import MarketClient
@@ -17,8 +16,6 @@ from huobi.utils import *
 
 logger = logging.getLogger(__name__)
 
-g_api_key = "uymylwhfeg-eb0f1107-98ea054c-ad39b"
-g_secret_key = "6fc09731-0b3fde88-b83e1f10-2dc2f"
 
 huobi_interval = {
     "1min": CandlestickInterval.MIN1,
@@ -50,18 +47,21 @@ class Candlestick:
 
 
 # Account
-def get_spot_acc():
-    account_client = AccountClient(api_key=g_api_key, secret_key=g_secret_key)
+def get_spot_acc(api_key, secret_key):
+    account_client = AccountClient(api_key=api_key, secret_key=secret_key)
     return account_client.get_account_by_type_and_symbol(
         account_type=AccountType.SPOT, symbol=None
     )
 
 
-def get_balance(symbol, balance_type=AccountBalanceUpdateType.TRADE):
-    account_client = AccountClient(api_key=g_api_key, secret_key=g_secret_key)
-    list_obj = account_client.get_balance(account_id=spot_account_id)
+def get_balance(
+    symbol, api_key, secret_key, balance_type=AccountBalanceUpdateType.TRADE
+):
+    account_client = AccountClient(api_key=api_key, secret_key=secret_key)
+    spot_account_id = get_spot_acc(api_key, secret_key).id
+    list_obj = account_client.get_balance(spot_account_id)
     symbol = symbol.replace("usdt", "") or "usdt"
-    for obj in list_obj:
+    for obj in list_obj.list:
         if obj.currency != symbol:
             continue
         elif obj.type != balance_type:
@@ -69,13 +69,9 @@ def get_balance(symbol, balance_type=AccountBalanceUpdateType.TRADE):
         return float(obj.balance)
 
 
-spot_account_id = get_spot_acc().id
-
-
-# Trade
-def get_orders(order_ids):
+def get_orders(order_ids, api_key, secret_key):
     try:
-        trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
+        trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
         """
             order.finished_at,
             order.id,
@@ -122,17 +118,26 @@ def get_orders(order_ids):
     except Exception as e:
         logger.error(f"get_orders: {e}")
         time.sleep(5)
-        return get_orders(order_ids)
+        return get_orders(order_ids, api_key, secret_key)
 
 
-def get_open_orders(symbol):
-    trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
-    # result = trade_client.get_order(order_id=421444228622801)
+def get_open_orders(symbol, api_key, secret_key):
+    trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
+    spot_account_id = get_spot_acc(api_key, secret_key).id
     result = trade_client.get_open_orders(symbol=symbol, account_id=spot_account_id)
     return result
 
 
-def place_order(symbol, amount, price, order_type, stop_price=None, operator=None):
+def place_order(
+    symbol,
+    amount,
+    price,
+    order_type,
+    api_key,
+    secret_key,
+    stop_price=None,
+    operator=None,
+):
     side = {
         "BL": OrderType.BUY_STOP_LIMIT,
         "B": OrderType.BUY_LIMIT,
@@ -170,7 +175,8 @@ def place_order(symbol, amount, price, order_type, stop_price=None, operator=Non
             f"[{order_type}] adjust sell amount: {round_amount}, trigger Price: {stop_price}, price: {round_price}"
         )
 
-    trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
+    trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
+    spot_account_id = get_spot_acc(api_key, secret_key).id
     order_id = trade_client.create_order(
         symbol=symbol.name,
         account_id=spot_account_id,
@@ -185,10 +191,10 @@ def place_order(symbol, amount, price, order_type, stop_price=None, operator=Non
     return order_id
 
 
-def cancel_all_open_orders(symbol, order_type=None):
+def cancel_all_open_orders(symbol, api_key, secret_key, order_type=None):
     try:
-        trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
-        orders = get_open_orders(symbol)
+        trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
+        orders = get_open_orders(symbol, api_key, secret_key)
         c_success, c_fail = [], []
         for order in orders:
             if order.source != "api":
@@ -207,18 +213,18 @@ def cancel_all_open_orders(symbol, order_type=None):
     except Exception as e:
         logger.error(f"Cancel fail, {e}")
         time.sleep(5)
-        return cancel_all_open_orders(symbol)
+        return cancel_all_open_orders(symbol, api_key, secret_key)
 
 
-def load_history_orders(symbol, size=1000):
-    trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
+def load_history_orders(symbol, api_key, secret_key, size=1000):
+    trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
     return [obj.id for obj in trade_client.get_history_orders(symbol=symbol, size=size)]
 
 
 # Market
 def get_history_stick(symbol, sample=20, interval="1min"):
     interval = huobi_interval.get(interval)
-    market_client = MarketClient(init_log=True, timeout=10)
+    market_client = MarketClient(init_log=False, timeout=10)
     htx_stick = market_client.get_candlestick(symbol, interval, sample)
 
     candlesticks = [
@@ -251,23 +257,24 @@ def seek_price(symbol, action):
         for t in list_obj:
             if t.direction == action:
                 return t.price
-            # t.print_object()
         time.sleep(0.05)
+
+
+from huobi.client.trade import TradeClient
+from huobi.constant import *
+from huobi.model.trade import OrderUpdateEvent
+
+
+def callback(upd_event: "OrderUpdateEvent"):
+    print("---- order update : ----")
+    upd_event.print_object()
+    print()
 
 
 if __name__ == "__main__":
     # get_balance('nearusdt')
     # get_balance('usdt')
 
-    from hunterverse.interface import Symbol
-
-    symbol = Symbol("1catusdt")
-    get_spot_acc().print_object()
-    balance = get_balance("mkrusdt")
-    print(balance)
-    order_id = place_order(
-        symbol, 2174, 0.004640, "BL", stop_price=0.004645, operator="lte"
-    )
     # order_id = place_order(symbol, 2170.5, 0.004949, 'SL', stop_price=0.005000, operator='gte')
     # succ, fail = cancel_all_open_orders(symbol.name, OrderType.BUY_LIMIT)
     # print(succ)
@@ -282,8 +289,90 @@ if __name__ == "__main__":
     # time.sleep(1)
     # print(f"[SEEK SELL] {seek_price(symbol=symbol, action='sell')}")
     # order_id = place_order(symbol=symbol, amount=position, price=None, order_type='SM')
-    # df_orders = get_orders([order_id])
+
+    ########################
+    #  Re-Testing anything
+    ########################
+
+    # 1. test Spot accound id
+    # print(get_spot_acc(api_key, secret_key).id)
+
+    # 2. Test Coin balance
+    # print(
+    #     get_balance(
+    #         "pepeusdt",
+    #         g_api_key,
+    #         g_secret_key,
+    #         balance_type=AccountBalanceUpdateType.TRADE,
+    #     )
+    # )
+
+    # 3. test get Orders.
+    # order_ids = [1220351950556858, 1220339501577514, 1218898472054379]
+    # orders = get_orders(order_ids, api_key, secret_key)
+    # print(orders)
+
+    # 4. test get_open_orders
+    # orders = get_open_orders("pepeusdt", api_key, secret_key)
+    # print(orders)
+
+    from hunterverse.interface import Symbol
+
+    # 5. Test Place order
+    # order_id = place_order(
+    #     Symbol("pepeusdt"),
+    #     10004418.48,
+    #     0.000018000000,
+    #     "B",
+    #     api_key,
+    #     secret_key,
+    #     stop_price=0.000017900000,
+    #     operator="gte",
+    # )
+    # print(order_id)
+
+    # 6. cancel_all_open_orders(symbol, api_key, secret_key, order_type=None)
+    # success, fail = cancel_all_open_orders(
+    #     "pepeusdt", api_key, secret_key, order_type=None
+    # )
+    # print(success, fail)
+
+    # 7. load_history_orders(symbol, api_key, secret_key, size=1000):
+    # print(load_history_orders("pepeusdt", api_key, secret_key, size=1000))
+
+    # 8. def get_history_stick(symbol, sample=20, interval="1min"):
+    # print(get_history_stick("pepeusdt", sample=20, interval="1min"))
+
+    # account_client = AccountClient(api_key=g_api_key, secret_key=g_secret_key)
+    # spot_account_id = get_spot_acc(api_key, secret_key).id
+    # list_obj = account_client.get_balance(account_id=spot_account_id)
+    # LogInfo.output_list(list_obj)
+    # from huobi.utils import LogInfo
+
+    # 9.  get_strike(symbol):
+    # print(get_strike("pepeusdt"))
+
+    # 10. def seek_price(symbol, action):
+    # print(seek_price(Symbol("pepeusdt"), "buy"))
+
+    # trade_client = TradeClient(api_key=api_key, secret_key=secret_key, init_log=False)
+    # trade_client.sub_order_update("pepeusdt", callback)
+    # time.sleep(10)
+
+    # account_client = AccountClient(api_key=g_api_key, secret_key=g_secret_key)
+    # LogInfo.output(
+    #     "====== (SDK encapsulated api) not recommend for low performance and frequence limitation ======"
+    # )
+    # account_balance_list = account_client.get_account_balance()
+    # if account_balance_list and len(account_balance_list):
+    #     for account_obj in account_balance_list:
+    #         print(account_obj)
+    #         account_obj.print_object()
+    #         print()
+
+    # df_orders = get_orders([1220351950556858], api_key, secret_key)
     # print(df_orders)
+
     # price = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[0]
     # position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
     # print(f"[SELL] Average Price: {price/position} ")

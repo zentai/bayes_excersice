@@ -85,7 +85,7 @@ def load_symbols(symbol):
     code = symbol.name  # "BTC-USD"
     df = pd.read_csv(f"{DATA_DIR}/{code}_cached.csv")
     # df = df.dropna()
-    return df[['Date', 'Open', 'High', 'Low', 'Close', 'Vol']]
+    return df[["Date", "Open", "High", "Low", "Close", "Vol"]]
 
 
 def load_symbols_from_huobi(symbol, limits, interval):

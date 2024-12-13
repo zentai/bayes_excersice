@@ -290,8 +290,9 @@ def start_journey(sp):
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
     hunter = {
-        "s": xHunter("s", params=sp),
-        "b": xHunter("b", params=sp),
+        # "s": xHunter("s", params=sp),
+        # "b": xHunter("b", params=sp),
+        "x": xHunter("x", params=sp, platform=huobi_api),
     }
     base_df = sensor.scan(2000 if not sp.backtest else 100)
     story = HuntingStory(sp, sensor, scout, engine, hunter, base_df)
@@ -525,11 +526,11 @@ if __name__ == "__main__":
             "stake_cap": 12.5,
             "symbol": Symbol("pepeusdt"),
             "interval": "1min",
-            "backtest": True,
+            "backtest": False,
             "debug_mode": [
                 "statement",
-                # "statement_to_csv",
-                # "mission_review",
+                "statement_to_csv",
+                "mission_review",
                 "final_statement_to_csv",
             ],
         }
