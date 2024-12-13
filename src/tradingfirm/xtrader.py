@@ -28,7 +28,7 @@ HUNTER_COLUMNS = [
     "AvgCost",
     "BuyOrder",
     "SellOrder",
-    "PnLRatio",
+    "P/L",
     "Status",
 ]
 
@@ -644,7 +644,7 @@ class xHunter(IHunter):
 def weighted_daily_return(df_subset):
     total_time_cost = df_subset["time_cost"].sum() or 1
     weighted_return = np.sum(
-        (1 + df_subset["xProfit"]) ** (1 / df_subset["time_cost"])
+        (1 + df_subset["sProfit"]) ** (1 / df_subset["time_cost"])
         * df_subset["time_cost"]
     )
     wd_return = (weighted_return / total_time_cost) - 1
@@ -663,8 +663,8 @@ def calc_annual_return_and_sortino_ratio(cost, profit, df):
     ).total_seconds() / 60 or ZERO
     _annual_trade_count = (_trade_count / _trade_minutes) * 365 * 24 * 60
     _downside_risk_stdv = df[
-        (df.Kelly > 0) & (df.xProfit < _yield_curve_1yr)
-    ].xProfit.std(ddof=1)
+        (df.Kelly > 0) & (df.sProfit < _yield_curve_1yr)
+    ].sProfit.std(ddof=1)
     _annual_downside_risk_stdv = _downside_risk_stdv * np.sqrt(_annual_trade_count)
     t = _trade_minutes / (365 * 24 * 60)
     _annual_return = (profit / cost) ** (1 / t) - 1 if (profit / cost > 0) else 0

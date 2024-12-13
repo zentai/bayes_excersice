@@ -34,7 +34,7 @@ sim logic:
     buy_signal = kelly > 0 and gains_bag.is_enough_cash
     budget = gains_bag.discharge(kelly)
     price = fetch from huobi
-    position = budget/price
+    position = budget/price 
     Note: using close price to calculate position.... hmmmm
 
 attach logic:
@@ -44,5 +44,14 @@ attach logic:
 4. budget = gains_bag.discharge(1)
 5. cancell all previous orders and update xBuyOrder = Cancel
 6. position = budget/price
-7.
+7. is_fly = price == base_df.iloc[-1].High
+8. buy [B] if is_fly else [BL]
+
+Abstract:
+1. check filled order
+    sim: check sBuyOrder/sBuy, if latest candle stick >= highest price, return price else None
+    real: check xBuyOrder/xBuy, fetch order id from huobi, if filled then return 
+2. cancel un-filled order
+2. place new order
+
 

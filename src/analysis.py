@@ -224,7 +224,7 @@ if __name__ == "__main__":
 
     # market_trend()
     df = pd.read_csv(
-        f"{REPORTS_DIR}/F34.SI1day_atr15bw15up15lw15_cut0.9pnl2ext3stp7.csv"
+        f"{REPORTS_DIR}/500.SI1day_atr15bw15up15lw15_cut0.9pnl2ext3stp5.csv"
     )
 
     buy_sell_periods = split_buy_sell(df)

@@ -96,9 +96,7 @@ def load_symbols_from_huobi(symbol, limits, interval):
 def equip_fields(df, columns):
     missing_columns = set(columns) - set(df.columns)
     if missing_columns:
-        new_cols = {
-            col: pd.NaT if col == "Matured" else np.nan for col in missing_columns
-        }
+        new_cols = {col: pd.NaT if col == "Matured" else np.nan for col in columns}
         return df.assign(**new_cols)
     return df
 

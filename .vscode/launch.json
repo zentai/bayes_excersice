@@ -6,21 +6,48 @@
     "configurations": [
         {
             "name": "Python 调试程序: 模块",
-            "type": "debugpy",
+            "type": "python",
             "request": "launch",
-            "module": "src.story",
-            "args": ["--ccy", "tonusdt", "--interval", "1min", "--fund", "30"],
+            "justMyCode": false,
+            "module": "src.cloud_story",
             "env": {
-                "PYTHONPATH": "${workspaceFolder}/src"
+                "PYTHONPATH": "${workspaceFolder}"
             }
         },
         {
             "name": "Python 调试程序: 模块",
-            "type": "debugpy",
+            "type": "python",
+            "request": "launch",
+            "justMyCode": false,
+            "module": "src.test_real",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python 调试程序: 模块",
+            "type": "python",
+            "request": "launch",
+            "module": "src.story",
+            "args": [
+                "--ccy",
+                "uem",
+                "--interval",
+                "1day",
+                "--fund",
+                "100"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python 调试程序: 模块",
+            "type": "python",
             "request": "launch",
             "module": "src.portfolio",
             "env": {
-                "PYTHONPATH": "${workspaceFolder}/src"
+                "PYTHONPATH": "${workspaceFolder}"
             }
         },
     ]

@@ -24,7 +24,8 @@ from .hunterverse.interface import IHunter
 from .hunterverse.interface import Symbol
 from .hunterverse.interface import StrategyParam
 from .hunterverse.interface import INTERVAL_TO_MIN
-from .hunterverse.storage import HuntingCamp
+
+# from .hunterverse.storage import HuntingCamp
 
 from .sensor.market_sensor import LocalMarketSensor
 from .sensor.market_sensor import HuobiMarketSensor
@@ -58,7 +59,7 @@ DEBUG_COL = [
     "buy",
     "sell",
     "profit",
-    "P/L",
+    "sP/L",
     # "OBV",
     # "OBV_UP",
     "sBuy",
@@ -115,7 +116,7 @@ DUMP_COL = [
     "sPosition",
     "sCash",
     "sAvgCost",
-    "sPnLRatio",
+    "sP/L",
     "sStatus",
     # "xBuy",
     # "xSell",
@@ -179,7 +180,6 @@ class HuntingStory:
 
         for h in self.hunter.values():
             message = pandas_util.equip_fields(message, h.columns)
-
         self.base_df = pd.concat(
             [self.base_df, message],
             ignore_index=True,
@@ -210,7 +210,6 @@ class HuntingStory:
             if buy_signal:
 
                 price = self.base_df.tail(self.params.upper_sample).Close.max()
-                print(f"BUY {price=}")
                 # price = self.base_df.tail(self.params.lower_sample).Low.min()
                 # price = lastest_candlestick.Close
                 order_type = "B" if price == lastest_candlestick.High else "BL"
@@ -263,16 +262,17 @@ class HuntingStory:
             self.base_df.loc[s_sell_order, f"{p}Cash"] = hunter.gainsbag.cash
             self.base_df.loc[s_sell_order, f"{p}AvgCost"] = hunter.gainsbag.avg_cost
             self.base_df.loc[s_sell_order, f"{p}Status"] = order_status
-            self.base_df.loc[s_sell_order, f"{p}PnLRatio"] = profit / (
-                1 - hunter.params.hard_cutoff
-            )
+            self.base_df.loc[s_sell_order, f"{p}P/L"] = (
+                price - hunter.gainsbag.avg_cost
+            ) / (self.base_df.iloc[-1].ATR * self.params.atr_loss_margin)
             self.base_df.loc[s_sell_order, f"{p}Matured"] = execute_timestamp
 
 
 def start_journey(sp):
     base_df = None
-    camp = HuntingCamp(sp)
-    load_df = camp.load()
+    # camp = HuntingCamp(sp)
+    # load_df = camp.load()
+    load_df = pd.DataFrame()
     if sp.backtest:
         sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
         # sensor = MongoMarketSensor(symbol=sp.symbol, interval=sp.interval)
@@ -289,6 +289,10 @@ def start_journey(sp):
 
     scout = TurtleScout(params=sp)
     engine = BayesianEngine(params=sp)
+    import copy
+
+    bsp = copy.deepcopy(sp)
+    bsp.funds = 1000000
     hunter = {
         # "s": xHunter("s", params=sp),
         # "b": xHunter("b", params=sp),
@@ -400,16 +404,30 @@ def visualize_backtest(df, window_size=60):
     print(f"Breakeven Win Rate: {breakeven_win_rate:.3f}")
 
     # P/L Binning into 10 segments
-    pl_min = df["P/L"].min()
+    pl_min = 0
     pl_max = df["P/L"].max()
     bins = np.linspace(
         pl_min, pl_max, 11
     )  # Split into 10 parts (11 points create 10 bins)
+    print(bins)
     df["P/L_bins"] = pd.cut(df["P/L"], bins=bins, include_lowest=True)
 
     # Count occurrences for each bin using P/L_bins
     captured_counts = df.loc[df["BuySignal"] == True].groupby("P/L_bins").size()
     total_counts = df.groupby("P/L_bins").size()
+
+    # Combine into a summary DataFrame
+    summary_df = pd.DataFrame(
+        {
+            "P/L_bin": captured_counts.index.astype(str),
+            "Captured_Counts": captured_counts,
+            "Total_Counts": total_counts,
+        }
+    ).fillna(0)
+
+    # Print the summary DataFrame
+    print("Summary of Captured vs Total Counts per P/L Bin:")
+    print(summary_df)
 
     # Profit and Loss Distribution Visualization (side-by-side bar chart)
     x = np.arange(len(captured_counts.index))  # the label locations
@@ -463,16 +481,6 @@ def visualize_backtest(df, window_size=60):
     plt.grid(axis="y", linestyle="--", alpha=0.7)
     plt.show()
 
-    # Win Rate Trend Visualization
-    plt.figure(figsize=(10, 6))
-    plt.plot(df["Date"], win_rate_trend, marker="o", linestyle="-", color="b")
-    plt.title("Win Rate Trend Over Time (Moving Window)")
-    plt.xlabel("Date")
-    plt.ylabel("Win Rate")
-    plt.xticks(rotation=45)
-    plt.grid(axis="y", linestyle="--", alpha=0.7)
-    plt.show()
-
 
 # very good for BTCUSDT day K
 # params = {
@@ -495,10 +503,10 @@ def visualize_backtest(df, window_size=60):
 
 params = {
     # Buy
-    "ATR_sample": 15,
-    "bayes_windows": 15,
-    "lower_sample": 15,
-    "upper_sample": 15,
+    "ATR_sample": 12,
+    "bayes_windows": 12,
+    "lower_sample": 12,
+    "upper_sample": 12,
     # Sell
     "hard_cutoff": 0.9,
     "profit_loss_ratio": 3,
