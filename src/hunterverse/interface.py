@@ -130,28 +130,31 @@ class StrategyParam:
 
 @dataclass
 class xOrder:
-    client: str
     order_id: str
-    position: float
 
 
 @dataclass
 class xBuyOrder(xOrder):
     target_price: float
-    atr_exit_price: float
-    profit_leave_price: float
+    kelly: float
+    executed_price: Optional[float] = None
+    operator: str = ""
     order_type: str = "B"
     status: str = "unfilled"
     timestamp: datetime = field(default_factory=datetime.now)
-    executed_price: Optional[float] = None
+    client: str = ""
+    position: float = 0
 
 
 @dataclass
 class xSellOrder(xOrder):
-    cutoff_price: float
     atr_exit_price: float
     profit_leave_price: float
+    executed_price: Optional[float] = None
+    operator: str = ""
     order_type: str = "S"
     status: str = "unfilled"
     timestamp: datetime = field(default_factory=datetime.now)
-    executed_price: Optional[float] = None
+    client: str = ""
+    position: float = 0
+    cutoff_price: float = 0

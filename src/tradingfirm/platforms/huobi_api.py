@@ -260,6 +260,11 @@ def seek_price(symbol, action):
         time.sleep(0.05)
 
 
+def subscribe_order_update(symbol, api_key, secret_key, callback_func):
+    trade_client = TradeClient(api_key=api_key, secret_key=secret_key, init_log=False)
+    trade_client.sub_order_update(symbol, callback_func)
+
+
 from huobi.client.trade import TradeClient
 from huobi.constant import *
 from huobi.model.trade import OrderUpdateEvent

@@ -24,6 +24,7 @@ from .hunterverse.interface import IHunter
 from .hunterverse.interface import Symbol
 from .hunterverse.interface import StrategyParam
 from .hunterverse.interface import INTERVAL_TO_MIN
+from .hunterverse.interface import xBuyOrder, xSellOrder
 
 # from .hunterverse.storage import HuntingCamp
 
@@ -192,19 +193,21 @@ class HuntingStory:
             _High = lastest_candlestick.High
             _Low = lastest_candlestick.Low
             hunting_command = {}
-            hunting_command["sell"] = {
-                "hunting_id": lastest_candlestick.Date,
-                "exit_price": lastest_candlestick.exit_price,
-                "Stop_profit": lastest_candlestick.Stop_profit,
-            }
+            sell_order = xSellOrder(
+                order_id=lastest_candlestick.Date,
+                atr_exit_price=lastest_candlestick.exit_price,
+                profit_leave_price=lastest_candlestick.Stop_profit,
+                order_type="S",
+            )
+            hunting_command["sell"] = sell_order
+
+            buy_signal = lastest_candlestick.BuySignal
             # buy_signal = lastest_candlestick.OBV_UP == True
             # buy_signal = lastest_candlestick.OBV_UP | lastest_candlestick.OBV_DOWN
             # buy_signal = (
             #     lastest_candlestick.Close
             #     > self.base_df.tail(self.params.upper_sample).High.mean()
             # )
-
-            buy_signal = lastest_candlestick.BuySignal
             # buy_signal = lastest_candlestick.High > lastest_candlestick.atr_buy
             # buy_signal = lastest_candlestick.OBV_DOWN
             if buy_signal:
@@ -213,16 +216,15 @@ class HuntingStory:
                 # price = self.base_df.tail(self.params.lower_sample).Low.min()
                 # price = lastest_candlestick.Close
                 order_type = "B" if price == lastest_candlestick.High else "BL"
-
-                hunting_command["buy"] = {
-                    "hunting_id": lastest_candlestick.Date,
-                    "target_price": price,
-                    "exit_price": lastest_candlestick.exit_price,
-                    "Stop_profit": lastest_candlestick.Stop_profit,
-                    "order_type": order_type,
-                    "kelly": 1,  # lastest_candlestick.Kelly,
-                }
-            # print(hunting_command)
+                buy_order = xBuyOrder(
+                    order_id=lastest_candlestick.Date,
+                    target_price=price,
+                    executed_price=price * 1.01,
+                    order_type=order_type,
+                    operator="gte",
+                    kelly=1.0,  # lastest_candlestick.Kelly,
+                )
+                hunting_command["buy"] = buy_order
             return hunting_command
 
         hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
