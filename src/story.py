@@ -159,16 +159,16 @@ def start_journey(sp):
                         sp.symbol.name, order_type=OrderType.BUY_STOP_LIMIT
                     )
                     print(
-                        f"cancel {order_type} orders success: {success}, fail: {fail}" 
+                        f"cancel {order_type} orders success: {success}, fail: {fail}"
                     )
                     if order_type in ("buy-stop-limit", "buy-limit", "buy-market"):
-                        base_df.loc[
-                            base_df.xBuyOrder.isin(success), "xBuyOrder"
-                        ] = "Cancel"
+                        base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = (
+                            "Cancel"
+                        )
                     elif order_type in ("sell-limit", "sell-stop-limit", "sell-market"):
-                        base_df.loc[
-                            base_df.xSellOrder.isin(success), "xSellOrder"
-                        ] = "Cancel"
+                        base_df.loc[base_df.xSellOrder.isin(success), "xSellOrder"] = (
+                            "Cancel"
+                        )
             except Exception as e:
                 print(f"[Terminated] cancel process fail: {e}")
 
@@ -208,26 +208,23 @@ def start_journey(sp):
         # )
         # print(f"{config.reports_dir}/{sp.symbol.name}.csv")
         hunterPause(sp)
-    base_df[DUMP_COL].to_csv(
-        f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
-    )
+    base_df[DUMP_COL].to_csv(f"{config.reports_dir}/{sp.symbol.name}.csv", index=False)
     print(f"{config.reports_dir}/{sp.symbol.name}.csv")
 
+    # try:
+    #     base_df, review = story.move_forward(base_df)
+    #     final_review = review
+    #     print(base_df[DEBUG_COL][-30:])
+    #     print(final_review)
+    #     base_df[DUMP_COL].to_csv(
+    #         f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
+    #     )
+    #     print(f"{config.reports_dir}/{sp.symbol.name}.csv")
+    #     hunterPause(sp)
 
-        # try:
-        #     base_df, review = story.move_forward(base_df)
-        #     final_review = review
-        #     print(base_df[DEBUG_COL][-30:])
-        #     print(final_review)
-        #     base_df[DUMP_COL].to_csv(
-        #         f"{config.reports_dir}/{sp.symbol.name}.csv", index=False
-        #     )
-        #     print(f"{config.reports_dir}/{sp.symbol.name}.csv")
-        #     hunterPause(sp)
-
-        # except Exception as e:
-        #     print(e)
-        #     time.sleep(5)
+    # except Exception as e:
+    #     print(e)
+    #     time.sleep(5)
 
     return final_review
 
@@ -272,13 +269,16 @@ def training_camp(sp):
 def main(ccy, interval, fund, cap):
     entry(ccy, interval, fund, cap)
 
+
 def entry(ccy, interval, fund, cap):
-    params.update({
-        "interval": interval,
-        "funds": fund,
-        "stake_cap": cap,
-        "symbol": Symbol(ccy),
-    })
+    params.update(
+        {
+            "interval": interval,
+            "funds": fund,
+            "stake_cap": cap,
+            "symbol": Symbol(ccy),
+        }
+    )
     sp = StrategyParam(**params)
     final_review = start_journey(sp)
     return final_review.iloc[-1].Profit

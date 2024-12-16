@@ -28,15 +28,18 @@
             "name": "Python 调试程序: 模块",
             "type": "python",
             "request": "launch",
-            "module": "src.story",
-            "args": [
-                "--ccy",
-                "uem",
-                "--interval",
-                "1day",
-                "--fund",
-                "100"
-            ],
+            "module": "src.tradingfirm.platforms.huobi_api",
+            "args": [],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            }
+        },
+        {
+            "name": "Python 调试程序: 模块",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.cloud_story",
+            "args": ["--ccy", "turbousdt", "--interval", "60min", "--fund", "100"],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             }

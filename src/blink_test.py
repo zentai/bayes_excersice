@@ -52,7 +52,7 @@ if __name__ == "__main__":
     # )
     from .market_scanning import stocks_malaysia, stocks_singapore
 
-    stock_list = stocks_malaysia.keys()
+    stock_list = stocks_singapore.keys()
     # Initialize an empty list to collect reviews
     reviews = []
 
@@ -87,9 +87,9 @@ if __name__ == "__main__":
         cloud_story.params.update(
             {
                 "interval": "1day",
-                "funds": 100,
+                "funds": 1000,
                 "stake_cap": 100,
-                "symbol": Symbol(stock_list[0]),
+                "symbol": Symbol(list(stock_list)[0]),
             }
         )
         sp = StrategyParam(**cloud_story.params)
