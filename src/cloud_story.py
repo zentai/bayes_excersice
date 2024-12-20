@@ -219,7 +219,7 @@ class HuntingStory:
                 buy_order = xBuyOrder(
                     order_id=lastest_candlestick.Date,
                     target_price=price,
-                    executed_price=price * 1.01,
+                    executed_price=price * 0.999,
                     order_type=order_type,
                     operator="gte",
                     kelly=1.0,  # lastest_candlestick.Kelly,

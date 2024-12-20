@@ -11,7 +11,7 @@ from ..hunterverse.interface import IHunter
 from ..hunterverse.interface import xOrder, xBuyOrder, xSellOrder
 from ..utils import pandas_util
 from .platforms import huobi_api
-
+from dataclasses import replace
 from config import config
 
 ZERO = config.zero
@@ -154,7 +154,6 @@ class Huobi:
 
         self.params = params
         self.dispatcher = dispatcher
-        # self.dispatcher.connect(self.match_orders, signal="k_channel")
         self.TOPIC_ORDER_MATCHED = "sim_order_update"
         self.api_key = api_key or "fefd13a1-bg2hyw2dfg-440b3c64-576f2"
         self.secret_key = secret_key or "1a437824-042aa429-0beff3ba-03e26"
@@ -190,6 +189,20 @@ class Huobi:
             eventType: Event type, valid value: trade
             symbol: The symbol, like "btcusdt".
             type: The order type, possible values are: buy-market, sell-market, buy-limit, sell-limit, buy-ioc, sell-ioc, buy-limit-maker, sell-limit-maker, buy-limit-fok, sell-limit-fok.
+
+            {'accountId': 0,
+            'aggressor': False,
+            'clientOrderId': '',
+            'eventType': 'trade',
+            'orderId': 1226305230997968,
+            'orderStatus': 'filled',
+            'remainAmt': '0',
+            'symbol': 'pepeusdt',
+            'tradeId': 43798743,
+            'tradePrice': '0.000024',
+            'tradeTime': 1734387557456,
+            'tradeVolume': '520833.33',
+            'type': 'buy-limit'}
         """
         if upd_event.data.orderStatus in ("partial-filled", "filled"):
             print(
@@ -209,8 +222,34 @@ class Huobi:
                     "accountId": upd_event.data.accountId,
                 }
             )
+            # publish: client, order_id, order_status, price, position, execute_timestamp
+            self.dispatcher.send(
+                client=order.client,
+                signal=self.TOPIC_ORDER_MATCHED,
+                order_id=upd_event.data.orderId,
+                order_status=upd_event.data.orderStatus,  # FIXME
+                price=order.atr_exit_price,
+                position=order.position,
+                execute_timestamp=order.timestamp,
+            )
+            """
+            elif market_high >= order.profit_leave_price:
+                order.status = "Profit_LEAVE"
+                order.executed_price = order.profit_leave_price
+                order.timestamp = execute_timestamp
+                self.dispatcher.send(
+                    client=order.client,
+                    signal=self.TOPIC_ORDER_MATCHED,
+                    order_id=order.order_id,
+                    order_status=order.status,
+                    price=order.profit_leave_price,
+                    position=order.position,
+                    execute_timestamp=order.timestamp,
+                )
+            """
 
     def place_order(self, order):
+        order = replace(order)
         client = order.client
 
         if client not in self.order_book:
@@ -239,6 +278,7 @@ class Huobi:
                 stop_price=order.executed_price,
                 operator=order.operator,
             )
+            order.order_id = order_id
             self.order_book[client]["Buy"] = order
 
         elif isinstance(order, xSellOrder):
@@ -279,6 +319,7 @@ class SimHuobi:
         }
 
     def place_order(self, order):
+        order = replace(order)
         client = order.client
 
         if client not in self.order_book:
@@ -687,17 +728,30 @@ if __name__ == "__main__":
         ],
     }
 
-    sp = StrategyParam(**params)
-    x = xHunter("x", sp, Huobi(sp))
-    x.attack(
-        xBuyOrder(
-            "tid",
-            target_price=0.000023,
-            executed_price=0.000023 * 1.01,
-            order_type="BL",
-            operator="gte",
-            kelly=1,
-        )
+    # sp = StrategyParam(**params)
+    # x = xHunter("x", sp, Huobi(sp))
+    # x.attack(
+    #     xBuyOrder(
+    #         "tid",
+    #         target_price=0.0000240,
+    #         executed_price=0.0000240,
+    #         order_type="B",
+    #         operator="lte",
+    #         kelly=1,
+    #     )
+    # )
+    # for i in range(2000):
+    #     time.sleep(10)
+    x = xBuyOrder(
+        "tid",
+        target_price=0.0000240,
+        executed_price=0.0000240,
+        order_type="B",
+        operator="lte",
+        kelly=1,
     )
-    for i in range(2000):
-        time.sleep(1)
+
+    y = replace(x)
+    y.order_id = "xdrser"
+    print(x)
+    print(y)
