@@ -194,10 +194,10 @@ class HuntingStory:
             _Low = lastest_candlestick.Low
             hunting_command = {}
             sell_order = xSellOrder(
-                order_id=lastest_candlestick.Date,
+                order_id=lastest_candlestick.Date.strftime("%Y%m%d_%H%M%S"),
                 atr_exit_price=lastest_candlestick.exit_price,
                 profit_leave_price=lastest_candlestick.Stop_profit,
-                order_type="S",
+                order_type="SL",
             )
             hunting_command["sell"] = sell_order
 
@@ -212,7 +212,8 @@ class HuntingStory:
             # buy_signal = lastest_candlestick.OBV_DOWN
             if buy_signal:
 
-                price = self.base_df.tail(self.params.upper_sample).Close.max()
+                prince = lastest_candlestick.Close
+                # price = self.base_df.tail(self.params.upper_sample).Close.max()
                 # price = self.base_df.tail(self.params.lower_sample).Low.min()
                 # price = lastest_candlestick.Close
                 order_type = "B" if price == lastest_candlestick.High else "BL"

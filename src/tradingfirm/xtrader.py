@@ -222,12 +222,19 @@ class Huobi:
                     "accountId": upd_event.data.accountId,
                 }
             )
+            _order_status = None
+            if "PROFIT_LEAVE" in upd_event.data.clientOrderId:
+                _order_status = "Profit_LEAVE"
+            elif "ATR_EXIT" in upd_event.data.clientOrderId:
+                _order_status = "ATR_EXIT"
+            elif "CUTOFF" in upd_event.data.clientOrderId:
+                _order_status = "CUTOFF"
             # publish: client, order_id, order_status, price, position, execute_timestamp
             self.dispatcher.send(
                 client=order.client,
                 signal=self.TOPIC_ORDER_MATCHED,
                 order_id=upd_event.data.orderId,
-                order_status=upd_event.data.orderStatus,  # FIXME
+                order_status=_order_status,
                 price=order.atr_exit_price,
                 position=order.position,
                 execute_timestamp=order.timestamp,
@@ -249,7 +256,7 @@ class Huobi:
             """
 
     def place_order(self, order):
-        order = replace(order)
+        order = replace(order)  # clone
         client = order.client
 
         if client not in self.order_book:
@@ -257,14 +264,18 @@ class Huobi:
 
         if isinstance(order, xBuyOrder):
             try:
-                for order_type in self.buy_types:
-                    success, fail = huobi_api.cancel_all_open_orders(
-                        self.params.symbol.name,
-                        self.api_key,
-                        self.secret_key,
-                        order_type=order_type,
-                    )
-                    # TODO： base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = "Cancel"
+                cancel_order = self.order_book[client]["Buy"]
+                success, fail = huobi_api.cancel_algo_open_orders(
+                    self.api_key, self.secret_key, [cancel_order.order_id]
+                )
+                print(f"cancel buy orders: {success}, fail: {fail}")
+                # for order_type in self.buy_types:
+                #     success, fail = huobi_api.cancel_all_open_orders(
+                #         self.params.symbol.name,
+                #         self.api_key,
+                #         self.secret_key,
+                #         order_type=order_type,
+                #     )
             except Exception as e:
                 print(f"Cancel buy order fail: {e}")
 
@@ -276,33 +287,64 @@ class Huobi:
                 api_key=self.api_key,
                 secret_key=self.secret_key,
                 stop_price=order.executed_price,
-                operator=order.operator,
+                client_order_id=f"{order.order_id}_BUY",
             )
-            order.order_id = order_id
+            print(f"HTX buy order id: {order_id}")
             self.order_book[client]["Buy"] = order
 
         elif isinstance(order, xSellOrder):
             try:
-                for order_type in self.sell_types:
-                    success, fail = huobi_api.cancel_all_open_orders(
-                        self.params.symbol.name,
-                        self.api_key,
-                        self.secret_key,
-                        order_type=order_type,
-                    )
-                    # TODO： base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = "Cancel"
+                cancel_order = self.order_book[client]["Sell"]
+                success, fail = huobi_api.cancel_algo_open_orders(
+                    self.api_key,
+                    self.secret_key,
+                    [
+                        f"{cancel_order.order_id}_ATR_EXIT",
+                        f"{cancel_order.order_id}_PROFIT_LEAVE",
+                    ],
+                )
+                print(f"cancel sell orders: {success}, fail: {fail}")
+                # for order_type in self.sell_types:
+                #     success, fail = huobi_api.cancel_all_open_orders(
+                #         self.params.symbol.name,
+                #         self.api_key,
+                #         self.secret_key,
+                #         order_type=order_type,
+                #     )
+                #     # TODO： base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = "Cancel"
             except Exception as e:
                 print(f"Cancel sell order fail: {e}")
 
+            # place ATR exit order
             order_id = huobi_api.place_order(
                 symbol=self.params.symbol,
                 amount=order.position,
                 stop_price=order.atr_exit_price * 0.0095,
                 price=order.atr_exit_price,
                 order_type=order.order_type,
-                operator=order.operator,
+                operator="lte",
+                client_order_id=f"{order.order_id}_ATR_EXIT",
             )
-
+            # place profit exit order
+            order_id = huobi_api.place_order(
+                symbol=self.params.symbol,
+                amount=order.position,
+                stop_price=order.profit_leave_price * 0.0095,
+                price=order.profit_leave_price,
+                order_type=order.order_type,
+                operator="gte",
+                client_order_id=f"{order.order_id}_PROFIT_LEAVE",
+            )
+            # place cutoff exit order
+            order_id = huobi_api.place_order(
+                symbol=self.params.symbol,
+                amount=order.position,
+                stop_price=order.cutoff_price * 0.0095,
+                price=order.cutoff_price,
+                order_type=order.order_type,
+                operator=order.operator,
+                client_order_id=f"{order.order_id}_CUTOFF",
+            )
             self.order_book[client]["Sell"] = order
 
 

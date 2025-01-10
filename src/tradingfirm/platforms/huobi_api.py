@@ -1,5 +1,7 @@
 import sys, os
 
+from huobi.client.algo import AlgoClient
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 import logging
@@ -137,19 +139,20 @@ def place_order(
     secret_key,
     stop_price=None,
     operator=None,
+    client_order_id=None,
 ):
     side = {
-        "BL": OrderType.BUY_STOP_LIMIT,
+        "BL": OrderSide.BUY,
         "B": OrderType.BUY_LIMIT,
         "S": OrderType.SELL_LIMIT,
-        "SL": OrderType.SELL_STOP_LIMIT,
+        "SL": OrderSide.SELL,
         "SM": OrderType.SELL_MARKET,
         "BM": OrderType.BUY_MARKET,
     }
     order_type = side.get(order_type)
     if order_type in (
         OrderType.BUY_LIMIT,
-        OrderType.BUY_STOP_LIMIT,
+        OrderSide.BUY,
         OrderType.BUY_MARKET,
     ):
         round_amount = (
@@ -165,7 +168,7 @@ def place_order(
         print(
             f"[{order_type}] adjust buy amount: {round_amount}, trigger Price: {round_stop_price}, price: {round_price}"
         )
-    elif order_type in (OrderType.SELL_LIMIT, OrderType.SELL_STOP_LIMIT):
+    elif order_type in (OrderType.SELL_LIMIT, OrderSide.SELL):
         round_amount = symbol.round_amount(amount)
         round_price = symbol.round_price(price)
         stop_price = symbol.round_price(stop_price) if stop_price else None
@@ -175,20 +178,43 @@ def place_order(
             f"[{order_type}] adjust sell amount: {round_amount}, trigger Price: {stop_price}, price: {round_price}"
         )
 
-    trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
-    spot_account_id = get_spot_acc(api_key, secret_key).id
-    order_id = trade_client.create_order(
-        symbol=symbol.name,
-        account_id=spot_account_id,
-        order_type=order_type,
-        source=OrderSource.API,
-        amount=amount,
-        price=price,
-        stop_price=stop_price,
-        operator=operator,
-    )
+    # BL, SL
+    if order_type in (OrderSide.BUY, OrderSide.SELL):
+        algo_client = AlgoClient(api_key=g_api_key, secret_key=g_secret_key)
+        spot_account_id = get_spot_acc(api_key, secret_key).id
+        order_id = algo_client.create_order(
+            symbol=symbol.name,
+            account_id=spot_account_id,
+            order_side=order_type,
+            order_type=AlgoOrderType.LIMIT,
+            order_size=f"{amount}",
+            order_price=f"{price}",
+            stop_price=f"{stop_price}",
+            client_order_id=client_order_id,
+        )
+    else:
+        trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
+        spot_account_id = get_spot_acc(api_key, secret_key).id
+        order_id = trade_client.create_order(
+            symbol=symbol.name,
+            account_id=spot_account_id,
+            order_type=order_type,
+            source=OrderSource.API,
+            amount=amount,
+            price=price,
+            stop_price=stop_price,
+            operator=operator,
+            client_order_id=client_order_id,
+        )
+
     logger.debug(f"[{order_type}] Order placed: {order_id}")
     return order_id
+
+
+def cancel_algo_open_orders(api_key, secret_key, orders_to_cancel):
+    algo_client = AlgoClient(api_key=g_api_key, secret_key=g_secret_key)
+    result = algo_client.cancel_orders(orders_to_cancel)
+    return result.accepted, result.rejected
 
 
 def cancel_all_open_orders(symbol, api_key, secret_key, order_type=None):
@@ -321,7 +347,35 @@ if __name__ == "__main__":
     # orders = get_open_orders("pepeusdt", api_key, secret_key)
     # print(orders)
 
+    g_api_key = api_key = "fefd13a1-bg2hyw2dfg-440b3c64-576f2"
+    g_secret_key = secret_key = "1a437824-042aa429-0beff3ba-03e26"
     from hunterverse.interface import Symbol
+
+    algo_client = AlgoClient(api_key=g_api_key, secret_key=g_secret_key)
+    spot_account_id = get_spot_acc(api_key, secret_key).id
+
+    today = datetime.now()
+    client_order_id = f"{today.strftime('%Y%m%d_%H%M%S')}"
+    price = 0.000018650000
+    stop_price = price + 0.0000001
+    print(f"{client_order_id} => {price:.12f} < {stop_price:.12f}")
+    order_id = algo_client.create_order(
+        symbol="pepeusdt",
+        account_id=spot_account_id,
+        order_side=OrderSide.SELL,
+        order_type=AlgoOrderType.LIMIT,
+        order_size="8419228.18",
+        order_price=f"{price:.12f}",
+        stop_price=f"{stop_price:.12f}",
+        client_order_id=client_order_id,
+    )
+    print(f"{client_order_id} => {order_id}")
+
+    time.sleep(10)
+    result = algo_client.cancel_orders([client_order_id])
+    result.accepted
+    print("Cancel result:")
+    result.print_object()
 
     # 5. Test Place order
     # order_id = place_order(
