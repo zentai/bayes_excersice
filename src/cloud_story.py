@@ -544,6 +544,7 @@ if __name__ == "__main__":
                 "mission_review",
                 "final_statement_to_csv",
             ],
+            "load_deals": [],
         }
     )
     sp = StrategyParam(**params)

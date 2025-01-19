@@ -229,7 +229,9 @@ class Huobi:
                 _order_status = "ATR_EXIT"
             elif "CUTOFF" in upd_event.data.clientOrderId:
                 _order_status = "CUTOFF"
-            # publish: client, order_id, order_status, price, position, execute_timestamp
+
+            print(f"{_order_status}")
+
             self.dispatcher.send(
                 client=order.client,
                 signal=self.TOPIC_ORDER_MATCHED,
@@ -239,21 +241,6 @@ class Huobi:
                 position=order.position,
                 execute_timestamp=order.timestamp,
             )
-            """
-            elif market_high >= order.profit_leave_price:
-                order.status = "Profit_LEAVE"
-                order.executed_price = order.profit_leave_price
-                order.timestamp = execute_timestamp
-                self.dispatcher.send(
-                    client=order.client,
-                    signal=self.TOPIC_ORDER_MATCHED,
-                    order_id=order.order_id,
-                    order_status=order.status,
-                    price=order.profit_leave_price,
-                    position=order.position,
-                    execute_timestamp=order.timestamp,
-                )
-            """
 
     def place_order(self, order):
         order = replace(order)  # clone
@@ -462,6 +449,8 @@ class xHunter(IHunter):
             self.callback_order_matched, signal=self.platform.TOPIC_ORDER_MATCHED
         )
         self.columns = [f"{self.client}{col}" for col in HUNTER_COLUMNS]
+        if self.params.load_deals:
+            self.load_memories(deals=self.params.load_deals)
 
     def cutoff(self, strike):
         cutoff_price = self.live_bag.cutoff_price(self.params.hard_cutoff)
