@@ -11,7 +11,6 @@ from typing import Dict
 
 from config import config
 from huobi.constant.definition import OrderType
-from .tradingfirm.platforms import huobi_api
 
 from .strategy.turtle_trading import TurtleScout
 from .engine.probabilistic_engine import BayesianEngine
@@ -33,7 +32,7 @@ from .sensor.market_sensor import HuobiMarketSensor
 from .sensor.market_sensor import MongoMarketSensor
 
 # from .tradingfirm.pubsub_trader import xHunter
-from .tradingfirm.xtrader import xHunter
+from .tradingfirm.xtrader import xHunter, Huobi
 from .tradingfirm.xtrader import (
     HUNTER_COLUMNS,
     BUY_FILLED,
@@ -48,11 +47,11 @@ from pydispatch import dispatcher
 
 DEBUG_COL = [
     "Date",
-    "Open",
-    "High",
-    "Low",
+    # "Open",
+    # "High",
+    # "Low",
     "Close",
-    "turtle_h",
+    # "turtle_h",
     "BuySignal",
     "Stop_profit",
     "exit_price",
@@ -60,17 +59,8 @@ DEBUG_COL = [
     "buy",
     "sell",
     "profit",
-    "sP/L",
     # "OBV",
     # "OBV_UP",
-    "sBuy",
-    "sSell",
-    "sProfit",
-    "sPosition",
-    "sCash",
-    "sAvgCost",
-    # "sPnLRatio",
-    # "sStatus",
     # "Matured",
     # "xBuy",
     # "xSell",
@@ -111,14 +101,6 @@ DUMP_COL = [
     # "OBV_UP",
     # "upper_bound",
     # "lower_bound",
-    "sBuy",
-    "sSell",
-    "sProfit",
-    "sPosition",
-    "sCash",
-    "sAvgCost",
-    "sP/L",
-    "sStatus",
     # "xBuy",
     # "xSell",
     # "xProfit",
@@ -164,6 +146,8 @@ class HuntingStory:
     engine: IEngine
     hunter: Dict[str, IHunter]
     base_df: pd.DataFrame
+    debug_cols: str
+    report_cols: str
 
     def pub_market_sensor(self, sp):
         def run_market_sensor():
@@ -233,11 +217,22 @@ class HuntingStory:
             hunter.strike_phase(hunting_command)
 
         if "statement" in self.params.debug_mode:
-            print(self.base_df[DEBUG_COL][-30:])
+            print(self.base_df[self.debug_cols][-30:])
         if "mission_review" in self.params.debug_mode:
-            print(hunter.review_mission(self.base_df))
+            print(
+                hunter.review_mission(
+                    self.base_df,
+                    hBuy="xBuy",
+                    hSell="xSell",
+                    hProfit="xProfit",
+                    hPnL="xP/L",
+                    hStatus="xStatus",
+                )
+            )
         if "statement_to_csv" in self.params.debug_mode:
-            self.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
+            self.base_df[self.report_cols].to_csv(
+                f"{REPORTS_DIR}/{sp}.csv", index=False
+            )
             print(f"created: {REPORTS_DIR}/{sp}.csv")
 
     def callback_order_matched(
@@ -297,12 +292,24 @@ def start_journey(sp):
     bsp = copy.deepcopy(sp)
     bsp.funds = 1000000
     hunter = {
-        # "s": xHunter("s", params=sp),
+        "s": xHunter("s", params=sp),
         # "b": xHunter("b", params=sp),
-        "x": xHunter("x", params=sp, platform=huobi_api),
+        "x": xHunter("x", params=sp, platform=Huobi(sp)),
     }
     base_df = sensor.scan(2000 if not sp.backtest else 100)
-    story = HuntingStory(sp, sensor, scout, engine, hunter, base_df)
+    debug_cols = DEBUG_COL + sum([h.columns for h in hunter.values()], [])
+    report_cols = DUMP_COL + sum([h.columns for h in hunter.values()], [])
+
+    story = HuntingStory(
+        sp,
+        sensor,
+        scout,
+        engine,
+        hunter,
+        base_df,
+        debug_cols=debug_cols,
+        report_cols=report_cols,
+    )
     dispatcher.connect(story.move_forward, signal="k_channel")
     for h in hunter.values():
         dispatcher.connect(
@@ -315,13 +322,27 @@ def start_journey(sp):
     # review = story.hunter.review_mission(story.base_df)
     # sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
     if "final_statement_to_csv" in sp.debug_mode:
-        review = story.hunter["s"].review_mission(story.base_df)
+        review = story.hunter["x"].review_mission(
+            story.base_df,
+            hBuy="xBuy",
+            hSell="xSell",
+            hProfit="xProfit",
+            hPnL="xP/L",
+            hStatus="xStatus",
+        )
         print(review)
         story.base_df.to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
         # story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
         print(f"created: {REPORTS_DIR}/{sp}.csv")
     # visualize_backtest(story.base_df)
-    return story.base_df[DUMP_COL], story.hunter["s"].review_mission(story.base_df)
+    return story.base_df[DUMP_COL], story.hunter["x"].review_mission(
+        story.base_df,
+        hBuy="xBuy",
+        hSell="xSell",
+        hProfit="xProfit",
+        hPnL="xP/L",
+        hStatus="xStatus",
+    )
 
 
 import matplotlib.pyplot as plt
@@ -535,7 +556,7 @@ if __name__ == "__main__":
         {
             "funds": 100,
             "stake_cap": 12.5,
-            "symbol": Symbol("pepeusdt"),
+            "symbol": Symbol("trumpusdt"),
             "interval": "1min",
             "backtest": False,
             "debug_mode": [
@@ -544,7 +565,9 @@ if __name__ == "__main__":
                 "mission_review",
                 "final_statement_to_csv",
             ],
-            "load_deals": [],
+            "load_deals": [1252817934943262, 1252817565655637],
+            "api_key": "fefd13a1-bg2hyw2dfg-440b3c64-576f2",
+            "secret_key": "1a437824-042aa429-0beff3ba-03e26",
         }
     )
     sp = StrategyParam(**params)

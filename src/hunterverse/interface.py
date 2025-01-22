@@ -96,6 +96,8 @@ class Symbol:
 
 @dataclass
 class StrategyParam:
+    api_key: str
+    secret_key: str
     symbol: str
     ATR_sample: int = 7
     atr_loss_margin: float = 1.5

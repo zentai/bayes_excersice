@@ -147,7 +147,7 @@ class GainsBag:
 
 
 class Huobi:
-    def __init__(self, params, api_key=None, secret_key=None):
+    def __init__(self, params):
         self.buy_types = ("buy-stop-limit", "buy-limit", "buy-market")
         self.sell_types = ("sell-limit", "sell-stop-limit", "sell-market")
         self.status = ("filled", "partial-canceled", "partial-filled")
@@ -155,8 +155,8 @@ class Huobi:
         self.params = params
         self.dispatcher = dispatcher
         self.TOPIC_ORDER_MATCHED = "sim_order_update"
-        self.api_key = api_key or "fefd13a1-bg2hyw2dfg-440b3c64-576f2"
-        self.secret_key = secret_key or "1a437824-042aa429-0beff3ba-03e26"
+        self.api_key = params.api_key
+        self.secret_key = params.secret_key
 
         self.order_book = {
             # client: {
@@ -473,10 +473,16 @@ class xHunter(IHunter):
                         for i in (
                             cached_order_ids
                             + deals
-                            + huobi_api.load_history_orders(f"{self.params.symbol}")
+                            + huobi_api.load_history_orders(
+                                f"{self.params.symbol}",
+                                self.params.api_key,
+                                self.params.secret_key,
+                            )
                         )
                     ]
-                )
+                ),
+                self.params.api_key,
+                self.params.secret_key,
             )
 
         """Process and enrich orders DataFrame with positions and prices."""
@@ -509,19 +515,17 @@ class xHunter(IHunter):
             )
 
             if order.type in self.buy_types:
-                self.sim_bag.open_position(position, price)
-                self.live_bag.open_position(position, price)
-                # print(f"[B] {self.sim_bag:snapshot}")
+                self.gainsbag.open_position(position, price)
+                # print(f"[B] {self.gainsbag:snapshot}")
                 msg.append(["-", round(filled_cash_amount, 2), round(price, 8)])
             elif order.type in self.sell_types:
-                self.sim_bag.close_position(position, price)
-                self.live_bag.close_position(position, price)
-                # print(f"[S] {self.sim_bag:snapshot}")
+                self.gainsbag.close_position(position, price)
+                # print(f"[S] {self.gainsbag:snapshot}")
                 msg.append(["+", round(filled_cash_amount, 2), round(price, 8)])
 
         if msg:
-            fund = f"{self.sim_bag:cash}"
-            cost = float(f"{self.sim_bag:avg_cost}")
+            fund = f"{self.gainsbag:cash}"
+            cost = float(f"{self.gainsbag:avg_cost}")
             msg.append(["=", fund, cost])
             strike = huobi_api.get_strike(f"{self.params.symbol}")
             market_value = strike - cost
@@ -604,14 +608,14 @@ class xHunter(IHunter):
         sample = df[hBuy].notna().sum() or 0.00001
         profit_sample = "0.00"
         # profit_sample = (
-        #     f"{len(df[df.sProfit > 0])/sample:.2f}({len(df[df.sProfit > 0])}/{sample})"
+        #     f"{len(df[df.hProfit > 0])/sample:.2f}({len(df[df.hProfit > 0])}/{sample})"
         # )
         profit_mean = df[df[hProfit] >= 0][hProfit].median() or ZERO
         loss_mean = abs(df[df[hProfit] < 0][hProfit].median() or ZERO)
         strategy_profit = ((df[hPnL] > 3) & df.BuySignal).sum()
-        total_profit = (df[hPnL] > 3).sum()
+        total_profit = (df[hPnL] > 3).sum() or -1
         strategy_performance = f"{strategy_profit / total_profit:.3f}"
-        # profit_loss_ratio = len(df[df.sProfit > 0]) / sample
+        # profit_loss_ratio = len(df[df.hProfit > 0]) / sample
         cost = self.gainsbag.init_funds
         strike = base_df.iloc[-1].Close
         profit = self.gainsbag.cash + (self.gainsbag.position * strike) - cost
@@ -634,10 +638,10 @@ class xHunter(IHunter):
             atr_cutoff_counts = df.apply(
                 lambda row: (
                     "ATR_Profit"
-                    if row[hStatus] == "ATR_EXIT" and row["sProfit"] > 0
+                    if row[hStatus] == "ATR_EXIT" and row["hProfit"] > 0
                     else (
                         "ATR_Loss"
-                        if row[hStatus] == "ATR_EXIT" and row["sProfit"] < 0
+                        if row[hStatus] == "ATR_EXIT" and row["hProfit"] < 0
                         else row[hStatus]
                     )
                 ),
