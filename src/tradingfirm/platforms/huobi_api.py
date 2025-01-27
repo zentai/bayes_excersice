@@ -180,7 +180,7 @@ def place_order(
 
     # BL, SL
     if order_type in (OrderSide.BUY, OrderSide.SELL):
-        algo_client = AlgoClient(api_key=g_api_key, secret_key=g_secret_key)
+        algo_client = AlgoClient(api_key=api_key, secret_key=secret_key)
         spot_account_id = get_spot_acc(api_key, secret_key).id
         order_id = algo_client.create_order(
             symbol=symbol.name,

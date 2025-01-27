@@ -33,6 +33,12 @@ TURTLE_COLUMNS = [
     "P/L",
     "PRICE_VOL_reduce",
     "Rolling_Std",
+    "ema_short",
+    "ema_long",
+    "+DM",
+    "-DM",
+    "ADX",
+    "ADX_Signed",
 ]
 
 
@@ -328,6 +334,7 @@ class TurtleScout(IStrategyScout):
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         base_df = self._calc_ATR(base_df)
+        base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
         base_df = self._calc_profit(base_df)
         return base_df
 
@@ -336,3 +343,31 @@ class TurtleScout(IStrategyScout):
         Default simple turtle strategy to generate BuySignal.
         """
         return df.High > df.turtle_h
+
+
+def emv_cross_strategy(df, params, short_windows=5, long_windws=60):
+    idx = df.ema_short.isna().index
+    df.loc[idx, "ema_short"] = df.Close.ewm(span=short_windows, adjust=False).mean()
+    df.loc[idx, "ema_long"] = df.Close.ewm(span=long_windws, adjust=False).mean()
+    return (df.ema_short > df.ema_long) & (df.ADX_Signed > 0.25)
+
+
+def calc_ADX(df, params, p=14):
+    df = df.assign(
+        **{
+            "+DM": (df.High.diff().where(lambda x: x > -df.Low.diff()))
+            .clip(0)
+            .fillna(0),
+            "-DM": (-df.Low.diff().where(lambda x: x > df.High.diff()))
+            .clip(0)
+            .fillna(0),
+        }
+    )
+    df["+DM"] = df["+DM"].ewm(alpha=1 / p, adjust=False).mean()
+    df["-DM"] = df["-DM"].ewm(alpha=1 / p, adjust=False).mean()
+    df["+DI"] = (df["+DM"] / df.ATR).fillna(0)
+    df["-DI"] = (df["-DM"] / df.ATR).fillna(0)
+    df["DX"] = (abs(df["+DI"] - df["-DI"]) / (df["+DI"] + df["-DI"])).replace(np.inf, 0)
+    df["ADX"] = df.DX.ewm(alpha=1 / p, adjust=False).mean()
+    df["ADX_Signed"] = df["ADX"] * np.sign(df["+DI"] - df["-DI"])
+    return df

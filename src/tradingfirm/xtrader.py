@@ -231,15 +231,19 @@ class Huobi:
                 _order_status = "CUTOFF"
 
             print(f"{_order_status}")
-
+            clientOrderId = (
+                upd_event.data.clientOrderId.replace("PROFIT_LEAVE", "")
+                .replace("ATR_EXIT", "")
+                .replace("CUTOFF", ""),
+            )
             self.dispatcher.send(
-                client=order.client,
+                client=upd_event.data.client,
                 signal=self.TOPIC_ORDER_MATCHED,
-                order_id=upd_event.data.orderId,
+                order_id=clientOrderId,
                 order_status=_order_status,
-                price=order.atr_exit_price,
-                position=order.position,
-                execute_timestamp=order.timestamp,
+                price=upd_event.data.atr_exit_price,
+                position=upd_event.data.position,
+                execute_timestamp=upd_event.data.timestamp,
             )
 
     def place_order(self, order):
@@ -252,10 +256,11 @@ class Huobi:
         if isinstance(order, xBuyOrder):
             try:
                 cancel_order = self.order_book[client]["Buy"]
-                success, fail = huobi_api.cancel_algo_open_orders(
-                    self.api_key, self.secret_key, [cancel_order.order_id]
-                )
-                print(f"cancel buy orders: {success}, fail: {fail}")
+                if cancel_order:
+                    success, fail = huobi_api.cancel_algo_open_orders(
+                        self.api_key, self.secret_key, [cancel_order.order_id]
+                    )
+                    print(f"cancel buy orders: {success}, fail: {fail}")
                 # for order_type in self.buy_types:
                 #     success, fail = huobi_api.cancel_all_open_orders(
                 #         self.params.symbol.name,
@@ -412,10 +417,7 @@ class SimHuobi:
             # 检查买入订单
             if orders["Buy"] and orders["Buy"].status == "unfilled":
                 order = orders["Buy"]
-                if market_low <= order.atr_exit_price:
-                    # Maket price lower than ATR_exit, no point to buy.
-                    pass
-                elif market_low <= order.target_price:
+                if market_low <= order.target_price:
                     order.status = BUY_FILLED
                     order.executed_price = order.target_price
                     order.timestamp = execute_timestamp
@@ -531,7 +533,7 @@ class xHunter(IHunter):
             market_value = strike - cost
             msg.append(["$", market_value * position, strike])
             msg_df = pd.DataFrame(msg, columns=["@", "USDT", "Price"])
-            # print(msg_df)
+            print(msg_df)
 
     def strike_phase(self, hunting_command):
         retreat = False
@@ -579,15 +581,13 @@ class xHunter(IHunter):
     def portfolio(self, pre_strike, strike):
         return self.gainsbag.portfolio(pre_strike, strike)
 
-    def review_mission(
-        self,
-        base_df,
-        hBuy="sBuy",
-        hSell="sSell",
-        hProfit="sProfit",
-        hPnL="sP/L",
-        hStatus="sStatus",
-    ):
+    def review_mission(self, base_df):
+        hBuy = f"{self.client}Buy"
+        hSell = f"{self.client}Sell"
+        hProfit = f"{self.client}Profit"
+        hPnL = f"{self.client}P/L"
+        hStatus = f"{self.client}Status"
+
         def count_consecutive_losses(df):
             profits = df[hProfit].dropna().astype(float).values
             negative = profits < 0
@@ -638,10 +638,10 @@ class xHunter(IHunter):
             atr_cutoff_counts = df.apply(
                 lambda row: (
                     "ATR_Profit"
-                    if row[hStatus] == "ATR_EXIT" and row["hProfit"] > 0
+                    if row[hStatus] == "ATR_EXIT" and row[hProfit] > 0
                     else (
                         "ATR_Loss"
-                        if row[hStatus] == "ATR_EXIT" and row["hProfit"] < 0
+                        if row[hStatus] == "ATR_EXIT" and row[hProfit] < 0
                         else row[hStatus]
                     )
                 ),

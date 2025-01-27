@@ -59,6 +59,7 @@ class LocalMarketSensor(IMarketSensor):
 
     def scan(self, limits):
         df = pandas_util.load_symbols(self.symbol)
+        df["Date"] = pd.to_datetime(df["Date"])
         length = len(df)
         limits = 0 if length < limits else limits
         self.test_df = df[limits:]
@@ -73,7 +74,9 @@ class LocalMarketSensor(IMarketSensor):
         )
         new_data["Matured"] = pd.NaT
         self.update_idx += 1
-        return pd.DataFrame([new_data], columns=self.test_df.columns)
+        df = pd.DataFrame([new_data], columns=self.test_df.columns)
+        df["Date"] = pd.to_datetime(df["Date"])
+        return df
 
     def fetch(self, base_df):
         new_data = self.fetch_one()

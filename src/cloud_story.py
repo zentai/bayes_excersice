@@ -2,7 +2,6 @@ import signal
 import sys
 import threading
 import time
-import click
 import datetime
 from dataclasses import dataclass
 import pandas as pd
@@ -12,7 +11,7 @@ from typing import Dict
 from config import config
 from huobi.constant.definition import OrderType
 
-from .strategy.turtle_trading import TurtleScout
+from .strategy.turtle_trading import TurtleScout, emv_cross_strategy
 from .engine.probabilistic_engine import BayesianEngine
 
 from .utils import pandas_util
@@ -56,26 +55,21 @@ DEBUG_COL = [
     "Stop_profit",
     "exit_price",
     # "time_cost",
-    "buy",
-    "sell",
-    "profit",
+    # "buy",
+    # "sell",
+    # "profit",
     # "OBV",
     # "OBV_UP",
     # "Matured",
-    # "xBuy",
-    # "xSell",
-    # "xProfit",
-    # "xPosition",
-    # "xCash",
-    # "xAvgCost",
-    # "xBuyOrder",
-    # "xSellOrder",
     # "Kelly",
     # "Postrior",
     # "P/L",
     # "likelihood",
     # "profit_margin",
     # "loss_margin",
+    # "+DI",
+    # "-DI",
+    "ADX_Signed",
 ]
 
 DUMP_COL = [
@@ -90,7 +84,7 @@ DUMP_COL = [
     "Stop_profit",
     "exit_price",
     "Matured",
-    # "time_cost",
+    "time_cost",
     "buy",
     "sell",
     "profit",
@@ -101,19 +95,16 @@ DUMP_COL = [
     # "OBV_UP",
     # "upper_bound",
     # "lower_bound",
-    # "xBuy",
-    # "xSell",
-    # "xProfit",
-    # "xPosition",
-    # "xCash",
-    # "xAvgCost",
-    # "xBuyOrder",
-    # "xSellOrder",
     # "Kelly",
     # "Postrior",
     # "likelihood",
     # "profit_margin",
     # "loss_margin",
+    "+DM",
+    "-DM",
+    "+DI",
+    "-DI",
+    "ADX_Signed",
 ]
 
 
@@ -162,7 +153,6 @@ class HuntingStory:
         return threading.Thread(target=run_market_sensor)
 
     def move_forward(self, message):
-
         for h in self.hunter.values():
             message = pandas_util.equip_fields(message, h.columns)
         self.base_df = pd.concat(
@@ -196,13 +186,13 @@ class HuntingStory:
             # buy_signal = lastest_candlestick.OBV_DOWN
             if buy_signal:
 
-                prince = lastest_candlestick.Close
+                price = lastest_candlestick.Close
                 # price = self.base_df.tail(self.params.upper_sample).Close.max()
                 # price = self.base_df.tail(self.params.lower_sample).Low.min()
                 # price = lastest_candlestick.Close
                 order_type = "B" if price == lastest_candlestick.High else "BL"
                 buy_order = xBuyOrder(
-                    order_id=lastest_candlestick.Date,
+                    order_id=lastest_candlestick.Date.strftime("%Y%m%d_%H%M%S"),
                     target_price=price,
                     executed_price=price * 0.999,
                     order_type=order_type,
@@ -219,16 +209,7 @@ class HuntingStory:
         if "statement" in self.params.debug_mode:
             print(self.base_df[self.debug_cols][-30:])
         if "mission_review" in self.params.debug_mode:
-            print(
-                hunter.review_mission(
-                    self.base_df,
-                    hBuy="xBuy",
-                    hSell="xSell",
-                    hProfit="xProfit",
-                    hPnL="xP/L",
-                    hStatus="xStatus",
-                )
-            )
+            print(hunter.review_mission(self.base_df))
         if "statement_to_csv" in self.params.debug_mode:
             self.base_df[self.report_cols].to_csv(
                 f"{REPORTS_DIR}/{sp}.csv", index=False
@@ -241,7 +222,9 @@ class HuntingStory:
         p = client
         hunter = self.hunter[client]
         if order_status in (BUY_FILLED):
-            s_buy_order = self.base_df.Date == order_id
+            s_buy_order = self.base_df.Date == datetime.strptime(
+                order_id, "%Y%m%d_%H%M%S"
+            )
             self.base_df.loc[s_buy_order, f"{p}BuyOrder"] = order_id
             self.base_df.loc[s_buy_order, f"{p}Buy"] = price
             self.base_df.loc[s_buy_order, f"{p}Position"] = hunter.gainsbag.position
@@ -250,7 +233,9 @@ class HuntingStory:
             self.base_df.loc[s_buy_order, f"{p}Status"] = order_status
             self.base_df.loc[s_buy_order, f"{p}Matured"] = execute_timestamp
         elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
-            s_sell_order = self.base_df.Date == order_id
+            s_sell_order = self.base_df.Date == datetime.strptime(
+                order_id, "%Y%m%d_%H%M%S"
+            )
             self.base_df.loc[s_sell_order, f"{p}SellOrder"] = order_id
             self.base_df.loc[s_sell_order, f"{p}Buy"] = hunter.gainsbag.avg_cost
             self.base_df.loc[s_sell_order, f"{p}Sell"] = price
@@ -285,7 +270,7 @@ def start_journey(sp):
     # 合并 load_df 和 update_df，成为 base_df
     base_df = pd.concat([load_df, update_df], ignore_index=True)
 
-    scout = TurtleScout(params=sp)
+    scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
     engine = BayesianEngine(params=sp)
     import copy
 
@@ -297,7 +282,9 @@ def start_journey(sp):
         "x": xHunter("x", params=sp, platform=Huobi(sp)),
     }
     base_df = sensor.scan(2000 if not sp.backtest else 100)
-    debug_cols = DEBUG_COL + sum([h.columns for h in hunter.values()], [])
+    debug_cols = DEBUG_COL + sum(
+        [h.columns for h in hunter.values() if h.client == "x"], []
+    )
     report_cols = DUMP_COL + sum([h.columns for h in hunter.values()], [])
 
     story = HuntingStory(
@@ -318,31 +305,16 @@ def start_journey(sp):
     pub_thread = story.pub_market_sensor(sp)
     pub_thread.start()
     pub_thread.join()
-    # print(story.base_df[DUMP_COL])
+    # print(story.base_df[report_cols])
     # review = story.hunter.review_mission(story.base_df)
     # sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
     if "final_statement_to_csv" in sp.debug_mode:
-        review = story.hunter["x"].review_mission(
-            story.base_df,
-            hBuy="xBuy",
-            hSell="xSell",
-            hProfit="xProfit",
-            hPnL="xP/L",
-            hStatus="xStatus",
-        )
+        review = story.hunter["s"].review_mission(story.base_df)
         print(review)
-        story.base_df.to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
-        # story.base_df[DUMP_COL].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
+        story.base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
         print(f"created: {REPORTS_DIR}/{sp}.csv")
     # visualize_backtest(story.base_df)
-    return story.base_df[DUMP_COL], story.hunter["x"].review_mission(
-        story.base_df,
-        hBuy="xBuy",
-        hSell="xSell",
-        hProfit="xProfit",
-        hPnL="xP/L",
-        hStatus="xStatus",
-    )
+    return story.base_df[report_cols], story.hunter["s"].review_mission(story.base_df)
 
 
 import matplotlib.pyplot as plt
@@ -555,8 +527,8 @@ if __name__ == "__main__":
     params.update(
         {
             "funds": 100,
-            "stake_cap": 12.5,
-            "symbol": Symbol("trumpusdt"),
+            "stake_cap": 10.5,
+            "symbol": Symbol("openusdt"),
             "interval": "1min",
             "backtest": False,
             "debug_mode": [
@@ -565,7 +537,7 @@ if __name__ == "__main__":
                 "mission_review",
                 "final_statement_to_csv",
             ],
-            "load_deals": [1252817934943262, 1252817565655637],
+            "load_deals": [],
             "api_key": "fefd13a1-bg2hyw2dfg-440b3c64-576f2",
             "secret_key": "1a437824-042aa429-0beff3ba-03e26",
         }
