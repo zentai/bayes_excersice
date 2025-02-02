@@ -51,6 +51,8 @@ DEBUG_COL = [
     # "Low",
     "Close",
     # "turtle_h",
+    "ema_short",
+    "ema_long",
     "BuySignal",
     "Stop_profit",
     "exit_price",
@@ -81,6 +83,8 @@ DUMP_COL = [
     "Vol",
     "turtle_h",
     "BuySignal",
+    "ema_short",
+    "ema_long",
     "Stop_profit",
     "exit_price",
     "Matured",
@@ -185,8 +189,8 @@ class HuntingStory:
             # buy_signal = lastest_candlestick.High > lastest_candlestick.atr_buy
             # buy_signal = lastest_candlestick.OBV_DOWN
             if buy_signal:
-
-                price = lastest_candlestick.Close
+                trigger_price = lastest_candlestick.Close
+                price = lastest_candlestick.Low
                 # price = self.base_df.tail(self.params.upper_sample).Close.max()
                 # price = self.base_df.tail(self.params.lower_sample).Low.min()
                 # price = lastest_candlestick.Close
@@ -194,7 +198,7 @@ class HuntingStory:
                 buy_order = xBuyOrder(
                     order_id=lastest_candlestick.Date.strftime("%Y%m%d_%H%M%S"),
                     target_price=price,
-                    executed_price=price * 0.999,
+                    executed_price=trigger_price,
                     order_type=order_type,
                     operator="gte",
                     kelly=1.0,  # lastest_candlestick.Kelly,
@@ -222,7 +226,7 @@ class HuntingStory:
         p = client
         hunter = self.hunter[client]
         if order_status in (BUY_FILLED):
-            s_buy_order = self.base_df.Date == datetime.strptime(
+            s_buy_order = self.base_df.Date == datetime.datetime.strptime(
                 order_id, "%Y%m%d_%H%M%S"
             )
             self.base_df.loc[s_buy_order, f"{p}BuyOrder"] = order_id
@@ -233,7 +237,7 @@ class HuntingStory:
             self.base_df.loc[s_buy_order, f"{p}Status"] = order_status
             self.base_df.loc[s_buy_order, f"{p}Matured"] = execute_timestamp
         elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
-            s_sell_order = self.base_df.Date == datetime.strptime(
+            s_sell_order = self.base_df.Date == datetime.datetime.strptime(
                 order_id, "%Y%m%d_%H%M%S"
             )
             self.base_df.loc[s_sell_order, f"{p}SellOrder"] = order_id
@@ -279,7 +283,7 @@ def start_journey(sp):
     hunter = {
         "s": xHunter("s", params=sp),
         # "b": xHunter("b", params=sp),
-        "x": xHunter("x", params=sp, platform=Huobi(sp)),
+        "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
     }
     base_df = sensor.scan(2000 if not sp.backtest else 100)
     debug_cols = DEBUG_COL + sum(
@@ -526,10 +530,10 @@ params = {
 if __name__ == "__main__":
     params.update(
         {
-            "funds": 100,
-            "stake_cap": 10.5,
-            "symbol": Symbol("openusdt"),
-            "interval": "1min",
+            "funds": 50,
+            "stake_cap": 10.05,
+            "symbol": Symbol("pepeusdt"),
+            "interval": "15min",
             "backtest": False,
             "debug_mode": [
                 "statement",

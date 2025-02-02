@@ -147,11 +147,12 @@ class GainsBag:
 
 
 class Huobi:
-    def __init__(self, params):
+    def __init__(self, client, params):
         self.buy_types = ("buy-stop-limit", "buy-limit", "buy-market")
         self.sell_types = ("sell-limit", "sell-stop-limit", "sell-market")
         self.status = ("filled", "partial-canceled", "partial-filled")
 
+        self.client = client
         self.params = params
         self.dispatcher = dispatcher
         self.TOPIC_ORDER_MATCHED = "sim_order_update"
@@ -229,115 +230,94 @@ class Huobi:
                 _order_status = "ATR_EXIT"
             elif "CUTOFF" in upd_event.data.clientOrderId:
                 _order_status = "CUTOFF"
+            elif "BUY" in upd_event.data.clientOrderId:
+                _order_status = BUY_FILLED
 
             print(f"{_order_status}")
             clientOrderId = (
-                upd_event.data.clientOrderId.replace("PROFIT_LEAVE", "")
-                .replace("ATR_EXIT", "")
-                .replace("CUTOFF", ""),
+                upd_event.data.clientOrderId.replace("_PROFIT_LEAVE", "")
+                .replace("_ATR_EXIT", "")
+                .replace("_CUTOFF", "")
+                .replace("_BUY", "")
             )
             self.dispatcher.send(
-                client=upd_event.data.client,
+                client=self.order_book[upd_event.data.clientOrderId].client,
                 signal=self.TOPIC_ORDER_MATCHED,
                 order_id=clientOrderId,
                 order_status=_order_status,
-                price=upd_event.data.atr_exit_price,
-                position=upd_event.data.position,
-                execute_timestamp=upd_event.data.timestamp,
+                price=float(upd_event.data.tradePrice),
+                position=float(upd_event.data.tradeVolume),
+                execute_timestamp=upd_event.data.tradeTime,
             )
 
     def place_order(self, order):
-        order = replace(order)  # clone
-        client = order.client
-
-        if client not in self.order_book:
-            self.order_book[client] = {"Buy": None, "Sell": None}
-
-        if isinstance(order, xBuyOrder):
-            try:
-                cancel_order = self.order_book[client]["Buy"]
-                if cancel_order:
+        def cancel(ids):
+            if ids:
+                try:
                     success, fail = huobi_api.cancel_algo_open_orders(
-                        self.api_key, self.secret_key, [cancel_order.order_id]
+                        self.api_key, self.secret_key, ids
                     )
-                    print(f"cancel buy orders: {success}, fail: {fail}")
-                # for order_type in self.buy_types:
-                #     success, fail = huobi_api.cancel_all_open_orders(
-                #         self.params.symbol.name,
-                #         self.api_key,
-                #         self.secret_key,
-                #         order_type=order_type,
-                #     )
-            except Exception as e:
-                print(f"Cancel buy order fail: {e}")
+                    print(f"Cancel orders {ids}: success={success}, fail={fail}")
+                    c_success, c_fail = huobi_api.cancel_all_open_orders(
+                        self.params.symbol.name,
+                        self.api_key,
+                        self.secret_key,
+                        OrderType.BUY_LIMIT,
+                    )
+                    c_success, c_fail = huobi_api.cancel_all_open_orders(
+                        self.params.symbol.name,
+                        self.api_key,
+                        self.secret_key,
+                        OrderType.BUY_STOP_LIMIT,
+                    )
 
-            order_id = huobi_api.place_order(
+                    print(f"Cancel orders {ids}: success={c_success}, fail={c_fail}")
+                except Exception as e:
+                    print(f"Cancel {ids} failed: {e}")
+            [self.order_book.pop(id) for id in ids]
+
+        def place(client_id, amount, price, trigger_price, order):
+            self.order_book[client_id] = order
+            huobi_api.place_order(
                 symbol=self.params.symbol,
-                amount=order.position,
-                price=order.target_price,
+                amount=amount,
+                price=price,
                 order_type=order.order_type,
                 api_key=self.api_key,
                 secret_key=self.secret_key,
-                stop_price=order.executed_price,
-                client_order_id=f"{order.order_id}_BUY",
+                stop_price=trigger_price,
+                client_order_id=client_id,
             )
-            print(f"HTX buy order id: {order_id}")
-            self.order_book[client]["Buy"] = order
+            print(f"placed HTX order: {client_id}")
+
+        if isinstance(order, xBuyOrder):
+            cancel([id for id in self.order_book if "BUY" in id])
+            place(
+                client_id=f"{order.order_id}_BUY",
+                amount=order.position,
+                price=order.target_price,
+                trigger_price=order.executed_price,
+                order=order,
+            )
 
         elif isinstance(order, xSellOrder):
-            try:
-                cancel_order = self.order_book[client]["Sell"]
-                success, fail = huobi_api.cancel_algo_open_orders(
-                    self.api_key,
-                    self.secret_key,
-                    [
-                        f"{cancel_order.order_id}_ATR_EXIT",
-                        f"{cancel_order.order_id}_PROFIT_LEAVE",
-                    ],
+            cancel([id for id in self.order_book if "BUY" not in id])
+            for suffix, price, trigger_price in [
+                ("ATR_EXIT", order.atr_exit_price, order.atr_exit_price * 1.001),
+                (
+                    "PROFIT_LEAVE",
+                    order.profit_leave_price,
+                    order.profit_leave_price * 0.999,
+                ),
+                # ("CUTOFF", order.cutoff_price, order.cutoff_price * 0.999),
+            ]:
+                place(
+                    client_id=f"{order.order_id}_{suffix}",
+                    amount=order.position,
+                    price=price,
+                    trigger_price=trigger_price,
+                    order=order,
                 )
-                print(f"cancel sell orders: {success}, fail: {fail}")
-                # for order_type in self.sell_types:
-                #     success, fail = huobi_api.cancel_all_open_orders(
-                #         self.params.symbol.name,
-                #         self.api_key,
-                #         self.secret_key,
-                #         order_type=order_type,
-                #     )
-                #     # TODO： base_df.loc[base_df.xBuyOrder.isin(success), "xBuyOrder"] = "Cancel"
-            except Exception as e:
-                print(f"Cancel sell order fail: {e}")
-
-            # place ATR exit order
-            order_id = huobi_api.place_order(
-                symbol=self.params.symbol,
-                amount=order.position,
-                stop_price=order.atr_exit_price * 0.0095,
-                price=order.atr_exit_price,
-                order_type=order.order_type,
-                operator="lte",
-                client_order_id=f"{order.order_id}_ATR_EXIT",
-            )
-            # place profit exit order
-            order_id = huobi_api.place_order(
-                symbol=self.params.symbol,
-                amount=order.position,
-                stop_price=order.profit_leave_price * 0.0095,
-                price=order.profit_leave_price,
-                order_type=order.order_type,
-                operator="gte",
-                client_order_id=f"{order.order_id}_PROFIT_LEAVE",
-            )
-            # place cutoff exit order
-            order_id = huobi_api.place_order(
-                symbol=self.params.symbol,
-                amount=order.position,
-                stop_price=order.cutoff_price * 0.0095,
-                price=order.cutoff_price,
-                order_type=order.order_type,
-                operator=order.operator,
-                client_order_id=f"{order.order_id}_CUTOFF",
-            )
-            self.order_book[client]["Sell"] = order
 
 
 class SimHuobi:
@@ -538,9 +518,12 @@ class xHunter(IHunter):
     def strike_phase(self, hunting_command):
         retreat = False
         if "sell" in hunting_command:
-            retreat = self.retreat(hunting_command.get("sell"))
+            if hunting_command.get("sell"):
+                order = replace(hunting_command.get("sell"))
+                retreat = self.retreat(order)
         if "buy" in hunting_command and not retreat:
-            self.attack(hunting_command.get("buy"))
+            if hunting_command.get("buy"):
+                self.attack(replace(hunting_command.get("buy")))
 
     def callback_order_matched(
         self, client, order_id, order_status, price, position, execute_timestamp

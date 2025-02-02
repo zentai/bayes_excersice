@@ -166,7 +166,7 @@ def place_order(
         price = round_price
         stop_price = round_stop_price
         print(
-            f"[{order_type}] adjust buy amount: {round_amount}, trigger Price: {round_stop_price}, price: {round_price}"
+            f"[{order_type}] adjust buy amount: {round_amount:.{symbol.amount_prec}f}, trigger Price: {round_stop_price:.{symbol.price_prec}f}, price: {round_price:.{symbol.price_prec}f}"
         )
     elif order_type in (OrderType.SELL_LIMIT, OrderSide.SELL):
         round_amount = symbol.round_amount(amount)
@@ -175,7 +175,7 @@ def place_order(
         amount = round_amount
         price = round_price
         print(
-            f"[{order_type}] adjust sell amount: {round_amount}, trigger Price: {stop_price}, price: {round_price}"
+            f"[{order_type}] adjust sell amount: {round_amount:.{symbol.amount_prec}f}, trigger Price: {stop_price:.{symbol.price_prec}f}, price: {round_price:.{symbol.price_prec}f}"
         )
 
     # BL, SL
@@ -187,9 +187,9 @@ def place_order(
             account_id=spot_account_id,
             order_side=order_type,
             order_type=AlgoOrderType.LIMIT,
-            order_size=f"{amount}",
-            order_price=f"{price}",
-            stop_price=f"{stop_price}",
+            order_size=f"{amount:.{symbol.amount_prec}f}",
+            order_price=f"{price:.{symbol.price_prec}f}",
+            stop_price=f"{stop_price:.{symbol.price_prec}f}",
             client_order_id=client_order_id,
         )
     else:
@@ -200,9 +200,9 @@ def place_order(
             account_id=spot_account_id,
             order_type=order_type,
             source=OrderSource.API,
-            amount=amount,
-            price=price,
-            stop_price=stop_price,
+            amount=f"{amount:.{symbol.amount_prec}f}",
+            price=f"{price:.{symbol.price_prec}f}",
+            stop_price=f"{stop_price:.{symbol.price_prec}f}",
             operator=operator,
             client_order_id=client_order_id,
         )
@@ -212,7 +212,7 @@ def place_order(
 
 
 def cancel_algo_open_orders(api_key, secret_key, orders_to_cancel):
-    algo_client = AlgoClient(api_key=g_api_key, secret_key=g_secret_key)
+    algo_client = AlgoClient(api_key=api_key, secret_key=secret_key)
     result = algo_client.cancel_orders(orders_to_cancel)
     return result.accepted, result.rejected
 
