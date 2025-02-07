@@ -346,7 +346,7 @@ class TurtleScout(IStrategyScout):
 
 
 def emv_cross_strategy(df, params, short_windows=5, long_windws=60):
-    idx = df.ema_short.isna().index
+    idx = df.ema_short.isna()
     df.loc[idx, "ema_short"] = df.Close.ewm(span=short_windows, adjust=False).mean()
     df.loc[idx, "ema_long"] = df.Close.ewm(span=long_windws, adjust=False).mean()
     return (df.ema_short > df.ema_long) & (df.ADX_Signed > 0.25)

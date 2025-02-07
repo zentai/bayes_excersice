@@ -171,6 +171,18 @@ class Huobi:
             self.api_key,
             self.secret_key,
             self.huobi_callback_orders,
+            self.error,
+        )
+
+    def error(self, e: "HuobiApiException"):
+        print(e.error_code + e.error_message)
+        print("start a new subscribe")
+        huobi_api.subscribe_order_update(
+            self.params.symbol.name,
+            self.api_key,
+            self.secret_key,
+            self.huobi_callback_orders,
+            self.error,
         )
 
     def huobi_callback_orders(self, upd_event: "OrderUpdateEvent"):
@@ -205,6 +217,9 @@ class Huobi:
             'tradeVolume': '520833.33',
             'type': 'buy-limit'}
         """
+        if not upd_event.data.clientOrderId:
+            print(f"[SKIP] No client order id: {upd_event.data.orderId}")
+            return
         if upd_event.data.orderStatus in ("partial-filled", "filled"):
             print(
                 {
@@ -251,47 +266,41 @@ class Huobi:
             )
 
     def place_order(self, order):
-        def cancel(ids):
-            if ids:
-                try:
-                    success, fail = huobi_api.cancel_algo_open_orders(
-                        self.api_key, self.secret_key, ids
+        def cancel(isBuy=True):
+            try:
+                success = (
+                    huobi_api.cancel_algo_open_orders(
+                        self.api_key, self.secret_key, self.params.symbol.name, isBuy
                     )
-                    print(f"Cancel orders {ids}: success={success}, fail={fail}")
-                    c_success, c_fail = huobi_api.cancel_all_open_orders(
-                        self.params.symbol.name,
-                        self.api_key,
-                        self.secret_key,
-                        OrderType.BUY_LIMIT,
-                    )
-                    c_success, c_fail = huobi_api.cancel_all_open_orders(
-                        self.params.symbol.name,
-                        self.api_key,
-                        self.secret_key,
-                        OrderType.BUY_STOP_LIMIT,
-                    )
-
-                    print(f"Cancel orders {ids}: success={c_success}, fail={c_fail}")
-                except Exception as e:
-                    print(f"Cancel {ids} failed: {e}")
-            [self.order_book.pop(id) for id in ids]
+                    or []
+                )
+                for id in success:
+                    if id in self.order_book:
+                        self.order_book.pop(id)
+                        print()
+                        print(f"Cancel {id} success")
+            except Exception as e:
+                print(f"Cancel {'Buy' if isBuy else 'Sell'} order failed: {e}")
 
         def place(client_id, amount, price, trigger_price, order):
-            self.order_book[client_id] = order
-            huobi_api.place_order(
-                symbol=self.params.symbol,
-                amount=amount,
-                price=price,
-                order_type=order.order_type,
-                api_key=self.api_key,
-                secret_key=self.secret_key,
-                stop_price=trigger_price,
-                client_order_id=client_id,
-            )
-            print(f"placed HTX order: {client_id}")
+            try:
+                huobi_api.place_order(
+                    symbol=self.params.symbol,
+                    amount=amount,
+                    price=price,
+                    order_type=order.order_type,
+                    api_key=self.api_key,
+                    secret_key=self.secret_key,
+                    stop_price=trigger_price,
+                    client_order_id=client_id,
+                )
+                self.order_book[client_id] = order
+                print(f"placed HTX order: {client_id}")
+            except Exception as e:
+                print(f"Place HTX order {client_id} failed: {e}")
 
         if isinstance(order, xBuyOrder):
-            cancel([id for id in self.order_book if "BUY" in id])
+            cancel(isBuy=True)
             place(
                 client_id=f"{order.order_id}_BUY",
                 amount=order.position,
@@ -301,7 +310,7 @@ class Huobi:
             )
 
         elif isinstance(order, xSellOrder):
-            cancel([id for id in self.order_book if "BUY" not in id])
+            cancel(isBuy=False)
             for suffix, price, trigger_price in [
                 ("ATR_EXIT", order.atr_exit_price, order.atr_exit_price * 1.001),
                 (

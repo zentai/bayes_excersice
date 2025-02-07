@@ -211,10 +211,45 @@ def place_order(
     return order_id
 
 
-def cancel_algo_open_orders(api_key, secret_key, orders_to_cancel):
+def cancel_algo_open_orders(api_key, secret_key, symbol, isBuy):
     algo_client = AlgoClient(api_key=api_key, secret_key=secret_key)
-    result = algo_client.cancel_orders(orders_to_cancel)
-    return result.accepted, result.rejected
+    trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
+
+    spot_account_id = get_spot_acc(api_key, secret_key).id
+
+    success = []
+    if isBuy:
+
+        for o in algo_client.get_open_orders() or []:
+            if "BUY" in o.clientOrderId:
+                result = algo_client.cancel_orders([o.clientOrderId])
+                success += result.accepted
+
+        for o in trade_client.get_open_orders(
+            symbol=symbol, account_id=spot_account_id, direct=QueryDirection.PREV
+        ):
+            if "BUY" in o.client_order_id:
+                result = trade_client.cancel_client_order(
+                    client_order_id=o.client_order_id
+                )
+                success.append(o.client_order_id)
+
+    else:
+        for o in algo_client.get_open_orders() or []:
+            if "BUY" not in o.clientOrderId:
+                result = algo_client.cancel_orders([o.clientOrderId])
+                success += result.accepted
+
+        for o in trade_client.get_open_orders(
+            symbol=symbol, account_id=spot_account_id, direct=QueryDirection.PREV
+        ):
+            if "BUY" not in o.client_order_id:
+                result = trade_client.cancel_client_order(
+                    client_order_id=o.clientOrclient_order_idderId
+                )
+                success.append(o.client_order_id)
+
+    return success
 
 
 def cancel_all_open_orders(symbol, api_key, secret_key, order_type=None):
@@ -286,9 +321,9 @@ def seek_price(symbol, action):
         time.sleep(0.05)
 
 
-def subscribe_order_update(symbol, api_key, secret_key, callback_func):
+def subscribe_order_update(symbol, api_key, secret_key, callback_func, error_handler):
     trade_client = TradeClient(api_key=api_key, secret_key=secret_key, init_log=False)
-    trade_client.sub_order_update(symbol, callback_func)
+    trade_client.sub_order_update(symbol, callback_func, error_handler)
 
 
 from huobi.client.trade import TradeClient
@@ -349,33 +384,79 @@ if __name__ == "__main__":
 
     g_api_key = api_key = "fefd13a1-bg2hyw2dfg-440b3c64-576f2"
     g_secret_key = secret_key = "1a437824-042aa429-0beff3ba-03e26"
-    from hunterverse.interface import Symbol
+    # from hunterverse.interface import Symbol
+
+    # symbol = "pepeusdt"
+
+    # trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
+    # account_client = AccountClient(api_key=g_api_key, secret_key=g_secret_key)
+
+    # account_spot = account_client.get_account_by_type_and_symbol(
+    #     account_type=AccountType.SPOT, symbol=None
+    # )
+    # account_id_test = account_spot.id
+
+    # direct_tmp = QueryDirection.NEXT
+    # LogInfo.output(
+    #     "==============test case 1 for {direct}===============".format(
+    #         direct=direct_tmp
+    #     )
+    # )
+    # list_obj = trade_client.get_open_orders(
+    #     symbol=symbol, account_id=account_id_test, direct=direct_tmp
+    # )
+    # LogInfo.output_list(list_obj)
+
+    # direct_tmp = QueryDirection.PREV
+    # LogInfo.output(
+    #     "==============test case 2 for {direct}===============".format(
+    #         direct=direct_tmp
+    #     )
+    # )
+    # list_obj = trade_client.get_open_orders(
+    #     symbol=symbol, account_id=account_id_test, direct=direct_tmp
+    # )
+    # LogInfo.output_list(list_obj)
+
+    # result = trade_client.cancel_client_order(client_order_id="20250204_060000_BUY")
+    # print(type(result))
+    # LogInfo.output("cancel result {id}".format(id=result))
 
     algo_client = AlgoClient(api_key=g_api_key, secret_key=g_secret_key)
     spot_account_id = get_spot_acc(api_key, secret_key).id
+    try:
+        result = algo_client.get_open_orders()
+        # LogInfo.output_list(result)
 
-    today = datetime.now()
-    client_order_id = f"{today.strftime('%Y%m%d_%H%M%S')}"
-    price = 0.000018650000
-    stop_price = price + 0.0000001
-    print(f"{client_order_id} => {price:.12f} < {stop_price:.12f}")
-    order_id = algo_client.create_order(
-        symbol="pepeusdt",
-        account_id=spot_account_id,
-        order_side=OrderSide.SELL,
-        order_type=AlgoOrderType.LIMIT,
-        order_size="8419228.18",
-        order_price=f"{price:.12f}",
-        stop_price=f"{stop_price:.12f}",
-        client_order_id=client_order_id,
-    )
-    print(f"{client_order_id} => {order_id}")
+        result = algo_client.cancel_orders([r.clientOrderId for r in result[:20]])
+        result.accepted
+        print("Cancel result:")
+        result.print_object()
+    except Exception as e:
+        print(e)
 
-    time.sleep(10)
-    result = algo_client.cancel_orders([client_order_id])
-    result.accepted
-    print("Cancel result:")
-    result.print_object()
+    # today = datetime.now()
+    # client_order_id = f"{today.strftime('%Y%m%d_%H%M%S')}"
+    # price = 0.000018650000
+    # stop_price = price + 0.0000001
+    # print(f"{client_order_id} => {price:.12f} < {stop_price:.12f}")
+    # order_id = algo_client.create_order(
+    #     symbol="pepeusdt",
+    #     account_id=spot_account_id,
+    #     order_side=OrderSide.SELL,
+    #     order_type=AlgoOrderType.LIMIT,
+    #     order_size="8419228.18",
+    #     order_price=f"{price:.12f}",
+    #     stop_price=f"{stop_price:.12f}",
+    #     client_order_id=client_order_id,
+    # )
+    # print(f"{client_order_id} => {order_id}")
+
+    # time.sleep(10)
+    # result = algo_client.cancel_orders([client_order_id])
+    # result.accepted
+    # print("Cancel result:")
+    # result.print_object()
 
     # 5. Test Place order
     # order_id = place_order(
