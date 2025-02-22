@@ -255,6 +255,11 @@ class Huobi:
                 .replace("_CUTOFF", "")
                 .replace("_BUY", "")
             )
+            if upd_event.data.clientOrderId not in self.order_book:
+                print(
+                    f"Error: Order {upd_event.data.clientOrderId} not found in order book"
+                )
+                return
             self.dispatcher.send(
                 client=self.order_book[upd_event.data.clientOrderId].client,
                 signal=self.TOPIC_ORDER_MATCHED,
@@ -264,6 +269,7 @@ class Huobi:
                 position=float(upd_event.data.tradeVolume),
                 execute_timestamp=upd_event.data.tradeTime,
             )
+            self.order_book.pop(upd_event.data.clientOrderId)
 
     def place_order(self, order):
         def cancel(isBuy=True):
@@ -312,13 +318,13 @@ class Huobi:
         elif isinstance(order, xSellOrder):
             cancel(isBuy=False)
             for suffix, price, trigger_price in [
-                ("ATR_EXIT", order.atr_exit_price, order.atr_exit_price * 1.001),
+                ("ATR_EXIT", order.atr_exit_price, order.atr_exit_price * 0.999),
                 (
                     "PROFIT_LEAVE",
                     order.profit_leave_price,
                     order.profit_leave_price * 0.999,
                 ),
-                # ("CUTOFF", order.cutoff_price, order.cutoff_price * 0.999),
+                ("CUTOFF", order.cutoff_price, order.cutoff_price * 0.999),
             ]:
                 place(
                     client_id=f"{order.order_id}_{suffix}",
@@ -444,17 +450,39 @@ class xHunter(IHunter):
             self.load_memories(deals=self.params.load_deals)
 
     def cutoff(self, strike):
-        cutoff_price = self.live_bag.cutoff_price(self.params.hard_cutoff)
+        if not self.gainsbag.is_enough_position():
+            return False
+
+        cutoff_price = self.gainsbag.cutoff_price(self.params.hard_cutoff)
         if cutoff_price and strike <= cutoff_price:
-            pass
-            # TODO: actual cutoff
+            sell_order = xSellOrder(
+                order_id=f"CUTOFF_{int(time.time())}",
+                target_price=strike,
+                executed_price=strike,
+                order_type="sell-market",
+                operator="lte",
+                kelly=1.0,
+            )
+            sell_order.client = self.client
+            sell_order.position = self.gainsbag.position
+            sell_order.cutoff_price = cutoff_price
+
+            self.platform.place_order(sell_order)
+            return True
+
+        return False
 
     def load_memories(self, fetch=True, deals=[]):
         print(f"load_memories(self, fetch={fetch}, deals={deals})")
 
         cached_order_ids = []
-        if os.path.exists(db_path := f"{config.data_dir}/{self.params.symbol}.csv"):
-            cached_order_ids = pd.read_csv(db_path).id.tolist()
+        db_path = f"{config.data_dir}/{self.params.symbol}.csv"
+        print(f"Database path: {db_path}")
+
+        # fixme
+        # if os.path.exists(db_path):
+        #     print(f"Loading cached orders from: {db_path}")
+        #     cached_order_ids = pd.read_csv(db_path).id.tolist()
 
         if fetch:
             orders = huobi_api.get_orders(
@@ -464,11 +492,11 @@ class xHunter(IHunter):
                         for i in (
                             cached_order_ids
                             + deals
-                            + huobi_api.load_history_orders(
-                                f"{self.params.symbol}",
-                                self.params.api_key,
-                                self.params.secret_key,
-                            )
+                            # + huobi_api.load_history_orders(
+                            #     f"{self.params.symbol}",
+                            #     self.params.api_key,
+                            #     self.params.secret_key,
+                            # )
                         )
                     ]
                 ),

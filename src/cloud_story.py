@@ -172,7 +172,7 @@ class HuntingStory:
             _Low = lastest_candlestick.Low
             hunting_command = {}
             sell_order = xSellOrder(
-                order_id=lastest_candlestick.Date.strftime("%Y%m%d_%H%M%S"),
+                order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}",
                 atr_exit_price=lastest_candlestick.exit_price,
                 profit_leave_price=lastest_candlestick.Stop_profit,
                 order_type="SL",
@@ -180,23 +180,18 @@ class HuntingStory:
             hunting_command["sell"] = sell_order
 
             buy_signal = lastest_candlestick.BuySignal
-            # buy_signal = lastest_candlestick.OBV_UP == True
-            # buy_signal = lastest_candlestick.OBV_UP | lastest_candlestick.OBV_DOWN
-            # buy_signal = (
-            #     lastest_candlestick.Close
-            #     > self.base_df.tail(self.params.upper_sample).High.mean()
-            # )
-            # buy_signal = lastest_candlestick.High > lastest_candlestick.atr_buy
-            # buy_signal = lastest_candlestick.OBV_DOWN
             if buy_signal:
-                trigger_price = lastest_candlestick.Close
-                price = lastest_candlestick.Low
-                # price = self.base_df.tail(self.params.upper_sample).Close.max()
-                # price = self.base_df.tail(self.params.lower_sample).Low.min()
-                # price = lastest_candlestick.Close
-                order_type = "B" if price == lastest_candlestick.High else "BL"
+                if lastest_candlestick.Close < lastest_candlestick.ema_long:
+                    trigger_price = lastest_candlestick.ema_long
+                else:
+                    trigger_price = lastest_candlestick.ema_long * 1.0005
+
+                price = trigger_price * 1.0005
+
+                order_type = "BL"
+                # order_type = "B" if price == lastest_candlestick.High else "BL"
                 buy_order = xBuyOrder(
-                    order_id=lastest_candlestick.Date.strftime("%Y%m%d_%H%M%S"),
+                    order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}",
                     target_price=price,
                     executed_price=trigger_price,
                     order_type=order_type,
@@ -216,15 +211,16 @@ class HuntingStory:
             print(hunter.review_mission(self.base_df))
         if "statement_to_csv" in self.params.debug_mode:
             self.base_df[self.report_cols].to_csv(
-                f"{REPORTS_DIR}/{sp}.csv", index=False
+                f"{REPORTS_DIR}/{self.params}.csv", index=False
             )
-            print(f"created: {REPORTS_DIR}/{sp}.csv")
+            print(f"created: {REPORTS_DIR}/{self.params}.csv")
 
     def callback_order_matched(
         self, client, order_id, order_status, price, position, execute_timestamp
     ):
         p = client
         hunter = self.hunter[client]
+        order_id = order_id.replace(f"{self.params.symbol.name}_", "")
         if order_status in (BUY_FILLED):
             s_buy_order = self.base_df.Date == datetime.datetime.strptime(
                 order_id, "%Y%m%d_%H%M%S"
@@ -503,14 +499,14 @@ def visualize_backtest(df, window_size=60):
 
 params = {
     # Buy
-    "ATR_sample": 12,
-    "bayes_windows": 12,
-    "lower_sample": 12,
-    "upper_sample": 12,
+    "ATR_sample": 60,
+    "bayes_windows": 60,
+    "lower_sample": 60,
+    "upper_sample": 60,
     # Sell
-    "hard_cutoff": 0.9,
+    "hard_cutoff": 0.95,
     "profit_loss_ratio": 3,
-    "atr_loss_margin": 2,
+    "atr_loss_margin": 2.5,
     "surfing_level": 7,
     # Period
     "interval": "1day",
@@ -525,15 +521,25 @@ params = {
         "final_statement_to_csv",
     ],
 }
+import click
+from typing import List
 
 
-if __name__ == "__main__":
+@click.command()
+@click.option("--symbol", default="trxusdt", help="Trading symbol (e.g. trxusdt)")
+@click.option("--interval", default="1min", help="Trading interval")
+@click.option("--funds", default=15, type=float, help="Available funds")
+@click.option("--cap", default=15, type=float, help="Stake cap")
+@click.option("--deals", default="", help="Comma separated deal IDs")
+def main(symbol: str, interval: str, funds: float, cap: float, deals: str):
+    deal_ids = [int(x.strip()) for x in deals.split(",") if x.strip()] if deals else []
+
     params.update(
         {
-            "funds": 50,
-            "stake_cap": 10.05,
-            "symbol": Symbol("pepeusdt"),
-            "interval": "15min",
+            "funds": funds,
+            "stake_cap": cap,
+            "symbol": Symbol(symbol),
+            "interval": interval,
             "backtest": False,
             "debug_mode": [
                 "statement",
@@ -541,10 +547,14 @@ if __name__ == "__main__":
                 "mission_review",
                 "final_statement_to_csv",
             ],
-            "load_deals": [],
+            "load_deals": deal_ids,
             "api_key": "fefd13a1-bg2hyw2dfg-440b3c64-576f2",
             "secret_key": "1a437824-042aa429-0beff3ba-03e26",
         }
     )
     sp = StrategyParam(**params)
     start_journey(sp)
+
+
+if __name__ == "__main__":
+    main()
