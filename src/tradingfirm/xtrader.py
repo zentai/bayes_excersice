@@ -159,13 +159,7 @@ class Huobi:
         self.api_key = params.api_key
         self.secret_key = params.secret_key
 
-        self.order_book = {
-            # client: {
-            #     Buy: xBuyOrder,
-            #     Sell: xSellOrder,
-            # }
-        }
-
+        self.order_book = {}
         huobi_api.subscribe_order_update(
             self.params.symbol.name,
             self.api_key,
@@ -318,13 +312,13 @@ class Huobi:
         elif isinstance(order, xSellOrder):
             cancel(isBuy=False)
             for suffix, price, trigger_price in [
-                ("ATR_EXIT", order.atr_exit_price, order.atr_exit_price * 0.999),
+                ("ATR_EXIT", order.atr_exit_price, order.atr_exit_price * 1.0001),
                 (
                     "PROFIT_LEAVE",
                     order.profit_leave_price,
                     order.profit_leave_price * 0.999,
                 ),
-                ("CUTOFF", order.cutoff_price, order.cutoff_price * 0.999),
+                ("CUTOFF", order.cutoff_price, order.cutoff_price * 1.0001),
             ]:
                 place(
                     client_id=f"{order.order_id}_{suffix}",
@@ -552,16 +546,6 @@ class xHunter(IHunter):
             msg_df = pd.DataFrame(msg, columns=["@", "USDT", "Price"])
             print(msg_df)
 
-    def strike_phase(self, hunting_command):
-        retreat = False
-        if "sell" in hunting_command:
-            if hunting_command.get("sell"):
-                order = replace(hunting_command.get("sell"))
-                retreat = self.retreat(order)
-        if "buy" in hunting_command and not retreat:
-            if hunting_command.get("buy"):
-                self.attack(replace(hunting_command.get("buy")))
-
     def callback_order_matched(
         self, client, order_id, order_status, price, position, execute_timestamp
     ):
@@ -572,17 +556,38 @@ class xHunter(IHunter):
         elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
             self.gainsbag.close_position(position, price)
 
-    # trade_ts, target_price, kelly
-    # try to book a order, create an id-orderid mapping for call back
-    def attack(self, buy_order):
-        if self.gainsbag.is_enough_cash() and not self.on_hold:
-            budget = self.gainsbag.discharge(buy_order.kelly)
-            position = budget / buy_order.target_price
-            buy_order.client = self.client
-            buy_order.position = position
+    def strike_phase(self, lastest_candlestick):
+        strike = huobi_api.get_strike(f"{self.params.symbol}")
+        retreat = self.retreat(strike, lastest_candlestick)
+        if not retreat:
+            self.attack(strike, lastest_candlestick)
+
+    def attack(self, strike, lastest_candlestick):
+        if all(
+            [
+                lastest_candlestick.BuySignal,
+                self.gainsbag.is_enough_cash(),
+                not self.on_hold,
+                strike < lastest_candlestick.ema_long * 1.0001,
+            ]
+        ):
+            trigger_price = max(strike, lastest_candlestick.ema_long) * 1.0001
+            kelly = 1.0  # lastest_candlestick.Kelly
+            budget = self.gainsbag.discharge(kelly)
+            price = trigger_price * 1.0001
+            buy_order = xBuyOrder(
+                order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}",
+                target_price=price,
+                executed_price=trigger_price,
+                order_type="BL",
+                operator="gte",
+                kelly=kelly,
+                client=self.client,
+                position=budget / price,
+            )
             self.platform.place_order(buy_order)
 
-    def retreat(self, sell_order):
+    def retreat(self, strike, lastest_candlestick):
         if self.gainsbag.is_enough_position():
             position = self.gainsbag.position
             avg_cost = self.gainsbag.avg_cost
@@ -590,13 +595,17 @@ class xHunter(IHunter):
                 1 + (1 - self.params.hard_cutoff) * self.params.profit_loss_ratio
             )
 
-            sell_order.client = self.client
-            sell_order.profit_leave_price = max(
-                sell_order.profit_leave_price, min_profit
+            sell_order = xSellOrder(
+                order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}",
+                atr_exit_price=min(strike, lastest_candlestick.exit_price),
+                profit_leave_price=max(lastest_candlestick.Stop_profit, min_profit),
+                cutoff_price=min(strike, avg_cost * self.params.hard_cutoff),
+                position=position,
+                order_type="SL",
+                client=self.client,
             )
-            sell_order.cutoff_price = avg_cost * self.params.hard_cutoff
-            sell_order.position = position
             self.platform.place_order(sell_order)
+            return True
 
     def portfolio(self, pre_strike, strike):
         return self.gainsbag.portfolio(pre_strike, strike)

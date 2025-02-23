@@ -167,43 +167,8 @@ class HuntingStory:
         self.base_df = self.scout.market_recon(self.base_df)
         self.base_df = self.engine.hunt_plan(self.base_df)
 
-        def _build_hunting_cmd(lastest_candlestick):
-            _High = lastest_candlestick.High
-            _Low = lastest_candlestick.Low
-            hunting_command = {}
-            sell_order = xSellOrder(
-                order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}",
-                atr_exit_price=lastest_candlestick.exit_price,
-                profit_leave_price=lastest_candlestick.Stop_profit,
-                order_type="SL",
-            )
-            hunting_command["sell"] = sell_order
-
-            buy_signal = lastest_candlestick.BuySignal
-            if buy_signal:
-                if lastest_candlestick.Close < lastest_candlestick.ema_long:
-                    trigger_price = lastest_candlestick.ema_long
-                else:
-                    trigger_price = lastest_candlestick.ema_long * 1.0005
-
-                price = trigger_price * 1.0005
-
-                order_type = "BL"
-                # order_type = "B" if price == lastest_candlestick.High else "BL"
-                buy_order = xBuyOrder(
-                    order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}",
-                    target_price=price,
-                    executed_price=trigger_price,
-                    order_type=order_type,
-                    operator="gte",
-                    kelly=1.0,  # lastest_candlestick.Kelly,
-                )
-                hunting_command["buy"] = buy_order
-            return hunting_command
-
-        hunting_command = _build_hunting_cmd(lastest_candlestick=self.base_df.iloc[-1])
         for _, hunter in self.hunter.items():
-            hunter.strike_phase(hunting_command)
+            hunter.strike_phase(lastest_candlestick=self.base_df.iloc[-1])
 
         if "statement" in self.params.debug_mode:
             print(self.base_df[self.debug_cols][-30:])
@@ -506,7 +471,7 @@ params = {
     # Sell
     "hard_cutoff": 0.95,
     "profit_loss_ratio": 3,
-    "atr_loss_margin": 2.5,
+    "atr_loss_margin": 1.5,
     "surfing_level": 7,
     # Period
     "interval": "1day",
@@ -526,8 +491,8 @@ from typing import List
 
 
 @click.command()
-@click.option("--symbol", default="trxusdt", help="Trading symbol (e.g. trxusdt)")
-@click.option("--interval", default="1min", help="Trading interval")
+@click.option("--symbol", default="adausdt", help="Trading symbol (e.g. trxusdt)")
+@click.option("--interval", default="60min", help="Trading interval")
 @click.option("--funds", default=15, type=float, help="Available funds")
 @click.option("--cap", default=15, type=float, help="Stake cap")
 @click.option("--deals", default="", help="Comma separated deal IDs")
