@@ -39,6 +39,13 @@ TURTLE_COLUMNS = [
     "-DM",
     "ADX",
     "ADX_Signed",
+    "drift",
+    "volatility",
+    "pred_price",
+    "Kalman",
+    "log_returns",
+    "global_log_volatility",
+    "global_log_vol",
 ]
 
 
@@ -333,7 +340,9 @@ class TurtleScout(IStrategyScout):
 
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
+        base_df = _cal_log_v(base_df)
         base_df = self._calc_ATR(base_df)
+        base_df = calc_gbm_params(base_df)
         base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
         base_df = self._calc_profit(base_df)
         return base_df
@@ -372,4 +381,75 @@ def calc_ADX(df, params, p=14):
     df["DX"] = (abs(df["+DI"] - df["-DI"]) / (df["+DI"] + df["-DI"])).replace(np.inf, 0)
     df["ADX"] = df.DX.ewm(alpha=1 / p, adjust=False).mean()
     df["ADX_Signed"] = df["ADX"] * np.sign(df["+DI"] - df["-DI"])
+    return df
+
+
+# def calc_gbm_params(base_df, windows=60, Q=1e-5, R=1e-2):
+def calc_gbm_params(df, windows=60, Q=1e-4, R=1e-2, alpha=0.6, gamma=0.4):
+    def predict_next_price(strike, mu, dt=1):
+        return strike * np.exp(mu * dt)
+
+    sub_df = df.tail(windows).copy()
+    drift = sub_df.log_returns.mean()
+    vol = sub_df.log_returns.std()
+    mask = sub_df.pred_price.isna()
+    sub_df.loc[mask, "drift"] = drift
+    sub_df.loc[mask, "volatility"] = vol
+    sub_df.loc[mask, "pred_price"] = predict_next_price(sub_df.iloc[-1].Close, drift)
+    # 假设全局对数成交量与全局对数波动率已经在 df 中预先计算好
+    global_log_vol = sub_df.global_log_vol.iloc[0]
+    global_log_volatility = sub_df.global_log_volatility.iloc[0]
+    sub_df.loc[mask, "Kalman"] = kalman_update(
+        sub_df[["pred_price", "Close", "volatility", "Vol"]].values,
+        Q,
+        R,
+        alpha,
+        gamma,
+        global_log_vol,
+        global_log_volatility,
+    )
+    df.update(sub_df[["pred_price", "Kalman"]])
+    return df
+
+
+def kalman_update(
+    window,
+    Q=1e-5,
+    R_base=1e-2,
+    alpha=1.0,
+    gamma=1.0,
+    global_log_vol=0,
+    global_log_volatility=0,
+):
+    # window 的列顺序：[pred_price, Close, volatility, Vol]
+    window = window.reshape(-1, 4)
+    x = window[0, 0]
+    P = 1.0
+    for i in range(1, window.shape[0]):
+        current_vol = window[i, 3]
+        current_volatility = window[i, 2]
+        current_log_vol = np.log(current_vol)
+        current_log_volatility = (
+            np.log(current_volatility) if current_volatility > 0 else 0
+        )
+        vol_factor = np.exp(-alpha * (current_log_vol - global_log_vol))
+        volat_factor = np.exp(gamma * (current_log_volatility - global_log_volatility))
+        R_t = R_base * vol_factor * volat_factor
+
+        P_pred = P + Q
+        K = P_pred / (P_pred + R_t)
+        z = window[i, 1]
+        x = x + K * (z - x)
+        P = (1 - K) * P_pred
+    return x
+
+
+def _cal_log_v(df):
+    log_ret = np.log(df.Close / df.Close.shift()).dropna()
+    df["log_returns"].fillna(log_ret, inplace=True)
+    df["volatility"].fillna(log_ret.std(), inplace=True)
+    df["global_log_volatility"].fillna(
+        np.nanmean(np.log(df["volatility"])), inplace=True
+    )
+    df["global_log_vol"].fillna(np.nanmean(np.log(df["Vol"])), inplace=True)
     return df

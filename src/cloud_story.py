@@ -72,6 +72,10 @@ DEBUG_COL = [
     # "+DI",
     # "-DI",
     "ADX_Signed",
+    "drift",
+    "volatility",
+    "pred_price",
+    "Kalman",
 ]
 
 DUMP_COL = [
@@ -109,6 +113,14 @@ DUMP_COL = [
     "+DI",
     "-DI",
     "ADX_Signed",
+    "drift",
+    "volatility",
+    "pred_price",
+    "Kalman",
+    "log_returns",
+    "volatility",
+    "global_log_volatility",
+    "global_log_vol",
 ]
 
 
@@ -244,7 +256,7 @@ def start_journey(sp):
     hunter = {
         "s": xHunter("s", params=sp),
         # "b": xHunter("b", params=sp),
-        "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
+        # "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
     }
     base_df = sensor.scan(2000 if not sp.backtest else 100)
     debug_cols = DEBUG_COL + sum(
@@ -491,8 +503,8 @@ from typing import List
 
 
 @click.command()
-@click.option("--symbol", default="adausdt", help="Trading symbol (e.g. trxusdt)")
-@click.option("--interval", default="60min", help="Trading interval")
+@click.option("--symbol", default="pepeusdt", help="Trading symbol (e.g. trxusdt)")
+@click.option("--interval", default="1min", help="Trading interval")
 @click.option("--funds", default=15, type=float, help="Available funds")
 @click.option("--cap", default=15, type=float, help="Stake cap")
 @click.option("--deals", default="", help="Comma separated deal IDs")
@@ -505,11 +517,11 @@ def main(symbol: str, interval: str, funds: float, cap: float, deals: str):
             "stake_cap": cap,
             "symbol": Symbol(symbol),
             "interval": interval,
-            "backtest": False,
+            "backtest": True,
             "debug_mode": [
-                "statement",
-                "statement_to_csv",
-                "mission_review",
+                # "statement",
+                # "statement_to_csv",
+                # "mission_review",
                 "final_statement_to_csv",
             ],
             "load_deals": deal_ids,
