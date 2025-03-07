@@ -558,9 +558,8 @@ class xHunter(IHunter):
 
     def strike_phase(self, lastest_candlestick):
         strike = huobi_api.get_strike(f"{self.params.symbol}")
-        retreat = self.retreat(strike, lastest_candlestick)
-        if not retreat:
-            self.attack(strike, lastest_candlestick)
+        self.retreat(strike, lastest_candlestick)
+        self.attack(strike, lastest_candlestick)
 
     def attack(self, strike, lastest_candlestick):
         if all(
@@ -605,7 +604,6 @@ class xHunter(IHunter):
                 client=self.client,
             )
             self.platform.place_order(sell_order)
-            return True
 
     def portfolio(self, pre_strike, strike):
         return self.gainsbag.portfolio(pre_strike, strike)

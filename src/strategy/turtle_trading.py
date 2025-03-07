@@ -6,6 +6,8 @@ import statistics
 from datetime import datetime
 from collections import deque
 import logging
+from sklearn.preprocessing import StandardScaler
+from hmmlearn.hmm import GaussianHMM
 
 from ..hunterverse.interface import IStrategyScout
 from ..utils import pandas_util
@@ -46,6 +48,10 @@ TURTLE_COLUMNS = [
     "log_returns",
     "global_log_volatility",
     "global_log_vol",
+    "KReturn",
+    "KReturnVol",
+    "RVolume",
+    "HMM_State",
 ]
 
 
@@ -262,9 +268,55 @@ class TurtleScout(IStrategyScout):
         self.window = max(ATR_sample, upper_sample, lower_sample) * 2
         # Set the buy_signal_func, default to the simple_turtle_strategy if none is provided
         self.buy_signal_func = buy_signal_func or self._simple_turtle_strategy
+        self.scaler = None
+        self.hmm_model = None
+        self.uptrend_state = None
+
+    def train(self, df):
+        windows = self.params.bayes_windows
+        df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
+
+        self.scaler = StandardScaler()
+        self.hmm_model = GaussianHMM(
+            n_components=2, covariance_type="full", n_iter=1000, random_state=42
+        )
+
+        X = self._calc_HMM_input(df, windows, self.scaler)
+        self.hmm_model.fit(X)
+        hidden_states = self.hmm_model.predict(X)
+        df["HMM_State"] = hidden_states
+        HMM_0 = df[df.HMM_State == 0].log_returns.sum()
+        HMM_1 = df[df.HMM_State == 1].log_returns.sum()
+        self.uptrend_state = int(HMM_1 > HMM_0)
+        print(f"Uptrend state is: {self.uptrend_state}, 0: {HMM_0} 1: {HMM_1}")
+        return df
+
+    def _calc_HMM_input(self, df, windows, scaler):
+        df = calc_Kalman_Price(df, windows=windows)
+
+        mask = df["KReturn"].isna()
+        df.loc[mask, "KReturn"] = np.log(
+            df.loc[mask, "Kalman"] / df["Kalman"].shift(1)[mask]
+        )
+
+        df.loc[mask, "KReturnVol"] = (
+            df["KReturn"].rolling(window=windows, min_periods=1).mean()
+        )
+
+        # 计算 RVolume：log(Vol / Vol_rolling)，Vol_rolling 为 Vol 的 rolling 均值
+        vol_rolling = df.loc[mask, "Vol"].rolling(window=windows, min_periods=1).mean()
+        df.loc[mask, "RVolume"] = df.loc[mask, "Vol"] / vol_rolling
+
+        # 填充 KReturnVol 和 RVolume 的缺失值，采用向后填充策略
+        df.loc[:, ["KReturnVol", "RVolume"]] = df.loc[
+            :, ["KReturnVol", "RVolume"]
+        ].fillna(method="bfill")
+
+        features = df[["KReturnVol", "RVolume"]].values
+        X = scaler.fit_transform(features)
+        return X
 
     def _calc_profit(self, base_df):
-
         surfing_df = base_df.tail(self.window).copy()
         idx = surfing_df.Stop_profit.isna().index
         prices = surfing_df.High.values.tolist()
@@ -338,11 +390,18 @@ class TurtleScout(IStrategyScout):
         base_df.update(df)
         return base_df
 
+    def _calc_HMM_State(self, base_df):
+        windows = self.params.bayes_windows
+        mask = base_df["HMM_State"].isna()
+        X = self._calc_HMM_input(base_df, windows, self.scaler)
+        hidden_states = self.hmm_model.predict(X)
+        base_df.loc[mask, "HMM_State"] = hidden_states[mask]
+        return base_df
+
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
-        base_df = _cal_log_v(base_df)
         base_df = self._calc_ATR(base_df)
-        base_df = calc_gbm_params(base_df)
+        base_df = self._calc_HMM_State(base_df)
         base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
         base_df = self._calc_profit(base_df)
         return base_df
@@ -384,50 +443,82 @@ def calc_ADX(df, params, p=14):
     return df
 
 
-# def calc_gbm_params(base_df, windows=60, Q=1e-5, R=1e-2):
-def calc_gbm_params(df, windows=60, Q=1e-4, R=1e-2, alpha=0.6, gamma=0.4):
-    def predict_next_price(strike, mu, dt=1):
-        return strike * np.exp(mu * dt)
+def calc_Kalman_Price(df, windows=60, Q=1e-5, R=1e-2, alpha=0.4, gamma=0.6):
+    mask_lr = df["log_returns"].isna()
+    df.loc[mask_lr, "log_returns"] = np.log(df["Close"] / df["Close"].shift(1))[mask_lr]
 
-    sub_df = df.tail(windows).copy()
-    drift = sub_df.log_returns.mean()
-    vol = sub_df.log_returns.std()
-    mask = sub_df.pred_price.isna()
-    sub_df.loc[mask, "drift"] = drift
-    sub_df.loc[mask, "volatility"] = vol
-    sub_df.loc[mask, "pred_price"] = predict_next_price(sub_df.iloc[-1].Close, drift)
-    # 假设全局对数成交量与全局对数波动率已经在 df 中预先计算好
-    global_log_vol = sub_df.global_log_vol.iloc[0]
-    global_log_volatility = sub_df.global_log_volatility.iloc[0]
-    sub_df.loc[mask, "Kalman"] = kalman_update(
-        sub_df[["pred_price", "Close", "volatility", "Vol"]].values,
-        Q,
-        R,
-        alpha,
-        gamma,
-        global_log_vol,
-        global_log_volatility,
+    # 计算 rolling window 的 drift（均值）和 volatility（标准差）
+    drift = df["log_returns"].rolling(windows, min_periods=1).mean()
+    volatility = df["log_returns"].rolling(windows, min_periods=1).std()
+
+    mask_new = df["pred_price"].isna()
+    df.loc[mask_new, "drift"] = drift[mask_new]
+    df.loc[mask_new, "volatility"] = volatility[mask_new]
+    df.loc[mask_new, "pred_price"] = df.loc[mask_new, "Close"] * np.exp(drift[mask_new])
+
+    # 使用已有数据计算全局对数指标（旧数据保持不变，新数据填充）
+    df.loc[mask_new, "global_log_vol"] = (
+        np.log(df["Vol"].dropna()).rolling(windows, min_periods=1).mean()
     )
-    df.update(sub_df[["pred_price", "Kalman"]])
+    df.loc[mask_new, "global_log_volatility"] = (
+        np.log(df["volatility"].dropna()).rolling(windows, min_periods=1).mean()
+    )
+
+    # 针对新数据进行 Kalman 更新（逐行计算）
+    df.loc[mask_new, "Kalman"] = df.loc[mask_new].apply(
+        lambda r: rolling_kalman_update(
+            df,
+            r.name,
+            windows,
+            Q,
+            R,
+            alpha,
+            gamma,
+        ),
+        axis=1,
+    )
     return df
 
 
+def rolling_kalman_update(df, idx, window, Q, R, alpha, gamma):
+    """
+    从 DataFrame 中取出从 idx-window+1 到 idx 的数据构造特征矩阵，
+    并调用 kalman_update 进行 Kalman 更新。
+    """
+    start = max(0, idx - window + 1)
+    sub_df = df.loc[start:idx, ["pred_price", "Close", "volatility", "Vol"]].dropna()
+
+    # 如果窗口内数据为空，则返回当前行的 Close 值
+    if sub_df.empty:
+        return df.loc[idx, "Close"]
+
+    # 提取窗口内的数据，要求列顺序为：[pred_price, Close, volatility, Vol]
+    features = sub_df.values
+    global_log_vol = df.loc[idx, "global_log_vol"]
+    global_log_volatility = df.loc[idx, "global_log_volatility"]
+    return kalman_update(
+        features, Q, R, alpha, gamma, global_log_vol, global_log_volatility
+    )
+
+
 def kalman_update(
-    window,
-    Q=1e-5,
-    R_base=1e-2,
-    alpha=1.0,
-    gamma=1.0,
-    global_log_vol=0,
-    global_log_volatility=0,
+    features,
+    Q,
+    R_base,
+    alpha,
+    gamma,
+    global_log_vol,
+    global_log_volatility,
 ):
-    # window 的列顺序：[pred_price, Close, volatility, Vol]
-    window = window.reshape(-1, 4)
-    x = window[0, 0]
+    # features 的列顺序：[pred_price, Close, volatility, Vol]
+    features = features.reshape(-1, 4)
+    x = features[0, 0]
     P = 1.0
-    for i in range(1, window.shape[0]):
-        current_vol = window[i, 3]
-        current_volatility = window[i, 2]
+    for i in range(1, features.shape[0]):
+        current_vol = features[i, 3]
+        current_volatility = features[i, 2]
+        if current_vol == 0:
+            print()
         current_log_vol = np.log(current_vol)
         current_log_volatility = (
             np.log(current_volatility) if current_volatility > 0 else 0
@@ -438,18 +529,7 @@ def kalman_update(
 
         P_pred = P + Q
         K = P_pred / (P_pred + R_t)
-        z = window[i, 1]
+        z = features[i, 1]
         x = x + K * (z - x)
         P = (1 - K) * P_pred
     return x
-
-
-def _cal_log_v(df):
-    log_ret = np.log(df.Close / df.Close.shift()).dropna()
-    df["log_returns"].fillna(log_ret, inplace=True)
-    df["volatility"].fillna(log_ret.std(), inplace=True)
-    df["global_log_volatility"].fillna(
-        np.nanmean(np.log(df["volatility"])), inplace=True
-    )
-    df["global_log_vol"].fillna(np.nanmean(np.log(df["Vol"])), inplace=True)
-    return df

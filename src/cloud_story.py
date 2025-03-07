@@ -76,6 +76,7 @@ DEBUG_COL = [
     "volatility",
     "pred_price",
     "Kalman",
+    "HMM_State",
 ]
 
 DUMP_COL = [
@@ -108,11 +109,11 @@ DUMP_COL = [
     # "likelihood",
     # "profit_margin",
     # "loss_margin",
-    "+DM",
-    "-DM",
-    "+DI",
-    "-DI",
-    "ADX_Signed",
+    # "+DM",
+    # "-DM",
+    # "+DI",
+    # "-DI",
+    # "ADX_Signed",
     "drift",
     "volatility",
     "pred_price",
@@ -121,6 +122,9 @@ DUMP_COL = [
     "volatility",
     "global_log_volatility",
     "global_log_vol",
+    "KReturnVol",
+    "RVolume",
+    "HMM_State",
 ]
 
 
@@ -259,6 +263,7 @@ def start_journey(sp):
         # "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
     }
     base_df = sensor.scan(2000 if not sp.backtest else 100)
+    base_df = scout.train(base_df)
     debug_cols = DEBUG_COL + sum(
         [h.columns for h in hunter.values() if h.client == "x"], []
     )
@@ -503,7 +508,7 @@ from typing import List
 
 
 @click.command()
-@click.option("--symbol", default="pepeusdt", help="Trading symbol (e.g. trxusdt)")
+@click.option("--symbol", default="berausdt", help="Trading symbol (e.g. trxusdt)")
 @click.option("--interval", default="1min", help="Trading interval")
 @click.option("--funds", default=15, type=float, help="Available funds")
 @click.option("--cap", default=15, type=float, help="Stake cap")
@@ -517,11 +522,11 @@ def main(symbol: str, interval: str, funds: float, cap: float, deals: str):
             "stake_cap": cap,
             "symbol": Symbol(symbol),
             "interval": interval,
-            "backtest": True,
+            "backtest": False,
             "debug_mode": [
-                # "statement",
-                # "statement_to_csv",
-                # "mission_review",
+                "statement",
+                "statement_to_csv",
+                "mission_review",
                 "final_statement_to_csv",
             ],
             "load_deals": deal_ids,

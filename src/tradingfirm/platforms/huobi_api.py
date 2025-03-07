@@ -245,7 +245,7 @@ def cancel_algo_open_orders(api_key, secret_key, symbol, isBuy):
         ):
             if "BUY" not in o.client_order_id:
                 result = trade_client.cancel_client_order(
-                    client_order_id=o.clientOrclient_order_idderId
+                    client_order_id=o.client_order_id
                 )
                 success.append(o.client_order_id)
 
