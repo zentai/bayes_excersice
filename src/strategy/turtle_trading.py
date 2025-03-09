@@ -108,7 +108,7 @@ class MixScout(IStrategyScout):
         )
         # df.loc[s_buy, "buy"] = df.Open.shift(-1)
         df.loc[s_buy, "buy"] = df.Close
-        df.loc[:, "BuySignal"] = df.High > df.turtle_h
+        df.loc[s_buy, "BuySignal"] = df.High > df.turtle_h
         # Sell condition:
         # s_sell = df.buy.notna() & (df.Low.shift(-1) < df.exit_price)
         s_sell = df.buy.notna() & (df.Close < df.exit_price)
@@ -270,7 +270,6 @@ class TurtleScout(IStrategyScout):
         self.buy_signal_func = buy_signal_func or self._simple_turtle_strategy
         self.scaler = None
         self.hmm_model = None
-        self.uptrend_state = None
 
     def train(self, df):
         windows = self.params.bayes_windows
@@ -278,17 +277,20 @@ class TurtleScout(IStrategyScout):
 
         self.scaler = StandardScaler()
         self.hmm_model = GaussianHMM(
-            n_components=2, covariance_type="full", n_iter=1000, random_state=42
+            n_components=2, covariance_type="full", n_iter=4000, random_state=42
         )
 
         X = self._calc_HMM_input(df, windows, self.scaler)
         self.hmm_model.fit(X)
         hidden_states = self.hmm_model.predict(X)
         df["HMM_State"] = hidden_states
-        HMM_0 = df[df.HMM_State == 0].log_returns.sum()
-        HMM_1 = df[df.HMM_State == 1].log_returns.sum()
-        self.uptrend_state = int(HMM_1 > HMM_0)
-        print(f"Uptrend state is: {self.uptrend_state}, 0: {HMM_0} 1: {HMM_1}")
+
+        debug_hmm(self.hmm_model, hidden_states, df, X, windows)
+
+        HMM_0 = df[df.HMM_State == 0].log_returns.median()
+        HMM_1 = df[df.HMM_State == 1].log_returns.median()
+        df["uptrend_state"] = int(HMM_1 > HMM_0)
+        print(f"Uptrend state is: {int(HMM_1 > HMM_0)}, 0: {HMM_0} 1: {HMM_1}")
         return df
 
     def _calc_HMM_input(self, df, windows, scaler):
@@ -296,16 +298,20 @@ class TurtleScout(IStrategyScout):
 
         mask = df["KReturn"].isna()
         df.loc[mask, "KReturn"] = np.log(
-            df.loc[mask, "Kalman"] / df["Kalman"].shift(1)[mask]
+            # df.loc[mask, "Kalman"] / df["Kalman"].shift(1)[mask]
+            df.loc[mask, "Kalman"]
+            / df["Kalman"].shift(1).rolling(window=60, min_periods=5).mean()[mask]
         )
 
         df.loc[mask, "KReturnVol"] = (
-            df["KReturn"].rolling(window=windows, min_periods=1).mean()
+            df["KReturn"].rolling(window=windows, min_periods=15).mean()
         )
 
         # 计算 RVolume：log(Vol / Vol_rolling)，Vol_rolling 为 Vol 的 rolling 均值
         vol_rolling = df.loc[mask, "Vol"].rolling(window=windows, min_periods=1).mean()
         df.loc[mask, "RVolume"] = df.loc[mask, "Vol"] / vol_rolling
+
+        # df.loc[mask, "RVolume"] = df["volatility"][mask]
 
         # 填充 KReturnVol 和 RVolume 的缺失值，采用向后填充策略
         df.loc[:, ["KReturnVol", "RVolume"]] = df.loc[
@@ -340,7 +346,7 @@ class TurtleScout(IStrategyScout):
         # Use the pre-calculated BuySignal using buy_signal_func
         s_buy = df.buy.isna()
         df.loc[s_buy, "buy"] = df.Close
-        df.loc[:, "BuySignal"] = self.buy_signal_func(df, self.params)
+        df.loc[s_buy, "BuySignal"] = self.buy_signal_func(df, self.params)
 
         # Sell condition:
         s_sell = df.buy.notna() & (df.Low < df.exit_price)
@@ -396,6 +402,7 @@ class TurtleScout(IStrategyScout):
         X = self._calc_HMM_input(base_df, windows, self.scaler)
         hidden_states = self.hmm_model.predict(X)
         base_df.loc[mask, "HMM_State"] = hidden_states[mask]
+        base_df.uptrend_state.ffill(inplace=True)
         return base_df
 
     def market_recon(self, base_df):
@@ -443,7 +450,7 @@ def calc_ADX(df, params, p=14):
     return df
 
 
-def calc_Kalman_Price(df, windows=60, Q=1e-5, R=1e-2, alpha=0.4, gamma=0.6):
+def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.1, gamma=0.9):
     mask_lr = df["log_returns"].isna()
     df.loc[mask_lr, "log_returns"] = np.log(df["Close"] / df["Close"].shift(1))[mask_lr]
 
@@ -477,6 +484,7 @@ def calc_Kalman_Price(df, windows=60, Q=1e-5, R=1e-2, alpha=0.4, gamma=0.6):
         ),
         axis=1,
     )
+
     return df
 
 
@@ -517,8 +525,6 @@ def kalman_update(
     for i in range(1, features.shape[0]):
         current_vol = features[i, 3]
         current_volatility = features[i, 2]
-        if current_vol == 0:
-            print()
         current_log_vol = np.log(current_vol)
         current_log_volatility = (
             np.log(current_volatility) if current_volatility > 0 else 0
@@ -533,3 +539,114 @@ def kalman_update(
         x = x + K * (z - x)
         P = (1 - K) * P_pred
     return x
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from hmmlearn.hmm import GaussianHMM
+
+
+def debug_hmm(hmm_model, hidden_states, df, X, future_days=10):
+    """
+    視覺化 Hidden Markov Model (HMM) 的學習結果，包含：
+    1. 隱藏狀態時序圖
+    2. 隱藏狀態高斯分佈
+    3. 狀態轉移矩陣
+    4. 模型對數似然值
+    5. 未來狀態模擬
+
+    參數：
+    - hmm_model: 訓練好的 GaussianHMM 模型
+    - df: 包含觀測數據的 DataFrame
+    - feature_col: 觀測數據的欄位名稱 (預設為 "returns")
+    - future_days: 模擬未來狀態的天數 (預設為 10)
+    """
+
+    ## 1️⃣ 隱藏狀態時序圖
+    plt.figure(figsize=(12, 5))
+    ax1 = plt.gca()
+    ax2 = ax1.twinx()
+    ax2.plot(df.index, df.Close, label="BTC Price", color="black", linewidth=1.5)
+    ax2.plot(df.index, df.Kalman, label="Kalman Filter", color="blue", linewidth=1.5)
+    ax2.legend(loc="upper right")
+    ax1.set_ylabel("Features")
+    ax2.set_ylabel("BTC Price")
+    for i in range(hmm_model.n_components):
+        ax1.fill_between(
+            df.index,
+            X[:, 0],
+            where=(hidden_states == i),
+            alpha=0.3,
+            label=f"State {i} - KReturnVol",
+        )
+    for i in range(hmm_model.n_components):
+        ax1.fill_between(
+            df.index,
+            X[:, 1],
+            where=(hidden_states == i),
+            alpha=0.3,
+            label=f"State {i} - RVolume",
+        )
+    ax1.legend()
+    plt.title("Hidden States Over Time")
+    plt.xlabel("Date")
+    plt.ylabel("feature_col")
+    plt.show()
+    ## 2️⃣ 隱藏狀態的高斯分佈
+    means = hmm_model.means_.flatten()
+    covars = np.sqrt(hmm_model.covars_.flatten())
+
+    plt.figure(figsize=(8, 5))
+    for i in range(hmm_model.n_components):
+        sns.kdeplot(X[hidden_states == i].ravel(), label=f"State {i}", shade=True)
+    plt.axvline(
+        means[0], color="blue", linestyle="--", label=f"Mean State 0: {means[0]:.2f}"
+    )
+    plt.axvline(
+        means[1], color="red", linestyle="--", label=f"Mean State 1: {means[1]:.2f}"
+    )
+    plt.legend()
+    plt.title("Gaussian Distributions of Hidden States")
+    plt.xlabel("feature_col")
+    plt.show()
+
+    ## 3️⃣ 狀態轉移矩陣（熱力圖）
+    trans_mat = hmm_model.transmat_
+
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(
+        trans_mat,
+        annot=True,
+        cmap="coolwarm",
+        fmt=".2f",
+        xticklabels=[f"State {i}" for i in range(hmm_model.n_components)],
+        yticklabels=[f"State {i}" for i in range(hmm_model.n_components)],
+    )
+    plt.title("HMM State Transition Matrix")
+    plt.xlabel("Next State")
+    plt.ylabel("Current State")
+    plt.show()
+
+    ## 4️⃣ 打印模型對數似然值
+    log_likelihood = hmm_model.score(X)
+    print(f"\n🔍 Log-Likelihood of the trained HMM: {log_likelihood:.2f}")
+
+    ## 5️⃣ 模擬未來狀態
+    future_states, _ = hmm_model.sample(future_days)
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(
+        range(future_days),
+        future_states,
+        marker="o",
+        linestyle="dashed",
+        label="Simulated Future States",
+    )
+    plt.xlabel("Future Days")
+    plt.ylabel("State")
+    plt.title("Simulated Future Market States")
+    plt.legend()
+    plt.show()
+
+    print("\n✅ HMM Debug 完成！請檢查上面的圖表來分析 HMM 是否合理地劃分了市場狀態。")
