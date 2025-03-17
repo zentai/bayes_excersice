@@ -312,13 +312,13 @@ class Huobi:
         elif isinstance(order, xSellOrder):
             cancel(isBuy=False)
             for suffix, price, trigger_price in [
-                ("ATR_EXIT", order.atr_exit_price, order.atr_exit_price * 1.0001),
+                ("ATR_EXIT", order.atr_exit_price, order.atr_exit_price * 1.001),
                 (
                     "PROFIT_LEAVE",
                     order.profit_leave_price,
-                    order.profit_leave_price * 0.999,
+                    order.profit_leave_price * 0.99,
                 ),
-                ("CUTOFF", order.cutoff_price, order.cutoff_price * 1.0001),
+                ("CUTOFF", order.cutoff_price, order.cutoff_price * 1.001),
             ]:
                 place(
                     client_id=f"{order.order_id}_{suffix}",
@@ -568,7 +568,7 @@ class xHunter(IHunter):
                 lastest_candlestick.HMM_State == lastest_candlestick.uptrend_state,
                 self.gainsbag.is_enough_cash(),
                 not self.on_hold,
-                strike < lastest_candlestick.ema_long * 1.0001,
+                # strike < lastest_candlestick.ema_long * 1.0001,
             ]
         ):
             trigger_price = max(strike, lastest_candlestick.ema_long) * 1.0001

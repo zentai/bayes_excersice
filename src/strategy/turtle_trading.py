@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 # FIXME: move some columns to IEngine
 TURTLE_COLUMNS = [
+    "TR",
     "ATR",
     "turtle_h",
     "turtle_l",
@@ -159,8 +160,8 @@ class MixScout(IStrategyScout):
         base_df.loc[idx, "ATR"] = base_df["TR"].rolling(ATR_sample).mean()
 
         # Single Bollinger band take profit solution
-        surfing_df = base_df.tail(upper_sample)
-        prices = surfing_df.High.values.tolist()
+        surf_df = base_df.tail(upper_sample)
+        prices = surf_df.High.values.tolist()
         mean = statistics.mean(prices)
         stdv = statistics.stdev(prices)
         surfing_profit = mean + (self.params.surfing_level * stdv)
@@ -285,11 +286,11 @@ class TurtleScout(IStrategyScout):
         hidden_states = self.hmm_model.predict(X)
         df["HMM_State"] = hidden_states
 
-        debug_hmm(self.hmm_model, hidden_states, df, X, windows)
+        # debug_hmm(self.hmm_model, hidden_states, df, X)
 
         HMM_0 = df[df.HMM_State == 0].log_returns.median()
         HMM_1 = df[df.HMM_State == 1].log_returns.median()
-        df["uptrend_state"] = int(HMM_1 > HMM_0)
+        df["uptrend_state"] = 0
         print(f"Uptrend state is: {int(HMM_1 > HMM_0)}, 0: {HMM_0} 1: {HMM_1}")
         return df
 
@@ -304,16 +305,20 @@ class TurtleScout(IStrategyScout):
         )
 
         df.loc[mask, "KReturnVol"] = (
-            df["KReturn"].rolling(window=windows, min_periods=15).mean()
+            df["KReturn"].rolling(window=windows, min_periods=5).mean()
         )
 
-        # 计算 RVolume：log(Vol / Vol_rolling)，Vol_rolling 为 Vol 的 rolling 均值
-        vol_rolling = df.loc[mask, "Vol"].rolling(window=windows, min_periods=1).mean()
-        df.loc[mask, "RVolume"] = df.loc[mask, "Vol"] / vol_rolling
+        # 计算 RVolume：log(Vol / Vol_rolling), Vol_rolling 为 Vol 的 rolling 均值
+        # vol_rolling = df.loc[mask, "Vol"].rolling(window=windows, min_periods=1).mean()
+        # df.loc[mask, "RVolume"] = df.loc[mask, "Vol"] / vol_rolling
+        df.loc[mask, "RVolume"] = np.log(
+            df.loc[mask, "Vol"]
+            / df.loc[mask, "Vol"].rolling(window=windows, min_periods=5).mean()
+        )
 
         # df.loc[mask, "RVolume"] = df["volatility"][mask]
 
-        # 填充 KReturnVol 和 RVolume 的缺失值，采用向后填充策略
+        # 填充 KReturnVol 和 RVolume 的缺失值, 采用向后填充策略
         df.loc[:, ["KReturnVol", "RVolume"]] = df.loc[
             :, ["KReturnVol", "RVolume"]
         ].fillna(method="bfill")
@@ -323,59 +328,68 @@ class TurtleScout(IStrategyScout):
         return X
 
     def _calc_profit(self, base_df):
-        surfing_df = base_df.tail(self.window).copy()
-        idx = surfing_df.Stop_profit.isna().index
-        prices = surfing_df.High.values.tolist()
-        mean = statistics.mean(prices)
-        stdv = statistics.stdev(prices)
-        surfing_profit = mean + (self.params.surfing_level * stdv)
-        surfing_df.loc[idx, "Stop_profit"] = surfing_profit
-        surfing_df.loc[idx, "exit_price"] = (
-            surfing_df.Close.shift(1)
-            - surfing_df.ATR.shift(1) * self.params.atr_loss_margin
+        last_valid_idx = base_df.exit_price.last_valid_index()
+        start_idx = (
+            0 if last_valid_idx is None else max(0, last_valid_idx - self.window + 1)
         )
-        surfing_df.loc[idx, "atr_buy"] = surfing_df.Close.shift(
-            1
-        ) + surfing_df.ATR.shift(1)
-        base_df.update(surfing_df)
 
+        surf_df = base_df.iloc[start_idx:].copy()
+        idx = surf_df.Stop_profit.isna()
+
+        # 利用 tail(self.window) 中所有 High 价格计算均值和标准差（不局限于缺失行, 但结果一致）
+        prices = surf_df.High.values.tolist()
+        mean_price = statistics.mean(prices)
+        stdv_price = statistics.stdev(prices)
+        surfing_profit = mean_price + self.params.surfing_level * stdv_price
+
+        surf_df.loc[surf_df.Stop_profit.isna(), "Stop_profit"] = surfing_profit
+        surf_df.loc[surf_df.exit_price.isna(), "exit_price"] = (
+            surf_df.Close.shift(1) - surf_df.ATR.shift(1) * self.params.atr_loss_margin
+        )
+        base_df.update(surf_df)
+
+        # 第二部分：重算买卖信号与利润指标
+        # 定位重新计算的起始点, 利用 sell 列缺失的第一个索引
         resume_idx = base_df.sell.isna().idxmax()
-        df = base_df.loc[resume_idx:].copy()
-        df = df[df.exit_price.notna()]
+        calc_df = base_df.loc[resume_idx:].copy()
 
-        # Use the pre-calculated BuySignal using buy_signal_func
-        s_buy = df.buy.isna()
-        df.loc[s_buy, "buy"] = df.Close
-        df.loc[s_buy, "BuySignal"] = self.buy_signal_func(df, self.params)
+        # 买入信号：对 buy 缺失行, 赋值 Close 并调用自定义买入信号函数
+        s_buy = calc_df.buy.isna()
+        calc_df.loc[s_buy, "buy"] = calc_df.Close
+        calc_df.loc[s_buy, "BuySignal"] = self.buy_signal_func(calc_df, self.params)
 
-        # Sell condition:
-        s_sell = df.buy.notna() & (df.Low < df.exit_price)
+        # 卖出信号：满足已有买入信号且当日 Low 小于 exit_price 的情况
+        # s_sell = calc_df.buy.notna() & (calc_df.Low < calc_df.exit_price)
+        s_sell = calc_df.buy.notna() & (calc_df.HMM_State == 0)  # FIXME
+        calc_df.loc[s_sell, "sell"] = calc_df.exit_price
+        calc_df.loc[s_sell, "Matured"] = pd.to_datetime(calc_df.Date)
 
-        df.loc[s_sell, "sell"] = df.exit_price.where(s_sell)
-        df.loc[s_sell, "Matured"] = pd.to_datetime(df.Date.where(s_sell))
+        # 向后填充 sell 与 Matured, 确保空缺部分得到延伸
+        calc_df.sell.bfill(inplace=True)
+        calc_df.Matured.bfill(inplace=True)
 
-        # Backfill sell and Matured columns
-        df.sell.bfill(inplace=True)
-        df.Matured.bfill(inplace=True)
-
-        # Compute profit and time_cost columns
-        s_profit = df.buy.notna() & df.sell.notna() & df.profit.isna()
-        df.loc[s_profit, "profit"] = (df.sell / df.buy) - 1
-        df.loc[s_profit, "P/L"] = (df.sell - df.buy) / (
-            df.ATR * self.params.atr_loss_margin
+        # 利润计算：仅对买入与卖出均存在且 profit 缺失的行计算
+        s_profit = calc_df.buy.notna() & calc_df.sell.notna() & calc_df.profit.isna()
+        calc_df.loc[s_profit, "profit"] = (calc_df.sell / calc_df.buy) - 1
+        calc_df.loc[s_profit, "P/L"] = (calc_df.sell - calc_df.buy) / (
+            calc_df.ATR * self.params.atr_loss_margin
         )
-        df.loc[s_profit, "time_cost"] = [
-            int(x.seconds / 60 / pandas_util.INTERVAL_TO_MIN.get(self.params.interval))
-            for x in (
-                pd.to_datetime(df.loc[s_profit, "Matured"])
-                - pd.to_datetime(df.loc[s_profit, "Date"])
+        calc_df.loc[s_profit, "time_cost"] = [
+            int(
+                delta.seconds
+                / 60
+                / pandas_util.INTERVAL_TO_MIN.get(self.params.interval)
+            )
+            for delta in (
+                pd.to_datetime(calc_df.loc[s_profit, "Matured"])
+                - pd.to_datetime(calc_df.loc[s_profit, "Date"])
             )
         ]
 
-        # Clear sell and Matured values where buy is NaN
-        df.loc[df.buy.isna(), "sell"] = np.nan
-        df.loc[df.buy.isna(), "Matured"] = pd.NaT
-        base_df.update(df)
+        # 若 buy 为缺失, 则清空对应的 sell 和 Matured
+        calc_df.loc[calc_df.buy.isna(), ["sell", "Matured"]] = [np.nan, pd.NaT]
+
+        base_df.update(calc_df)
         return base_df
 
     def _calc_ATR(self, base_df):
@@ -383,8 +397,13 @@ class TurtleScout(IStrategyScout):
         upper_sample = self.params.upper_sample
         lower_sample = self.params.lower_sample
 
-        df = base_df.tail(self.window).copy()
-        idx = df.ATR.isna().index
+        last_valid_idx = base_df.ATR.last_valid_index()
+        start_idx = (
+            0 if last_valid_idx is None else max(0, last_valid_idx - self.window + 1)
+        )
+
+        df = base_df.iloc[start_idx:].copy()
+        idx = df.ATR.isna()
         df.loc[idx, "turtle_h"] = df.High.shift(1).rolling(upper_sample).max()
         df.loc[idx, "turtle_l"] = df.Low.shift(1).rolling(lower_sample).min()
         df.loc[idx, "h_l"] = df.High - df.Low
@@ -450,7 +469,8 @@ def calc_ADX(df, params, p=14):
     return df
 
 
-def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.1, gamma=0.9):
+# def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.1, gamma=0.9):
+def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.6, gamma=0.2, beta=0.2):
     mask_lr = df["log_returns"].isna()
     df.loc[mask_lr, "log_returns"] = np.log(df["Close"] / df["Close"].shift(1))[mask_lr]
 
@@ -463,7 +483,7 @@ def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.1, gamma=0.9):
     df.loc[mask_new, "volatility"] = volatility[mask_new]
     df.loc[mask_new, "pred_price"] = df.loc[mask_new, "Close"] * np.exp(drift[mask_new])
 
-    # 使用已有数据计算全局对数指标（旧数据保持不变，新数据填充）
+    # 使用已有数据计算全局对数指标（旧数据保持不变, 新数据填充）
     df.loc[mask_new, "global_log_vol"] = (
         np.log(df["Vol"].dropna()).rolling(windows, min_periods=1).mean()
     )
@@ -481,6 +501,7 @@ def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.1, gamma=0.9):
             R,
             alpha,
             gamma,
+            beta,
         ),
         axis=1,
     )
@@ -488,24 +509,24 @@ def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.1, gamma=0.9):
     return df
 
 
-def rolling_kalman_update(df, idx, window, Q, R, alpha, gamma):
+def rolling_kalman_update(df, idx, window, Q, R, alpha, gamma, beta):
     """
-    从 DataFrame 中取出从 idx-window+1 到 idx 的数据构造特征矩阵，
+    从 DataFrame 中取出从 idx-window+1 到 idx 的数据构造特征矩阵,
     并调用 kalman_update 进行 Kalman 更新。
     """
     start = max(0, idx - window + 1)
     sub_df = df.loc[start:idx, ["pred_price", "Close", "volatility", "Vol"]].dropna()
 
-    # 如果窗口内数据为空，则返回当前行的 Close 值
+    # 如果窗口内数据为空, 则返回当前行的 Close 值
     if sub_df.empty:
         return df.loc[idx, "Close"]
 
-    # 提取窗口内的数据，要求列顺序为：[pred_price, Close, volatility, Vol]
+    # 提取窗口内的数据, 要求列顺序为：[pred_price, Close, volatility, Vol]
     features = sub_df.values
     global_log_vol = df.loc[idx, "global_log_vol"]
     global_log_volatility = df.loc[idx, "global_log_volatility"]
     return kalman_update(
-        features, Q, R, alpha, gamma, global_log_vol, global_log_volatility
+        features, Q, R, alpha, gamma, beta, global_log_vol, global_log_volatility
     )
 
 
@@ -515,29 +536,69 @@ def kalman_update(
     R_base,
     alpha,
     gamma,
+    beta,
     global_log_vol,
     global_log_volatility,
+    min_vol=1e-6,
+    vol_clip_min=0.1,
+    vol_clip_max=2.0,
 ):
-    # features 的列顺序：[pred_price, Close, volatility, Vol]
+    """
+    緊湊版卡爾曼濾波更新函數：
+    結合成交量、波動率與價格變化, 動態調整觀測噪聲 R_t。
+
+    參數：
+    - features: np.ndarray, 形狀 (N, 4), 欄位：[pred_price, Close, volatility, Vol]
+    - Q: float, 狀態噪聲協方差
+    - R_base: float, 基礎觀測噪聲協方差
+    - alpha: float, 成交量調整係數
+    - gamma: float, 波動率調整係數
+    - beta: float, 價格變動調整係數
+    - global_log_vol: float, 全球平均成交量的對數
+    - global_log_volatility: float, 全球平均波動率的對數
+    - min_vol: float, 成交量下限（預設 1e-6）
+    - vol_clip_min: float, 成交量調整因子最小值（預設 0.1）
+    - vol_clip_max: float, 成交量調整因子最大值（預設 2.0）
+
+    回傳：
+    - x: float, 濾波後的價格估計值
+    """
     features = features.reshape(-1, 4)
-    x = features[0, 0]
-    P = 1.0
+    x = features[0, 0]  # 初始預測價格
+    P = 1.0  # 初始誤差協方差
+    previous_close = features[0, 1]
+
     for i in range(1, features.shape[0]):
-        current_vol = features[i, 3]
+        # 同時計算成交量下限與其對數
+        current_log_vol = np.log(max(features[i, 3], min_vol))
         current_volatility = features[i, 2]
-        current_log_vol = np.log(current_vol)
         current_log_volatility = (
             np.log(current_volatility) if current_volatility > 0 else 0
         )
-        vol_factor = np.exp(-alpha * (current_log_vol - global_log_vol))
-        volat_factor = np.exp(gamma * (current_log_volatility - global_log_volatility))
-        R_t = R_base * vol_factor * volat_factor
 
+        # 成交量調整因子（限制範圍）, 波動率調整因子
+        vol_factor = np.clip(
+            np.exp(-alpha * (current_log_vol - global_log_vol)),
+            vol_clip_min,
+            vol_clip_max,
+        )
+        volat_factor = np.exp(gamma * (current_log_volatility - global_log_volatility))
+
+        # 價格變動因子：價格劇烈變動時, 信任度降低
+        current_close = features[i, 1]
+        price_factor = np.exp(-beta * abs(current_close - previous_close))
+
+        # 綜合調整後的觀測噪聲
+        R_t = R_base * vol_factor * volat_factor * price_factor
+
+        # 卡爾曼濾波標準更新步驟
         P_pred = P + Q
         K = P_pred / (P_pred + R_t)
-        z = features[i, 1]
-        x = x + K * (z - x)
+        x = x + K * (current_close - x)
         P = (1 - K) * P_pred
+
+        previous_close = current_close
+
     return x
 
 
@@ -547,9 +608,9 @@ import seaborn as sns
 from hmmlearn.hmm import GaussianHMM
 
 
-def debug_hmm(hmm_model, hidden_states, df, X, future_days=10):
+def debug_hmm(hmm_model, hidden_states, df, X):
     """
-    視覺化 Hidden Markov Model (HMM) 的學習結果，包含：
+    視覺化 Hidden Markov Model (HMM) 的學習結果, 包含：
     1. 隱藏狀態時序圖
     2. 隱藏狀態高斯分佈
     3. 狀態轉移矩陣
@@ -631,22 +692,5 @@ def debug_hmm(hmm_model, hidden_states, df, X, future_days=10):
     ## 4️⃣ 打印模型對數似然值
     log_likelihood = hmm_model.score(X)
     print(f"\n🔍 Log-Likelihood of the trained HMM: {log_likelihood:.2f}")
-
-    ## 5️⃣ 模擬未來狀態
-    future_states, _ = hmm_model.sample(future_days)
-
-    plt.figure(figsize=(8, 4))
-    plt.plot(
-        range(future_days),
-        future_states,
-        marker="o",
-        linestyle="dashed",
-        label="Simulated Future States",
-    )
-    plt.xlabel("Future Days")
-    plt.ylabel("State")
-    plt.title("Simulated Future Market States")
-    plt.legend()
-    plt.show()
 
     print("\n✅ HMM Debug 完成！請檢查上面的圖表來分析 HMM 是否合理地劃分了市場狀態。")

@@ -71,10 +71,10 @@ DEBUG_COL = [
     # "loss_margin",
     # "+DI",
     # "-DI",
-    "ADX_Signed",
-    "drift",
-    "volatility",
-    "pred_price",
+    # "ADX_Signed",
+    # "drift",
+    # "volatility",
+    # "pred_price",
     "Kalman",
     "HMM_State",
 ]
@@ -125,6 +125,7 @@ DUMP_COL = [
     "KReturnVol",
     "RVolume",
     "HMM_State",
+    "uptrend_state",
 ]
 
 
@@ -482,13 +483,13 @@ def visualize_backtest(df, window_size=60):
 params = {
     # Buy
     "ATR_sample": 60,
-    "bayes_windows": 60,
+    "bayes_windows": 10,
     "lower_sample": 60,
     "upper_sample": 60,
     # Sell
     "hard_cutoff": 0.95,
-    "profit_loss_ratio": 3,
-    "atr_loss_margin": 1.5,
+    "profit_loss_ratio": 1.5,
+    "atr_loss_margin": 3,
     "surfing_level": 7,
     # Period
     "interval": "1day",
@@ -508,7 +509,7 @@ from typing import List
 
 
 @click.command()
-@click.option("--symbol", default="berausdt", help="Trading symbol (e.g. trxusdt)")
+@click.option("--symbol", default="xrpusdt", help="Trading symbol (e.g. trxusdt)")
 @click.option("--interval", default="1min", help="Trading interval")
 @click.option("--funds", default=15, type=float, help="Available funds")
 @click.option("--cap", default=15, type=float, help="Stake cap")
