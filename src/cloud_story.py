@@ -75,6 +75,7 @@ DEBUG_COL = [
     # "drift",
     # "volatility",
     # "pred_price",
+    "Slope",
     "Kalman",
     "HMM_State",
 ]
@@ -125,6 +126,7 @@ DUMP_COL = [
     "KReturnVol",
     "RVolume",
     "HMM_State",
+    "Slope",
     "uptrend_state",
 ]
 
@@ -488,8 +490,8 @@ params = {
     "upper_sample": 60,
     # Sell
     "hard_cutoff": 0.95,
-    "profit_loss_ratio": 1.5,
-    "atr_loss_margin": 3,
+    "profit_loss_ratio": 3,
+    "atr_loss_margin": 1.5,
     "surfing_level": 7,
     # Period
     "interval": "1day",
@@ -509,8 +511,8 @@ from typing import List
 
 
 @click.command()
-@click.option("--symbol", default="xrpusdt", help="Trading symbol (e.g. trxusdt)")
-@click.option("--interval", default="1min", help="Trading interval")
+@click.option("--symbol", default="btfusdt", help="Trading symbol (e.g. trxusdt)")
+@click.option("--interval", default="5min", help="Trading interval")
 @click.option("--funds", default=15, type=float, help="Available funds")
 @click.option("--cap", default=15, type=float, help="Stake cap")
 @click.option("--deals", default="", help="Comma separated deal IDs")

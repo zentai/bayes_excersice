@@ -286,22 +286,25 @@ class TurtleScout(IStrategyScout):
         hidden_states = self.hmm_model.predict(X)
         df["HMM_State"] = hidden_states
 
-        # debug_hmm(self.hmm_model, hidden_states, df, X)
+        debug_hmm(self.hmm_model, hidden_states, df, X)
 
-        HMM_0 = df[df.HMM_State == 0].log_returns.median()
-        HMM_1 = df[df.HMM_State == 1].log_returns.median()
-        df["uptrend_state"] = 0
+        HMM_0 = df[df.HMM_State == 0].Slope.median()
+        HMM_1 = df[df.HMM_State == 1].Slope.median()
+        df["uptrend_state"] = int(HMM_1 > HMM_0)
         print(f"Uptrend state is: {int(HMM_1 > HMM_0)}, 0: {HMM_0} 1: {HMM_1}")
         return df
 
     def _calc_HMM_input(self, df, windows, scaler):
         df = calc_Kalman_Price(df, windows=windows)
-
+        epsilon = 1e-8
         mask = df["KReturn"].isna()
         df.loc[mask, "KReturn"] = np.log(
             # df.loc[mask, "Kalman"] / df["Kalman"].shift(1)[mask]
             df.loc[mask, "Kalman"]
-            / df["Kalman"].shift(1).rolling(window=60, min_periods=5).mean()[mask]
+            / (
+                df["Kalman"].shift(1).rolling(window=60, min_periods=5).mean()[mask]
+                + epsilon
+            )
         )
 
         df.loc[mask, "KReturnVol"] = (
@@ -311,19 +314,20 @@ class TurtleScout(IStrategyScout):
         # 计算 RVolume：log(Vol / Vol_rolling), Vol_rolling 为 Vol 的 rolling 均值
         # vol_rolling = df.loc[mask, "Vol"].rolling(window=windows, min_periods=1).mean()
         # df.loc[mask, "RVolume"] = df.loc[mask, "Vol"] / vol_rolling
-        df.loc[mask, "RVolume"] = np.log(
-            df.loc[mask, "Vol"]
-            / df.loc[mask, "Vol"].rolling(window=windows, min_periods=5).mean()
+
+        rolling_mean = (
+            df.loc[mask, "Vol"].rolling(window=windows, min_periods=5).mean() + epsilon
         )
+        df.loc[mask, "RVolume"] = np.log((df.loc[mask, "Vol"] + epsilon) / rolling_mean)
 
         # df.loc[mask, "RVolume"] = df["volatility"][mask]
 
         # 填充 KReturnVol 和 RVolume 的缺失值, 采用向后填充策略
-        df.loc[:, ["KReturnVol", "RVolume"]] = df.loc[
-            :, ["KReturnVol", "RVolume"]
+        df.loc[:, ["KReturnVol", "RVolume", "Slope"]] = df.loc[
+            :, ["KReturnVol", "RVolume", "Slope"]
         ].fillna(method="bfill")
 
-        features = df[["KReturnVol", "RVolume"]].values
+        features = df[["KReturnVol", "RVolume", "Slope"]].values
         X = scaler.fit_transform(features)
         return X
 
@@ -344,7 +348,7 @@ class TurtleScout(IStrategyScout):
 
         surf_df.loc[surf_df.Stop_profit.isna(), "Stop_profit"] = surfing_profit
         surf_df.loc[surf_df.exit_price.isna(), "exit_price"] = (
-            surf_df.Close.shift(1) - surf_df.ATR.shift(1) * self.params.atr_loss_margin
+            surf_df.Kalman.shift(1) - surf_df.ATR.shift(1) * self.params.atr_loss_margin
         )
         base_df.update(surf_df)
 
@@ -359,8 +363,8 @@ class TurtleScout(IStrategyScout):
         calc_df.loc[s_buy, "BuySignal"] = self.buy_signal_func(calc_df, self.params)
 
         # 卖出信号：满足已有买入信号且当日 Low 小于 exit_price 的情况
-        # s_sell = calc_df.buy.notna() & (calc_df.Low < calc_df.exit_price)
-        s_sell = calc_df.buy.notna() & (calc_df.HMM_State == 0)  # FIXME
+        s_sell = calc_df.buy.notna() & (calc_df.Kalman < calc_df.exit_price)
+        # s_sell = calc_df.buy.notna() & (calc_df.HMM_State == 0)  # FIXME
         calc_df.loc[s_sell, "sell"] = calc_df.exit_price
         calc_df.loc[s_sell, "Matured"] = pd.to_datetime(calc_df.Date)
 
@@ -505,6 +509,10 @@ def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.6, gamma=0.2, beta
         ),
         axis=1,
     )
+    df.loc[mask_new, "local_low"] = (
+        df.Kalman.rolling(windows * 2, min_periods=1, closed="left").min().shift(1)
+    )
+    df.loc[mask_new, "Slope"] = np.log((df.Kalman - df.local_low) / windows * 2)
 
     return df
 
@@ -648,6 +656,14 @@ def debug_hmm(hmm_model, hidden_states, df, X):
             where=(hidden_states == i),
             alpha=0.3,
             label=f"State {i} - RVolume",
+        )
+    for i in range(hmm_model.n_components):
+        ax1.fill_between(
+            df.index,
+            X[:, 2],
+            where=(hidden_states == i),
+            alpha=0.3,
+            label=f"State {i} - Slope",
         )
     ax1.legend()
     plt.title("Hidden States Over Time")

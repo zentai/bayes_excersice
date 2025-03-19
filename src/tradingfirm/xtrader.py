@@ -6,6 +6,9 @@ import logging
 
 from pydispatch import dispatcher
 from huobi.constant.definition import OrderType, OrderState
+from huobi.client.market import MarketClient
+from huobi.exception.huobi_api_exception import HuobiApiException
+from huobi.model.market.candlestick_event import CandlestickEvent
 
 from ..hunterverse.interface import IHunter
 from ..hunterverse.interface import xOrder, xBuyOrder, xSellOrder
@@ -442,27 +445,45 @@ class xHunter(IHunter):
         self.columns = [f"{self.client}{col}" for col in HUNTER_COLUMNS]
         if self.params.load_deals:
             self.load_memories(deals=self.params.load_deals)
+        self.sell_order = None
+        self.market_client = MarketClient()
+        self.market_client.sub_candlestick(
+            params.symbol.name,
+            pandas_util.huobi_interval.get(params.interval),
+            self.market_callback,
+            self.market_callback_error,
+        )
+
+    def market_callback(self, candlestick_event: "CandlestickEvent"):
+        self.cutoff(candlestick_event.tick.close)
+
+    def market_callback_error(self, e: "HuobiApiException"):
+        print(e.error_code + e.error_message)
 
     def cutoff(self, strike):
         if not self.gainsbag.is_enough_position():
             return False
+        if strike <= self.sell_order.atr_exit_price:
+            print(f">>>> atr_exit_price: {strike} <= {self.sell_order.atr_exit_price}")
 
         cutoff_price = self.gainsbag.cutoff_price(self.params.hard_cutoff)
-        if cutoff_price and strike <= cutoff_price:
-            sell_order = xSellOrder(
-                order_id=f"CUTOFF_{int(time.time())}",
-                target_price=strike,
-                executed_price=strike,
-                order_type="sell-market",
-                operator="lte",
-                kelly=1.0,
-            )
-            sell_order.client = self.client
-            sell_order.position = self.gainsbag.position
-            sell_order.cutoff_price = cutoff_price
+        if strike <= cutoff_price:
+            print(f">>>> cutoff_price: {strike} <= {cutoff_price}")
+        # if cutoff_price and strike <= cutoff_price:
+        #     sell_order = xSellOrder(
+        #         order_id=f"CUTOFF_{int(time.time())}",
+        #         target_price=strike,
+        #         executed_price=strike,
+        #         order_type="sell-market",
+        #         operator="lte",
+        #         kelly=1.0,
+        #     )
+        #     sell_order.client = self.client
+        #     sell_order.position = self.gainsbag.position
+        #     sell_order.cutoff_price = cutoff_price
 
-            self.platform.place_order(sell_order)
-            return True
+        #     self.platform.place_order(sell_order)
+        #     return True
 
         return False
 
@@ -595,7 +616,7 @@ class xHunter(IHunter):
                 1 + (1 - self.params.hard_cutoff) * self.params.profit_loss_ratio
             )
 
-            sell_order = xSellOrder(
+            self.sell_order = xSellOrder(
                 order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}",
                 atr_exit_price=min(strike, lastest_candlestick.exit_price),
                 profit_leave_price=max(lastest_candlestick.Stop_profit, min_profit),
@@ -604,7 +625,7 @@ class xHunter(IHunter):
                 order_type="SL",
                 client=self.client,
             )
-            self.platform.place_order(sell_order)
+            # self.platform.place_order(sell_order)
 
     def portfolio(self, pre_strike, strike):
         return self.gainsbag.portfolio(pre_strike, strike)
