@@ -473,8 +473,7 @@ def calc_ADX(df, params, p=14):
     return df
 
 
-# def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.1, gamma=0.9):
-def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.6, gamma=0.2, beta=0.2):
+def calc_Kalman_Price(df, windows=60, Q=1e-3, R=1e-3, alpha=0.6, gamma=0.2, beta=0.2):
     mask_lr = df["log_returns"].isna()
     df.loc[mask_lr, "log_returns"] = np.log(df["Close"] / df["Close"].shift(1))[mask_lr]
 
@@ -538,6 +537,38 @@ def rolling_kalman_update(df, idx, window, Q, R, alpha, gamma, beta):
     )
 
 
+# def kalman_update(
+#     features,
+#     Q,
+#     R_base,
+#     alpha,
+#     gamma,
+#     global_log_vol,
+#     global_log_volatility,
+# ):
+#     # features 的列顺序：[pred_price, Close, volatility, Vol]
+#     features = features.reshape(-1, 4)
+#     x = features[0, 0]
+#     P = 1.0
+#     for i in range(1, features.shape[0]):
+#         current_vol = features[i, 3]
+#         current_volatility = features[i, 2]
+#         current_log_vol = np.log(current_vol)
+#         current_log_volatility = (
+#             np.log(current_volatility) if current_volatility > 0 else 0
+#         )
+#         vol_factor = np.exp(-alpha * (current_log_vol - global_log_vol))
+#         volat_factor = np.exp(gamma * (current_log_volatility - global_log_volatility))
+#         R_t = R_base * vol_factor * volat_factor
+
+#         P_pred = P + Q
+#         K = P_pred / (P_pred + R_t)
+#         z = features[i, 1]
+#         x = x + K * (z - x)
+#         P = (1 - K) * P_pred
+#     return x
+
+
 def kalman_update(
     features,
     Q,
@@ -553,7 +584,7 @@ def kalman_update(
 ):
     """
     緊湊版卡爾曼濾波更新函數：
-    結合成交量、波動率與價格變化, 動態調整觀測噪聲 R_t。
+    結合成交量、波動率與價格變化，動態調整觀測噪聲 R_t。
 
     參數：
     - features: np.ndarray, 形狀 (N, 4), 欄位：[pred_price, Close, volatility, Vol]
@@ -564,9 +595,9 @@ def kalman_update(
     - beta: float, 價格變動調整係數
     - global_log_vol: float, 全球平均成交量的對數
     - global_log_volatility: float, 全球平均波動率的對數
-    - min_vol: float, 成交量下限（預設 1e-6）
-    - vol_clip_min: float, 成交量調整因子最小值（預設 0.1）
-    - vol_clip_max: float, 成交量調整因子最大值（預設 2.0）
+    - min_vol: float, 成交量下限（預設 1e-6)
+    - vol_clip_min: float, 成交量調整因子最小值（預設 0.1)
+    - vol_clip_max: float, 成交量調整因子最大值（預設 2.0)
 
     回傳：
     - x: float, 濾波後的價格估計值
@@ -584,7 +615,7 @@ def kalman_update(
             np.log(current_volatility) if current_volatility > 0 else 0
         )
 
-        # 成交量調整因子（限制範圍）, 波動率調整因子
+        # 成交量調整因子（限制範圍），波動率調整因子
         vol_factor = np.clip(
             np.exp(-alpha * (current_log_vol - global_log_vol)),
             vol_clip_min,
@@ -592,7 +623,7 @@ def kalman_update(
         )
         volat_factor = np.exp(gamma * (current_log_volatility - global_log_volatility))
 
-        # 價格變動因子：價格劇烈變動時, 信任度降低
+        # 價格變動因子：價格劇烈變動時，信任度降低
         current_close = features[i, 1]
         price_factor = np.exp(-beta * abs(current_close - previous_close))
 
@@ -710,3 +741,205 @@ def debug_hmm(hmm_model, hidden_states, df, X):
     print(f"\n🔍 Log-Likelihood of the trained HMM: {log_likelihood:.2f}")
 
     print("\n✅ HMM Debug 完成！請檢查上面的圖表來分析 HMM 是否合理地劃分了市場狀態。")
+
+
+DEBUG_COL = [
+    "Date",
+    # "Open",
+    # "High",
+    # "Low",
+    "Close",
+    # "turtle_h",
+    "ema_short",
+    "ema_long",
+    "BuySignal",
+    "Stop_profit",
+    "exit_price",
+    # "time_cost",
+    # "buy",
+    # "sell",
+    # "profit",
+    # "OBV",
+    # "OBV_UP",
+    # "Matured",
+    # "Kelly",
+    # "Postrior",
+    # "P/L",
+    # "likelihood",
+    # "profit_margin",
+    # "loss_margin",
+    # "+DI",
+    # "-DI",
+    "ADX_Signed",
+    "drift",
+    "volatility",
+    "pred_price",
+    "Kalman",
+    "HMM_State",
+]
+
+DUMP_COL = [
+    "Date",
+    "Open",
+    "High",
+    "Low",
+    "Close",
+    "Vol",
+    "turtle_h",
+    "BuySignal",
+    "ema_short",
+    "ema_long",
+    "Stop_profit",
+    "exit_price",
+    "Matured",
+    "time_cost",
+    "buy",
+    "sell",
+    "profit",
+    "P/L",
+    # "turtle_l",
+    # "turtle_h",
+    # "OBV",
+    # "OBV_UP",
+    # "upper_bound",
+    # "lower_bound",
+    # "Kelly",
+    # "Postrior",
+    # "likelihood",
+    # "profit_margin",
+    # "loss_margin",
+    # "+DM",
+    # "-DM",
+    # "+DI",
+    # "-DI",
+    # "ADX_Signed",
+    "drift",
+    "volatility",
+    "pred_price",
+    "Kalman",
+    "log_returns",
+    "volatility",
+    "global_log_volatility",
+    "global_log_vol",
+    "KReturnVol",
+    "RVolume",
+    "HMM_State",
+]
+
+
+def start_journey(sp):
+    base_df = None
+    # camp = HuntingCamp(sp)
+    # load_df = camp.load()
+    load_df = pd.DataFrame()
+    if sp.backtest:
+        sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
+        # sensor = MongoMarketSensor(symbol=sp.symbol, interval=sp.interval)
+    else:
+        sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
+
+    # 移除 load_df 中已存在的日期部分
+    update_df = sensor.scan(2000 if not sp.backtest else 100)
+    if not load_df.empty:
+        update_df = update_df[~update_df["Date"].isin(load_df["Date"])]
+
+    # 合并 load_df 和 update_df，成为 base_df
+    base_df = pd.concat([load_df, update_df], ignore_index=True)
+
+    scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
+    import copy
+
+    bsp = copy.deepcopy(sp)
+    bsp.funds = 1000000
+    base_df = sensor.scan(2000 if not sp.backtest else 100)
+    base_df = scout.train(base_df)
+    base_df = scout.market_recon(base_df)
+    debug_cols = DEBUG_COL
+    report_cols = DUMP_COL
+
+    print(base_df[debug_cols])
+    # review = story.hunter.review_mission(story.base_df)
+    # sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
+    if "final_statement_to_csv" in sp.debug_mode:
+        # review = story.hunter["s"].review_mission(story.base_df)
+        # print(review)
+        base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
+        print(f"created: {REPORTS_DIR}/{sp}.csv")
+    # visualize_backtest(story.base_df)
+    # return story.base_df[report_cols], story.hunter["s"].review_mission(story.base_df)
+
+
+import click
+from typing import List
+from ..hunterverse.interface import Symbol
+from ..hunterverse.interface import StrategyParam
+from ..hunterverse.interface import INTERVAL_TO_MIN
+from ..sensor.market_sensor import LocalMarketSensor
+from ..sensor.market_sensor import HuobiMarketSensor
+from ..tradingfirm.xtrader import HUNTER_COLUMNS
+from config import config
+
+DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
+
+
+@click.command()
+@click.option("--symbol", default="berausdt", help="Trading symbol (e.g. trxusdt)")
+@click.option("--interval", default="1min", help="Trading interval")
+@click.option("--funds", default=15, type=float, help="Available funds")
+@click.option("--cap", default=15, type=float, help="Stake cap")
+@click.option("--deals", default="", help="Comma separated deal IDs")
+def main(symbol: str, interval: str, funds: float, cap: float, deals: str):
+    print(
+        f"Starting trading with symbol={symbol}, interval={interval}, funds={funds}, cap={cap}"
+    )
+    if deals:
+        print(f"Loading existing deals: {deals}")
+    deal_ids = [int(x.strip()) for x in deals.split(",") if x.strip()] if deals else []
+    params = {
+        # Buy
+        "ATR_sample": 60,
+        "bayes_windows": 20,
+        "lower_sample": 60,
+        "upper_sample": 60,
+        # Sell
+        "hard_cutoff": 0.95,
+        "profit_loss_ratio": 3,
+        "atr_loss_margin": 1.5,
+        "surfing_level": 7,
+        # Period
+        "interval": "1day",
+        "funds": 100,
+        "stake_cap": 100,
+        "symbol": None,
+        "backtest": True,
+        "debug_mode": [
+            # "statement",
+            # "statement_to_csv",
+            # "mission_review",
+            "final_statement_to_csv",
+        ],
+    }
+    params.update(
+        {
+            "funds": funds,
+            "stake_cap": cap,
+            "symbol": Symbol(symbol),
+            "interval": interval,
+            "backtest": False,
+            "debug_mode": [
+                "statement",
+                "statement_to_csv",
+                "mission_review",
+                "final_statement_to_csv",
+            ],
+            "load_deals": deal_ids,
+            "api_key": "fefd13a1-bg2hyw2dfg-440b3c64-576f2",
+            "secret_key": "1a437824-042aa429-0beff3ba-03e26",
+        }
+    )
+    sp = StrategyParam(**params)
+    start_journey(sp)
+
+
+if __name__ == "__main__":
+    main()
