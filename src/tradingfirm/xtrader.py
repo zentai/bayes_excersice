@@ -2,6 +2,8 @@
 import os
 import pandas as pd
 import numpy as np
+import datetime
+import time
 import logging
 
 from pydispatch import dispatcher
@@ -16,6 +18,8 @@ from ..utils import pandas_util
 from .platforms import huobi_api
 from dataclasses import replace
 from config import config
+
+epsilon = 1e-8
 
 ZERO = config.zero
 BUY_FILLED = "Buy_filled"
@@ -36,6 +40,14 @@ HUNTER_COLUMNS = [
 ]
 
 
+def parse_client_order_id(raw_coid: str) -> tuple[str, str]:
+    for suffix in ("_PROFIT_LEAVE", "_ATR_EXIT", "_CUTOFF", "_BUY"):
+        if suffix in raw_coid:
+            prefix = raw_coid.split("_")[0] + "_"
+            return raw_coid.replace(suffix, "").replace(prefix, ""), suffix[1:]
+    return raw_coid, ""
+
+
 class GainsBag:
     MIN_STAKE_CAP = 10.01  # huobi limitation
 
@@ -52,12 +64,19 @@ class GainsBag:
         self.symbol = symbol
         self.stake_cap = stake_cap
         self.init_funds = self.cash = init_funds
+        self.init_position = init_position
+        self.init_avg_cost = init_avg_cost
         self.position = init_position
         self.avg_cost = init_avg_cost
         self.is_sim = is_sim
         self.logger.info(
             f"Create {'Sim' if self.is_sim else 'Live'  }GainsBag: {self:snapshot}"
         )
+
+    def reset(self):
+        self.cash = self.init_funds
+        self.position = self.init_position
+        self.avg_cost = self.init_avg_cost
 
     def get_un_pnl(self, strike):
         return (strike * self.position) + self.cash - self.init_funds
@@ -107,8 +126,8 @@ class GainsBag:
         self.position -= position
         self.log_action("close_position", price, position, cash)
 
-    def is_enough_position(self):
-        return (self.position * self.avg_cost) > self.MIN_STAKE_CAP
+    def is_enough_position(self, strike):
+        return (self.position * min(self.avg_cost, strike)) >= self.MIN_STAKE_CAP
 
     def is_enough_cash(self):
         return self.cash > self.MIN_STAKE_CAP
@@ -158,11 +177,14 @@ class Huobi:
         self.client = client
         self.params = params
         self.dispatcher = dispatcher
-        self.TOPIC_ORDER_MATCHED = "sim_order_update"
+        self.TOPIC_ORDER_MATCHED = "huobi_order_update"
         self.api_key = params.api_key
         self.secret_key = params.secret_key
+        self.last_process_order = None
+        self.benchmark_vol_for_24hour = huobi_api.get_market_detail_merged(
+            self.params.symbol.name
+        ).vol
 
-        self.order_book = {}
         huobi_api.subscribe_order_update(
             self.params.symbol.name,
             self.api_key,
@@ -170,6 +192,16 @@ class Huobi:
             self.huobi_callback_orders,
             self.error,
         )
+
+    def is_onhold(self):
+        _current_vol = huobi_api.get_market_detail_merged(self.params.symbol.name).vol
+        ratio = _current_vol / self.benchmark_vol_for_24hour
+        if ratio < 0.8:
+            print(
+                f"[Volume Alert] {_current_vol:.2f} USDT / {self.benchmark_vol_for_24hour:.2f} USDT, {ratio:.2f} < 0.8"
+            )
+            return True
+        return False
 
     def error(self, e: "HuobiApiException"):
         print(e.error_code + e.error_message)
@@ -184,89 +216,27 @@ class Huobi:
 
     def huobi_callback_orders(self, upd_event: "OrderUpdateEvent"):
         """
-        The detail order information.
-
-        :member
-            orderId: The order id.
-            tradePrice: trade price
-            tradeVolume: trade volume
-            tradeId: Id record for trade
-            tradeTime: trade timestamp (ms)
-            aggressor: true (taker), false (maker)
-            remainAmt: Remaining amount (for buy-market order it's remaining value)
-            orderStatus: Order status, valid value: partial-filled, filled
-            clientOrderId: Client order ID (if any)
-            eventType: Event type, valid value: trade
-            symbol: The symbol, like "btcusdt".
-            type: The order type, possible values are: buy-market, sell-market, buy-limit, sell-limit, buy-ioc, sell-ioc, buy-limit-maker, sell-limit-maker, buy-limit-fok, sell-limit-fok.
-
-            {'accountId': 0,
-            'aggressor': False,
-            'clientOrderId': '',
-            'eventType': 'trade',
-            'orderId': 1226305230997968,
-            'orderStatus': 'filled',
-            'remainAmt': '0',
-            'symbol': 'pepeusdt',
-            'tradeId': 43798743,
-            'tradePrice': '0.000024',
-            'tradeTime': 1734387557456,
-            'tradeVolume': '520833.33',
-            'type': 'buy-limit'}
+        https://github.com/HuobiRDCenter/huobi_Python/blob/master/huobi/model/trade/order_update_event.py
+        https://github.com/HuobiRDCenter/huobi_Python/blob/master/huobi/model/trade/order_update.py
         """
-        if not upd_event.data.clientOrderId:
-            print(f"[SKIP] No client order id: {upd_event.data.orderId}")
-            return
-        if upd_event.data.orderStatus in ("partial-filled", "filled"):
-            print(
-                {
-                    "orderId": upd_event.data.orderId,
-                    "tradePrice": upd_event.data.tradePrice,
-                    "tradeVolume": upd_event.data.tradeVolume,
-                    "tradeId": upd_event.data.tradeId,
-                    "tradeTime": upd_event.data.tradeTime,
-                    "aggressor": upd_event.data.aggressor,
-                    "remainAmt": upd_event.data.remainAmt,
-                    "orderStatus": upd_event.data.orderStatus,
-                    "clientOrderId": upd_event.data.clientOrderId,
-                    "eventType": upd_event.data.eventType,
-                    "symbol": upd_event.data.symbol,
-                    "type": upd_event.data.type,
-                    "accountId": upd_event.data.accountId,
-                }
-            )
-            _order_status = None
-            if "PROFIT_LEAVE" in upd_event.data.clientOrderId:
-                _order_status = "Profit_LEAVE"
-            elif "ATR_EXIT" in upd_event.data.clientOrderId:
-                _order_status = "ATR_EXIT"
-            elif "CUTOFF" in upd_event.data.clientOrderId:
-                _order_status = "CUTOFF"
-            elif "BUY" in upd_event.data.clientOrderId:
-                _order_status = BUY_FILLED
 
-            print(f"{_order_status}")
-            clientOrderId = (
-                upd_event.data.clientOrderId.replace("_PROFIT_LEAVE", "")
-                .replace("_ATR_EXIT", "")
-                .replace("_CUTOFF", "")
-                .replace("_BUY", "")
+        if self.last_process_order == upd_event.data.lastActTime:
+            print(
+                f"remove redundant message: {upd_event.data.orderId} - {upd_event.data.clientOrderId} "
             )
-            if upd_event.data.clientOrderId not in self.order_book:
-                print(
-                    f"Error: Order {upd_event.data.clientOrderId} not found in order book"
-                )
-                return
-            self.dispatcher.send(
-                client=self.order_book[upd_event.data.clientOrderId].client,
-                signal=self.TOPIC_ORDER_MATCHED,
-                order_id=clientOrderId,
-                order_status=_order_status,
-                price=float(upd_event.data.tradePrice),
-                position=float(upd_event.data.tradeVolume),
-                execute_timestamp=upd_event.data.tradeTime,
-            )
-            self.order_book.pop(upd_event.data.clientOrderId)
+            return
+        else:
+            self.last_process_order = upd_event.data.lastActTime
+
+        self.dispatcher.send(
+            client=self.client,
+            signal=self.TOPIC_ORDER_MATCHED,
+            order_id=upd_event.data.clientOrderId,
+            order_status=None,
+            price=None,
+            position=None,
+            execute_timestamp=None,
+        )
 
     def place_order(self, order):
         def cancel(isBuy=True):
@@ -278,34 +248,27 @@ class Huobi:
                     or []
                 )
                 for id in success:
-                    if id in self.order_book:
-                        self.order_book.pop(id)
-                        print()
-                        print(f"Cancel {id} success")
+                    print(f"Cancel {id} success")
             except Exception as e:
                 print(f"Cancel {'Buy' if isBuy else 'Sell'} order failed: {e}")
 
         def place(client_id, amount, price, trigger_price, order):
-            try:
-                huobi_api.place_order(
-                    symbol=self.params.symbol,
-                    amount=amount,
-                    price=price,
-                    order_type=order.order_type,
-                    api_key=self.api_key,
-                    secret_key=self.secret_key,
-                    stop_price=trigger_price,
-                    client_order_id=client_id,
-                )
-                self.order_book[client_id] = order
-                print(f"placed HTX order: {client_id}")
-            except Exception as e:
-                print(f"Place HTX order {client_id} failed: {e}")
+            huobi_api.place_order(
+                symbol=self.params.symbol,
+                amount=amount,
+                price=price,
+                order_type=order.order_type,
+                api_key=self.api_key,
+                secret_key=self.secret_key,
+                stop_price=trigger_price,
+                client_order_id=client_id,
+            )
 
         if isinstance(order, xBuyOrder):
+            client_order_id = order.order_id
             cancel(isBuy=True)
             place(
-                client_id=f"{order.order_id}_BUY",
+                client_id=client_order_id,
                 amount=order.position,
                 price=order.target_price,
                 trigger_price=order.executed_price,
@@ -313,23 +276,15 @@ class Huobi:
             )
 
         elif isinstance(order, xSellOrder):
+            client_order_id = order.order_id
             cancel(isBuy=False)
-            for suffix, price, trigger_price in [
-                ("ATR_EXIT", order.atr_exit_price, order.atr_exit_price * 1.001),
-                (
-                    "PROFIT_LEAVE",
-                    order.profit_leave_price,
-                    order.profit_leave_price * 0.99,
-                ),
-                ("CUTOFF", order.cutoff_price, order.cutoff_price * 1.001),
-            ]:
-                place(
-                    client_id=f"{order.order_id}_{suffix}",
-                    amount=order.position,
-                    price=price,
-                    trigger_price=trigger_price,
-                    order=order,
-                )
+            place(
+                client_id=order.order_id,
+                amount=order.position,
+                price=order.cutoff_price,
+                trigger_price=None,
+                order=order,
+            )
 
 
 class SimHuobi:
@@ -345,6 +300,8 @@ class SimHuobi:
         }
 
     def place_order(self, order):
+        if not order:
+            return
         order = replace(order)
         client = order.client
 
@@ -356,6 +313,9 @@ class SimHuobi:
         elif isinstance(order, xSellOrder):
             self.order_book[client]["Sell"] = order
 
+    def is_onhold(self):
+        return False
+
     def match_orders(self, message):
         market_high, market_low = message.iloc[-1].High, message.iloc[-1].Low
         execute_timestamp = message.iloc[-1].Date
@@ -363,6 +323,11 @@ class SimHuobi:
         for orders in self.order_book.values():
             if orders["Sell"] and orders["Sell"].status == "unfilled":
                 order = orders["Sell"]
+                clientOrderId = (
+                    order.order_id.replace("_PROFIT_LEAVE", "")
+                    .replace("_ATR_EXIT", "")
+                    .replace("_CUTOFF", "")
+                )
 
                 # 按优先级检查出场价格
                 if market_low <= order.cutoff_price:
@@ -372,7 +337,7 @@ class SimHuobi:
                     self.dispatcher.send(
                         client=order.client,
                         signal=self.TOPIC_ORDER_MATCHED,
-                        order_id=order.order_id,
+                        order_id=clientOrderId,
                         order_status=order.status,
                         price=order.cutoff_price,
                         position=order.position,
@@ -385,7 +350,7 @@ class SimHuobi:
                     self.dispatcher.send(
                         client=order.client,
                         signal=self.TOPIC_ORDER_MATCHED,
-                        order_id=order.order_id,
+                        order_id=clientOrderId,
                         order_status=order.status,
                         price=order.atr_exit_price,
                         position=order.position,
@@ -399,7 +364,7 @@ class SimHuobi:
                     self.dispatcher.send(
                         client=order.client,
                         signal=self.TOPIC_ORDER_MATCHED,
-                        order_id=order.order_id,
+                        order_id=clientOrderId,
                         order_status=order.status,
                         price=order.profit_leave_price,
                         position=order.position,
@@ -409,6 +374,7 @@ class SimHuobi:
             # 检查买入订单
             if orders["Buy"] and orders["Buy"].status == "unfilled":
                 order = orders["Buy"]
+                clientOrderId = order.order_id.replace("_BUY", "")
                 if market_low <= order.target_price:
                     order.status = BUY_FILLED
                     order.executed_price = order.target_price
@@ -416,7 +382,7 @@ class SimHuobi:
                     self.dispatcher.send(
                         client=order.client,
                         signal=self.TOPIC_ORDER_MATCHED,
-                        order_id=order.order_id,
+                        order_id=clientOrderId,
                         order_status=order.status,
                         price=order.target_price,
                         position=order.position,
@@ -436,58 +402,98 @@ class xHunter(IHunter):
             symbol=params.symbol, init_funds=params.funds, stake_cap=params.stake_cap
         )
         self.on_hold = False
-        # move dispatcher connect to function call
         self.platform = platform or SimHuobi()
         self.dispatcher = dispatcher
-        self.dispatcher.connect(
-            self.callback_order_matched, signal=self.platform.TOPIC_ORDER_MATCHED
-        )
         self.columns = [f"{self.client}{col}" for col in HUNTER_COLUMNS]
-        if self.params.load_deals:
-            self.load_memories(deals=self.params.load_deals)
-        self.sell_order = None
+        self.sub_market_client()
+        self.watchdog = time.time()
+        self.latest_candlestick = None
+        self.strike = None
+
+    def sub_market_client(self):
+        print("Re-subscribing market data")
         self.market_client = MarketClient()
         self.market_client.sub_candlestick(
-            params.symbol.name,
-            pandas_util.huobi_interval.get(params.interval),
+            self.params.symbol.name,
+            pandas_util.huobi_interval.get("1min"),
             self.market_callback,
             self.market_callback_error,
         )
 
     def market_callback(self, candlestick_event: "CandlestickEvent"):
-        self.cutoff(candlestick_event.tick.close)
+        try:
+            self.cutoff(candlestick_event.tick.close)
+            self.strike = candlestick_event.tick.close
+        except Exception as e:
+            print(e)
 
     def market_callback_error(self, e: "HuobiApiException"):
         print(e.error_code + e.error_message)
 
-    def cutoff(self, strike):
-        if not self.gainsbag.is_enough_position():
-            return False
-        if strike <= self.sell_order.atr_exit_price:
-            print(f">>>> atr_exit_price: {strike} <= {self.sell_order.atr_exit_price}")
-
+    def close_condition(self):
+        position = self.gainsbag.position
         cutoff_price = self.gainsbag.cutoff_price(self.params.hard_cutoff)
-        if strike <= cutoff_price:
-            print(f">>>> cutoff_price: {strike} <= {cutoff_price}")
-        # if cutoff_price and strike <= cutoff_price:
-        #     sell_order = xSellOrder(
-        #         order_id=f"CUTOFF_{int(time.time())}",
-        #         target_price=strike,
-        #         executed_price=strike,
-        #         order_type="sell-market",
-        #         operator="lte",
-        #         kelly=1.0,
-        #     )
-        #     sell_order.client = self.client
-        #     sell_order.position = self.gainsbag.position
-        #     sell_order.cutoff_price = cutoff_price
+        min_profit = self.gainsbag.avg_cost * (
+            1 + (1 - self.params.hard_cutoff) * self.params.profit_loss_ratio
+        )
+        profit_leave_price = max(self.latest_candlestick.Stop_profit, min_profit)
+        return (
+            position,
+            cutoff_price,
+            profit_leave_price,
+            self.latest_candlestick.exit_price,
+        )
 
-        #     self.platform.place_order(sell_order)
-        #     return True
+    def cutoff(self, strike):
+        self.watchdog = time.time()
+        if (
+            not self.gainsbag.is_enough_position(strike)
+            or self.latest_candlestick is None
+        ):
+            return False
 
-        return False
+        position, cutoff_price, profit_leave_price, atr_exit = self.close_condition()
+        cid = f"{self.params.symbol.name}_{self.latest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}"
+        if strike <= (cutoff_price * 1.0001):
+            self.load_memories(df=None, deals=self.params.load_deals)
+            sell_order = xSellOrder(
+                order_id=f"{cid}_CUTOFF",
+                cutoff_price=min(strike, cutoff_price),
+                position=position,
+                order_type="S",
+                client=self.client,
+                atr_exit_price=0,  # not using
+                profit_leave_price=0,  # not using
+            )
+            self.platform.place_order(sell_order)
+        elif strike < (atr_exit * 1.0001):
+            self.load_memories(df=None, deals=self.params.load_deals)
+            sell_order = xSellOrder(
+                order_id=f"{cid}_ATR_EXIT",
+                cutoff_price=min(strike, atr_exit),
+                position=position,
+                order_type="S",
+                client=self.client,
+                atr_exit_price=0,  # not using
+                profit_leave_price=0,  # not using
+            )
+            self.platform.place_order(sell_order)
+        elif strike >= (profit_leave_price * 0.99):
+            self.load_memories(df=None, deals=self.params.load_deals)
+            sell_order = xSellOrder(
+                order_id=f"{cid}_PROFIT_LEAVE",
+                cutoff_price=profit_leave_price,
+                position=position,
+                order_type="S",
+                client=self.client,
+                atr_exit_price=0,  # not using
+                profit_leave_price=0,  # not using
+            )
+            self.platform.place_order(sell_order)
 
-    def load_memories(self, fetch=True, deals=[]):
+    def load_memories(self, df, fetch=True, deals=[], start_deal=None):
+        if not isinstance(self.platform, Huobi):
+            return
         print(f"load_memories(self, fetch={fetch}, deals={deals})")
 
         cached_order_ids = []
@@ -500,104 +506,131 @@ class xHunter(IHunter):
         #     cached_order_ids = pd.read_csv(db_path).id.tolist()
 
         if fetch:
-            orders = huobi_api.get_orders(
-                set(
-                    [
-                        str(i)
-                        for i in (
-                            cached_order_ids
-                            + deals
-                            # + huobi_api.load_history_orders(
-                            #     f"{self.params.symbol}",
-                            #     self.params.api_key,
-                            #     self.params.secret_key,
-                            # )
-                        )
-                    ]
-                ),
+            self.gainsbag.reset()
+            orders = huobi_api.load_orders(
                 self.params.api_key,
                 self.params.secret_key,
+                self.params.symbol.name,
+                set([str(i) for i in (cached_order_ids + deals)]),
+                start_deal,
             )
+            for idx, order in orders.iterrows():
+                print(f"process deals: [{idx}] - {order.client_order_id}")
+                self.process_single_order(df, order)
+            print("done")
 
-        """Process and enrich orders DataFrame with positions and prices."""
-        orders = orders[orders.state.isin(self.status)]
-        pd.DataFrame(orders).to_csv(db_path, index=False)
-
-        buy_mask = orders.type.isin(self.buy_types)
-        sell_mask = orders.type.isin(self.sell_types)
-
-        # 计算买入和卖出订单的 position 和 price
-        # 买入订单的 position 减去手续费，卖出订单的 position 不变
-        # 所有订单的价格计算为成交金额除以 position
-        orders.loc[buy_mask, "position"] = (
-            orders.loc[buy_mask, "filled_amount"] - orders.loc[buy_mask, "filled_fees"]
-        )
-        orders.loc[sell_mask, "position"] = orders.loc[sell_mask, "filled_amount"]
-        orders.loc[buy_mask, "price"] = (
-            orders["filled_cash_amount"] / orders["position"]
-        )
-        orders.loc[sell_mask, "price"] = (
-            orders["filled_cash_amount"] - orders["filled_fees"]
-        ) / orders["position"]
-
-        msg = []
-        for order in orders.itertuples():
-            position, price, filled_cash_amount = (
-                order.position,
-                order.price,
-                order.filled_cash_amount,
-            )
-
-            if order.type in self.buy_types:
-                self.gainsbag.open_position(position, price)
-                # print(f"[B] {self.gainsbag:snapshot}")
-                msg.append(["-", round(filled_cash_amount, 2), round(price, 8)])
-            elif order.type in self.sell_types:
-                self.gainsbag.close_position(position, price)
-                # print(f"[S] {self.gainsbag:snapshot}")
-                msg.append(["+", round(filled_cash_amount, 2), round(price, 8)])
-
-        if msg:
-            fund = f"{self.gainsbag:cash}"
-            cost = float(f"{self.gainsbag:avg_cost}")
-            msg.append(["=", fund, cost])
-            strike = huobi_api.get_strike(f"{self.params.symbol}")
-            market_value = strike - cost
-            msg.append(["$", market_value * position, strike])
-            msg_df = pd.DataFrame(msg, columns=["@", "USDT", "Price"])
-            print(msg_df)
-
-    def callback_order_matched(
-        self, client, order_id, order_status, price, position, execute_timestamp
-    ):
-        if client != self.client:
+    def process_single_order(self, df, order) -> None:
+        """
+        【单笔订单处理】
+        1. 解析订单ID并转换为 datetime，用于匹配 self.df["Date"]
+        2. 根据订单类型更新 gainsbag（捕获当时快照），
+        然后立即将快照回填到 df 对应行
+        """
+        raw_coid = getattr(order, "client_order_id", "")
+        if not raw_coid:
             return
-        if order_status in (BUY_FILLED):
-            self.gainsbag.open_position(position, price)
-        elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
-            self.gainsbag.close_position(position, price)
+
+        base_coid, suffix = parse_client_order_id(raw_coid)
+        try:
+            order_dt = datetime.datetime.strptime(base_coid, "%Y%m%d_%H%M%S")
+        except Exception as e:
+            print(f"[Warning] 订单ID转换失败: {base_coid} - {e}")
+            return
+
+        p = self.client  # 用于生成字段名，例如 xBuyOrder, xSell 等
+
+        # 处理买单：若订单ID含 "BUY" 或订单类型在 buy_types 中
+        if suffix in ("BUY"):
+            self.gainsbag.open_position(order.position, order.price)  # 【开仓更新】
+            if df is None:
+                return
+
+            mask = df["Date"] == order_dt  # 【向量化匹配日期】
+            if not mask.any():
+                return
+
+            cash_snap, avg_cost_snap, pos_snap = (
+                self.gainsbag.cash,
+                self.gainsbag.avg_cost,
+                self.gainsbag.position,
+            )
+            df.loc[mask, f"{p}BuyOrder"] = raw_coid
+            df.loc[mask, f"{p}Buy"] = order.price
+            df.loc[mask, f"{p}Position"] = pos_snap
+            df.loc[mask, f"{p}Cash"] = cash_snap
+            df.loc[mask, f"{p}AvgCost"] = avg_cost_snap
+            df.loc[mask, f"{p}Status"] = BUY_FILLED
+            df.loc[mask, f"{p}Matured"] = order.finished_timestamp
+
+        # 处理卖单：若订单类型在 sell_types 或订单ID含特定后缀
+        elif suffix in ("PROFIT_LEAVE", "ATR_EXIT", "CUTOFF"):
+            self.gainsbag.close_position(order.position, order.price)  # 【平仓更新】
+
+            if df is None:
+                return
+
+            mask = df["Date"] == order_dt  # 【向量化匹配日期】
+            if not mask.any():
+                return
+
+            cash_snap, avg_cost_snap, pos_snap = (
+                self.gainsbag.cash,
+                self.gainsbag.avg_cost,
+                self.gainsbag.position,
+            )
+
+            df.loc[mask, f"{p}SellOrder"] = raw_coid
+            df.loc[mask, f"{p}Buy"] = avg_cost_snap  # 保持买入均价
+            df.loc[mask, f"{p}Sell"] = order.price
+            profit = (order.price / avg_cost_snap) - 1 if avg_cost_snap else np.nan
+            df.loc[mask, f"{p}Profit"] = profit
+            df.loc[mask, f"{p}Position"] = pos_snap
+            df.loc[mask, f"{p}Cash"] = cash_snap
+            df.loc[mask, f"{p}AvgCost"] = avg_cost_snap
+            df.loc[mask, f"{p}Status"] = suffix
+            atr_val = df.loc[mask, "ATR"].iloc[0] if mask.any() else np.nan
+            pl_value = (
+                (order.price - avg_cost_snap) / (atr_val * self.params.atr_loss_margin)
+                if atr_val and atr_val != 0
+                else np.nan
+            )
+            df.loc[mask, f"{p}P/L"] = pl_value
+            df.loc[mask, f"{p}Matured"] = order.finished_timestamp
 
     def strike_phase(self, lastest_candlestick):
-        strike = huobi_api.get_strike(f"{self.params.symbol}")
-        self.retreat(strike, lastest_candlestick)
-        self.attack(strike, lastest_candlestick)
+        self.on_hold = self.platform.is_onhold()
+        if not self.strike:
+            self.strike = huobi_api.get_strike(f"{self.params.symbol}")
+        self.retreat(self.strike, lastest_candlestick)
+        self.attack(self.strike, lastest_candlestick)
 
     def attack(self, strike, lastest_candlestick):
+        strike = lastest_candlestick.Kalman
         if all(
             [
                 lastest_candlestick.BuySignal,
-                lastest_candlestick.HMM_State == lastest_candlestick.uptrend_state,
+                lastest_candlestick.HMM_State == lastest_candlestick.UP_State,
                 self.gainsbag.is_enough_cash(),
                 not self.on_hold,
-                # strike < lastest_candlestick.ema_long * 1.0001,
             ]
         ):
-            trigger_price = max(strike, lastest_candlestick.ema_long) * 1.0001
+            cutoff_price = self.gainsbag.cutoff_price(self.params.hard_cutoff)
+            exit_price = (
+                min(lastest_candlestick.exit_price, cutoff_price)
+                or lastest_candlestick.exit_price
+            )
+            if (strike / exit_price) < 1.002:
+                print(
+                    f"[Buy Rejected] strike too closes to exit_price/cutoff {strike}/{exit_price}={(strike / exit_price)}"
+                )
+                return
+
+            trigger_price = strike
             kelly = 1.0  # lastest_candlestick.Kelly
             budget = self.gainsbag.discharge(kelly)
             price = trigger_price * 1.0001
             buy_order = xBuyOrder(
-                order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}",
+                order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}_BUY",
                 target_price=price,
                 executed_price=trigger_price,
                 order_type="BL",
@@ -608,24 +641,17 @@ class xHunter(IHunter):
             )
             self.platform.place_order(buy_order)
 
-    def retreat(self, strike, lastest_candlestick):
-        if self.gainsbag.is_enough_position():
-            position = self.gainsbag.position
-            avg_cost = self.gainsbag.avg_cost
-            min_profit = avg_cost * (
-                1 + (1 - self.params.hard_cutoff) * self.params.profit_loss_ratio
-            )
+    def retreat(self, strike, latest_candlestick):
+        self.latest_candlestick = latest_candlestick
+        position, cutoff_price, profit_leave_price, atr_exit = self.close_condition()
+        print(
+            f"[{self.client}Exit]: ATR: {atr_exit}, CUT:{cutoff_price}, PROF: {profit_leave_price}, Position:{position}"
+        )
 
-            self.sell_order = xSellOrder(
-                order_id=f"{self.params.symbol.name}_{lastest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}",
-                atr_exit_price=min(strike, lastest_candlestick.exit_price),
-                profit_leave_price=max(lastest_candlestick.Stop_profit, min_profit),
-                cutoff_price=min(strike, avg_cost * self.params.hard_cutoff),
-                position=position,
-                order_type="SL",
-                client=self.client,
-            )
-            # self.platform.place_order(sell_order)
+        deadline = pandas_util.INTERVAL_TO_MIN.get(self.params.interval) * 60
+        if (time.time() - self.watchdog) > deadline:
+            print("watch dog alert")
+            self.sub_market_client()
 
     def portfolio(self, pre_strike, strike):
         return self.gainsbag.portfolio(pre_strike, strike)
@@ -785,7 +811,6 @@ def calc_annual_return_and_sortino_ratio(cost, profit, df):
 if __name__ == "__main__":
     from hunterverse.interface import Symbol
     from hunterverse.interface import StrategyParam
-    import time
 
     params = {
         # Buy

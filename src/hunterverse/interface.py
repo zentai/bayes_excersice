@@ -113,6 +113,7 @@ class StrategyParam:
     backtest: bool = False
     debug_mode: list = field(default_factory=list)
     load_deals: list = field(default_factory=list)
+    start_deal: int = 0
 
     def __post_init__(self):
         self.ATR_sample = int(self.ATR_sample)

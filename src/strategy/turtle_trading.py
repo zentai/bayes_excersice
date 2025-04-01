@@ -13,7 +13,7 @@ from ..hunterverse.interface import IStrategyScout
 from ..utils import pandas_util
 
 logger = logging.getLogger(__name__)
-
+epsilon = 1e-8
 
 # FIXME: move some columns to IEngine
 TURTLE_COLUMNS = [
@@ -53,6 +53,8 @@ TURTLE_COLUMNS = [
     "KReturnVol",
     "RVolume",
     "HMM_State",
+    "UP_State",
+    "adjusted_margin",
 ]
 
 
@@ -286,17 +288,15 @@ class TurtleScout(IStrategyScout):
         hidden_states = self.hmm_model.predict(X)
         df["HMM_State"] = hidden_states
 
-        debug_hmm(self.hmm_model, hidden_states, df, X)
+        # debug_hmm(self.hmm_model, hidden_states, df, X)
 
         HMM_0 = df[df.HMM_State == 0].Slope.median()
         HMM_1 = df[df.HMM_State == 1].Slope.median()
-        df["uptrend_state"] = int(HMM_1 > HMM_0)
-        print(f"Uptrend state is: {int(HMM_1 > HMM_0)}, 0: {HMM_0} 1: {HMM_1}")
+        df["UP_State"] = int(HMM_1 > HMM_0)
         return df
 
     def _calc_HMM_input(self, df, windows, scaler):
         df = calc_Kalman_Price(df, windows=windows)
-        epsilon = 1e-8
         mask = df["KReturn"].isna()
         df.loc[mask, "KReturn"] = np.log(
             # df.loc[mask, "Kalman"] / df["Kalman"].shift(1)[mask]
@@ -331,6 +331,56 @@ class TurtleScout(IStrategyScout):
         X = scaler.fit_transform(features)
         return X
 
+    def adjust_exit_price_by_slope(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        【动态止损】【趋势强弱】【Kalman】【Slope】【HMM】
+        根据趋势强弱动态调整 ATR 平仓门槛，并计算 exit_price。
+
+        - 使用已存在的 Slope 指标（来自 Kalman 与 local_low）
+        - 趋势强（HMM_State == UP_State）：使用最大 ATR 倍数
+        - 趋势弱：在 atr_margin_min ~ atr_margin_max 间插值
+        - 自动 clip Slope 值，避免极端值失控
+        - 输出更新后的 df，包含 adjusted_margin 与 exit_price
+        """
+
+        # ===【参数载入】===
+        up_state = df.iloc[-1].UP_State  # 关键字：HMM、上升趋势状态
+        slope_col = "Slope"
+        hmm_col = "HMM_State"
+        atr_margin_max = self.params.atr_loss_margin  # 关键字：ATR最大门槛
+        atr_margin_min = getattr(
+            self.params, "atr_margin_min", 0.1
+        )  # 可调，关键字：最小止损门槛
+
+        # ===【趋势强弱】Slope 已预先存在，避免重复计算===
+        slope = df[slope_col]
+
+        # ===【clip：限制斜率范围，避免异常波动】===
+        slope_clip_min = slope.quantile(0.05)  # 趋势最弱
+        slope_clip_max = slope.quantile(0.50)  # 平稳趋势或微升
+
+        slope_clipped = slope.clip(slope_clip_min, slope_clip_max)
+
+        # ===【normalized：映射到0~1之间，用来插值】===
+        normalized = (slope_clipped - slope_clip_min) / (
+            slope_clip_max - slope_clip_min
+        )
+
+        # ===【动态止损门槛：趋势越弱 → margin 越小 → 越容易退出】===
+        dynamic_margin = atr_margin_min + (atr_margin_max - atr_margin_min) * normalized
+
+        # ===【趋势判断：若为上升趋势，保持最大margin，否则使用动态margin】===
+        final_margin = np.where(df[hmm_col] == up_state, atr_margin_max, dynamic_margin)
+
+        df["adjusted_margin"] = final_margin  # 保留用于分析，关键字：动态ATR系数
+
+        # ===【exit_price计算】关键字：止损价、Kalman、动态平仓===
+        df.loc[df.exit_price.isna(), "exit_price"] = (
+            df.Kalman.shift(1) - df.ATR.shift(1) * df.adjusted_margin
+        )
+
+        return df
+
     def _calc_profit(self, base_df):
         last_valid_idx = base_df.exit_price.last_valid_index()
         start_idx = (
@@ -347,9 +397,10 @@ class TurtleScout(IStrategyScout):
         surfing_profit = mean_price + self.params.surfing_level * stdv_price
 
         surf_df.loc[surf_df.Stop_profit.isna(), "Stop_profit"] = surfing_profit
-        surf_df.loc[surf_df.exit_price.isna(), "exit_price"] = (
-            surf_df.Kalman.shift(1) - surf_df.ATR.shift(1) * self.params.atr_loss_margin
-        )
+        # surf_df.loc[surf_df.exit_price.isna(), "exit_price"] = (
+        #     surf_df.Kalman.shift(1) - surf_df.ATR.shift(1) * self.params.atr_loss_margin
+        # )
+        surf_df = self.adjust_exit_price_by_slope(surf_df)
         base_df.update(surf_df)
 
         # 第二部分：重算买卖信号与利润指标
@@ -425,7 +476,7 @@ class TurtleScout(IStrategyScout):
         X = self._calc_HMM_input(base_df, windows, self.scaler)
         hidden_states = self.hmm_model.predict(X)
         base_df.loc[mask, "HMM_State"] = hidden_states[mask]
-        base_df.uptrend_state.ffill(inplace=True)
+        base_df.UP_State.ffill(inplace=True)
         return base_df
 
     def market_recon(self, base_df):
@@ -512,8 +563,8 @@ def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.6, gamma=0.2, beta
     df.loc[mask_new, "local_low"] = (
         df.Kalman.rolling(windows * 2, min_periods=1, closed="left").min().shift(1)
     )
-    df.loc[mask_new, "Slope"] = np.log((df.Kalman - df.local_low) / windows * 2)
-
+    slope = (df.Kalman - df.local_low + epsilon) / (windows * 2)
+    df.loc[mask_new, "Slope"] = slope[mask_new]
     return df
 
 
