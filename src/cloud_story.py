@@ -51,8 +51,8 @@ DEBUG_COL = [
     # "Low",
     "Close",
     # "turtle_h",
-    "ema_short",
-    "ema_long",
+    # "ema_short",
+    # "ema_long",
     "BuySignal",
     "Stop_profit",
     "exit_price",
@@ -78,6 +78,7 @@ DEBUG_COL = [
     "Slope",
     "Kalman",
     "HMM_State",
+    "UP_State",
 ]
 
 DUMP_COL = [
@@ -86,6 +87,8 @@ DUMP_COL = [
     "High",
     "Low",
     "Close",
+    "HMM_State",
+    "Kalman",
     "Vol",
     "turtle_h",
     "BuySignal",
@@ -118,16 +121,14 @@ DUMP_COL = [
     "drift",
     "volatility",
     "pred_price",
-    "Kalman",
     "log_returns",
     "volatility",
     "global_log_volatility",
     "global_log_vol",
     "KReturnVol",
     "RVolume",
-    "HMM_State",
+    "UP_State",
     "Slope",
-    "uptrend_state",
 ]
 
 
@@ -149,6 +150,7 @@ def hunterPause(sp):
         print(
             f"Will be start after: {seconds_to_wait} sec, {datetime.datetime.now()+datetime.timedelta(seconds=seconds_to_wait)}"
         )
+        print()
         time.sleep(seconds_to_wait)
 
 
@@ -176,63 +178,52 @@ class HuntingStory:
         return threading.Thread(target=run_market_sensor)
 
     def move_forward(self, message):
-        for h in self.hunter.values():
-            message = pandas_util.equip_fields(message, h.columns)
-        self.base_df = pd.concat(
-            [self.base_df, message],
-            ignore_index=True,
-        )
-        self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
-        self.base_df = self.scout.market_recon(self.base_df)
-        self.base_df = self.engine.hunt_plan(self.base_df)
-
-        for _, hunter in self.hunter.items():
-            hunter.strike_phase(lastest_candlestick=self.base_df.iloc[-1])
-
-        if "statement" in self.params.debug_mode:
-            print(self.base_df[self.debug_cols][-30:])
-        if "mission_review" in self.params.debug_mode:
-            print(hunter.review_mission(self.base_df))
-        if "statement_to_csv" in self.params.debug_mode:
-            self.base_df[self.report_cols].to_csv(
-                f"{REPORTS_DIR}/{self.params}.csv", index=False
+        try:
+            for h in self.hunter.values():
+                message = pandas_util.equip_fields(message, h.columns)
+            self.base_df = pd.concat(
+                [self.base_df, message],
+                ignore_index=True,
             )
-            print(f"created: {REPORTS_DIR}/{self.params}.csv")
+            self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
+            self.base_df = self.scout.market_recon(self.base_df)
+            self.base_df = self.engine.hunt_plan(self.base_df)
+
+            for _, hunter in self.hunter.items():
+                hunter.load_memories(self.base_df, deals=self.params.load_deals)
+                hunter.strike_phase(lastest_candlestick=self.base_df.iloc[-1])
+
+            if "statement" in self.params.debug_mode:
+                print(self.base_df[self.debug_cols][-30:])
+            if "mission_review" in self.params.debug_mode:
+                print(hunter.review_mission(self.base_df))
+            if "statement_to_csv" in self.params.debug_mode:
+                self.base_df[self.report_cols].to_csv(
+                    f"{REPORTS_DIR}/{self.params}.csv", index=False
+                )
+                print(f"created: {REPORTS_DIR}/{self.params}.csv")
+        except Exception as e:
+            print(e)
+            import traceback
+
+            print(traceback.format_exc())
 
     def callback_order_matched(
         self, client, order_id, order_status, price, position, execute_timestamp
     ):
-        p = client
-        hunter = self.hunter[client]
-        order_id = order_id.replace(f"{self.params.symbol.name}_", "")
-        if order_status in (BUY_FILLED):
-            s_buy_order = self.base_df.Date == datetime.datetime.strptime(
-                order_id, "%Y%m%d_%H%M%S"
-            )
-            self.base_df.loc[s_buy_order, f"{p}BuyOrder"] = order_id
-            self.base_df.loc[s_buy_order, f"{p}Buy"] = price
-            self.base_df.loc[s_buy_order, f"{p}Position"] = hunter.gainsbag.position
-            self.base_df.loc[s_buy_order, f"{p}Cash"] = hunter.gainsbag.cash
-            self.base_df.loc[s_buy_order, f"{p}AvgCost"] = hunter.gainsbag.avg_cost
-            self.base_df.loc[s_buy_order, f"{p}Status"] = order_status
-            self.base_df.loc[s_buy_order, f"{p}Matured"] = execute_timestamp
-        elif order_status in ("CUTOFF", "ATR_EXIT", "Profit_LEAVE"):
-            s_sell_order = self.base_df.Date == datetime.datetime.strptime(
-                order_id, "%Y%m%d_%H%M%S"
-            )
-            self.base_df.loc[s_sell_order, f"{p}SellOrder"] = order_id
-            self.base_df.loc[s_sell_order, f"{p}Buy"] = hunter.gainsbag.avg_cost
-            self.base_df.loc[s_sell_order, f"{p}Sell"] = price
-            profit = (price / hunter.gainsbag.avg_cost) - 1
-            self.base_df.loc[s_sell_order, f"{p}Profit"] = profit
-            self.base_df.loc[s_sell_order, f"{p}Position"] = hunter.gainsbag.position
-            self.base_df.loc[s_sell_order, f"{p}Cash"] = hunter.gainsbag.cash
-            self.base_df.loc[s_sell_order, f"{p}AvgCost"] = hunter.gainsbag.avg_cost
-            self.base_df.loc[s_sell_order, f"{p}Status"] = order_status
-            self.base_df.loc[s_sell_order, f"{p}P/L"] = (
-                price - hunter.gainsbag.avg_cost
-            ) / (self.base_df.iloc[-1].ATR * self.params.atr_loss_margin)
-            self.base_df.loc[s_sell_order, f"{p}Matured"] = execute_timestamp
+        if client == "x":
+            print(f"received {order_id} update")
+            hunter = self.hunter[client]
+            hunter.load_memories(self.base_df, deals=self.params.load_deals)
+            if "statement" in self.params.debug_mode:
+                print(self.base_df[self.debug_cols][-30:])
+            if "mission_review" in self.params.debug_mode:
+                print(hunter.review_mission(self.base_df))
+            if "statement_to_csv" in self.params.debug_mode:
+                self.base_df[self.report_cols].to_csv(
+                    f"{REPORTS_DIR}/{self.params}.csv", index=False
+                )
+                print(f"created: {REPORTS_DIR}/{self.params}.csv")
 
 
 def start_journey(sp):
@@ -263,10 +254,13 @@ def start_journey(sp):
     hunter = {
         "s": xHunter("s", params=sp),
         # "b": xHunter("b", params=sp),
-        # "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
+        "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
     }
+
     base_df = sensor.scan(2000 if not sp.backtest else 100)
     base_df = scout.train(base_df)
+    hunter["x"].load_memories(base_df, deals=sp.load_deals)
+
     debug_cols = DEBUG_COL + sum(
         [h.columns for h in hunter.values() if h.client == "x"], []
     )
@@ -489,9 +483,9 @@ params = {
     "lower_sample": 60,
     "upper_sample": 60,
     # Sell
-    "hard_cutoff": 0.95,
+    "hard_cutoff": 0.9,
     "profit_loss_ratio": 3,
-    "atr_loss_margin": 1.5,
+    "atr_loss_margin": 3,
     "surfing_level": 7,
     # Period
     "interval": "1day",
@@ -511,12 +505,24 @@ from typing import List
 
 
 @click.command()
-@click.option("--symbol", default="btfusdt", help="Trading symbol (e.g. trxusdt)")
-@click.option("--interval", default="5min", help="Trading interval")
-@click.option("--funds", default=15, type=float, help="Available funds")
-@click.option("--cap", default=15, type=float, help="Stake cap")
-@click.option("--deals", default="", help="Comma separated deal IDs")
-def main(symbol: str, interval: str, funds: float, cap: float, deals: str):
+@click.option("--symbol", default="moveusdt", help="Trading symbol (e.g. trxusdt)")
+@click.option("--interval", default="1min", help="Trading interval")
+@click.option("--funds", default=50.2, type=float, help="Available funds")
+@click.option("--cap", default=10.1, type=float, help="Stake cap")
+@click.option(
+    "--deals",
+    default="",
+    help="Comma separated deal IDs",
+)
+@click.option(
+    "--start_deal",
+    default=0,
+    type=int,
+    help="start to load from deal id",
+)
+def main(
+    symbol: str, interval: str, funds: float, cap: float, deals: str, start_deal: int
+):
     deal_ids = [int(x.strip()) for x in deals.split(",") if x.strip()] if deals else []
 
     params.update(
@@ -533,6 +539,7 @@ def main(symbol: str, interval: str, funds: float, cap: float, deals: str):
                 "final_statement_to_csv",
             ],
             "load_deals": deal_ids,
+            "start_deal": start_deal,
             "api_key": "fefd13a1-bg2hyw2dfg-440b3c64-576f2",
             "secret_key": "1a437824-042aa429-0beff3ba-03e26",
         }

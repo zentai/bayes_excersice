@@ -71,20 +71,9 @@ def get_balance(
         return float(obj.balance)
 
 
-def get_orders(order_ids, api_key, secret_key):
+def load_orders(api_key, secret_key, symbol, order_ids=[], start_deal=None):
     try:
         trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
-        """
-            order.finished_at,
-            order.id,
-            order.symbol,
-            order.type,.    # BUY_LIMIT, SELL_LIMIT
-            order.state,    # OrderState.FILLED
-            order.filled_amount,
-            order.filled_fees,
-            order.filled_cash_amount,
-            order.source,
-        """
         cols = [
             "Time",
             "id",
@@ -95,11 +84,21 @@ def get_orders(order_ids, api_key, secret_key):
             "filled_fees",
             "filled_cash_amount",
             "source",
+            "client_order_id",
+            "finished_timestamp",
         ]
-        orders = []
 
-        for order_id in order_ids:
-            order = trade_client.get_order(order_id=order_id)
+        orderlist = [
+            trade_client.get_order(order_id=order_id) for order_id in order_ids
+        ] or trade_client.get_orders(
+            symbol=symbol,
+            order_state=OrderState.FILLED,
+            direct=QueryDirection.PREV,
+            start_id=start_deal,
+        )
+
+        orders = []
+        for order in orderlist:
             finished_at = datetime.fromtimestamp(order.finished_at / 1000)
             orders.append(
                 [
@@ -112,15 +111,55 @@ def get_orders(order_ids, api_key, secret_key):
                     float(order.filled_fees),
                     float(order.filled_cash_amount),
                     order.source,
+                    order.client_order_id,
+                    order.finished_at,
                 ]
             )
+
         orders = pd.DataFrame(orders, columns=cols)
-        return orders.sort_values(by=["Time"])
+        orders = orders.sort_values(by=["Time"])
+
+        # Define order type constants
+        buy_types = ("buy-stop-limit", "buy-limit", "buy-market")
+        sell_types = ("sell-limit", "sell-stop-limit", "sell-market")
+        valid_status = ("filled", "partial-canceled", "partial-filled")
+
+        # Filter orders by valid status
+        orders = orders[orders.state.isin(valid_status)]
+
+        # Create masks for buy and sell orders
+        buy_mask = orders.type.isin(buy_types)
+        sell_mask = orders.type.isin(sell_types)
+
+        # 计算买入和卖出订单的 position 和 price
+        # 买入订单的 position 减去手续费，卖出订单的 position 不变
+        # 所有订单的价格计算为成交金额除以 position
+        orders.loc[buy_mask, "position"] = (
+            orders.loc[buy_mask, "filled_amount"] - orders.loc[buy_mask, "filled_fees"]
+        )
+        orders.loc[sell_mask, "position"] = orders.loc[sell_mask, "filled_amount"]
+        orders.loc[buy_mask, "price"] = (
+            orders["filled_cash_amount"] / orders["position"]
+        )
+        orders.loc[sell_mask, "price"] = (
+            orders["filled_cash_amount"] - orders["filled_fees"]
+        ) / orders["position"]
+
+        mask = orders.source == "spot-web"
+        # Generate client_order_id for web orders to match trading system format: {symbol}_{timestamp}_CUTOFF
+        if mask.any():
+            orders.loc[mask, "client_order_id"] = (
+                orders.loc[mask, "symbol"]
+                + "_"
+                + orders.loc[mask, "Time"].dt.strftime("%Y%m%d_%H%M00")
+                + "_CUTOFF"
+            )
+        return orders
 
     except Exception as e:
-        logger.error(f"get_orders: {e}")
+        logger.error(f"load_orders: {e}")
         time.sleep(5)
-        return get_orders(order_ids, api_key, secret_key)
+        return load_orders(api_key, secret_key, symbol, order_ids)
 
 
 def get_open_orders(symbol, api_key, secret_key):
@@ -150,36 +189,28 @@ def place_order(
         "BM": OrderType.BUY_MARKET,
     }
     order_type = side.get(order_type)
+
+    # Adjust precision and round the order amount, price and trigger price based on order type (buy/sell)
     if order_type in (
         OrderType.BUY_LIMIT,
         OrderSide.BUY,
         OrderType.BUY_MARKET,
     ):
-        round_amount = (
+        amount = (
             symbol.round_price(amount)
             if order_type == OrderType.BUY_MARKET
             else symbol.round_amount(amount)
         )
-        round_price = symbol.round_price(price)
-        round_stop_price = symbol.round_price(stop_price) if stop_price else None
-        amount = round_amount
-        price = round_price
-        stop_price = round_stop_price
-        print(
-            f"[{order_type}] adjust buy amount: {round_amount:.{symbol.amount_prec}f}, trigger Price: {round_stop_price:.{symbol.price_prec}f}, price: {round_price:.{symbol.price_prec}f}"
-        )
-    elif order_type in (OrderType.SELL_LIMIT, OrderSide.SELL):
-        round_amount = symbol.round_amount(amount)
-        round_price = symbol.round_price(price)
+        price = symbol.round_price(price)
         stop_price = symbol.round_price(stop_price) if stop_price else None
-        amount = round_amount
-        price = round_price
-        print(
-            f"[{order_type}] adjust sell amount: {round_amount:.{symbol.amount_prec}f}, trigger Price: {stop_price:.{symbol.price_prec}f}, price: {round_price:.{symbol.price_prec}f}"
-        )
 
-    # BL, SL
-    if order_type in (OrderSide.BUY, OrderSide.SELL):
+    elif order_type in (OrderType.SELL_LIMIT, OrderSide.SELL):
+        amount = symbol.round_amount(amount)
+        price = symbol.round_price(price)
+        stop_price = symbol.round_price(stop_price) if stop_price else None
+
+    # Place order for BUY_LIMIT (BL) and SELL_LIMIT (SL) order types
+    if order_type in (OrderSide.BUY):
         algo_client = AlgoClient(api_key=api_key, secret_key=secret_key)
         spot_account_id = get_spot_acc(api_key, secret_key).id
         order_id = algo_client.create_order(
@@ -202,12 +233,14 @@ def place_order(
             source=OrderSource.API,
             amount=f"{amount:.{symbol.amount_prec}f}",
             price=f"{price:.{symbol.price_prec}f}",
-            stop_price=f"{stop_price:.{symbol.price_prec}f}",
-            operator=operator,
+            # stop_price=f"{stop_price:.{symbol.price_prec}f}",
+            # operator=operator,
             client_order_id=client_order_id,
         )
 
-    logger.debug(f"[{order_type}] Order placed: {order_id}")
+    print(
+        f"[huobi_api] - {client_order_id} placed, Price: {price}, Amount: {amount}, Stop Price: {stop_price if stop_price else 'N/A'}"
+    )
     return order_id
 
 
@@ -303,6 +336,31 @@ def get_history_stick(symbol, sample=20, interval="1min"):
     ]
     df = pd.DataFrame(candlesticks)
     return df.sort_values(by=["Date"]).reset_index(drop=True)
+
+
+def get_market_detail_merged(symbol):
+    """获取市场最新聚合行情
+
+    Args:
+        symbol: 交易对名称
+
+    Returns:
+        MarketDetailMerged对象，包含:
+        - id: 响应id
+        - timestamp: 响应生成时间点，单位毫秒
+        - bid: [买1价,买1量]
+        - ask: [卖1价,卖1量]
+        - open: 24小时开盘价
+        - close: 最新价
+        - high: 24小时最高价
+        - low: 24小时最低价
+        - amount: 24小时成交量(币)
+        - vol: 24小时成交额(USDT)
+        - count: 24小时成交笔数
+    """
+    market_client = MarketClient()
+    obj = market_client.get_market_detail_merged(symbol)
+    return obj
 
 
 def get_strike(symbol):
@@ -422,18 +480,18 @@ if __name__ == "__main__":
     # print(type(result))
     # LogInfo.output("cancel result {id}".format(id=result))
 
-    algo_client = AlgoClient(api_key=g_api_key, secret_key=g_secret_key)
-    spot_account_id = get_spot_acc(api_key, secret_key).id
-    try:
-        result = algo_client.get_open_orders()
-        # LogInfo.output_list(result)
+    # algo_client = AlgoClient(api_key=g_api_key, secret_key=g_secret_key)
+    # spot_account_id = get_spot_acc(api_key, secret_key).id
+    # try:
+    #     result = algo_client.get_open_orders()
+    #     # LogInfo.output_list(result)
 
-        result = algo_client.cancel_orders([r.clientOrderId for r in result[:20]])
-        result.accepted
-        print("Cancel result:")
-        result.print_object()
-    except Exception as e:
-        print(e)
+    #     result = algo_client.cancel_orders([r.clientOrderId for r in result[:20]])
+    #     result.accepted
+    #     print("Cancel result:")
+    #     result.print_object()
+    # except Exception as e:
+    #     print(e)
 
     # today = datetime.now()
     # client_order_id = f"{today.strftime('%Y%m%d_%H%M%S')}"
@@ -510,9 +568,34 @@ if __name__ == "__main__":
     #         account_obj.print_object()
     #         print()
 
-    # df_orders = get_orders([1220351950556858], api_key, secret_key)
+    # df_orders = get_orders([1296264021935932], api_key, secret_key)
     # print(df_orders)
 
+    # symbol = "buzzusdt"
+    # trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
+    # list_obj = trade_client.get_orders(
+    #     symbol=symbol,
+    #     order_state=OrderState.FILLED,
+    #     # order_type=OrderType.BUY_LIMIT,
+    #     start_date=None,
+    #     end_date=None,
+    #     start_id=None,
+    #     size=None,
+    #     direct=QueryDirection.PREV,
+    # )
+    # LogInfo.output(
+    #     "===== step 1 ==== {symbol} {count} orders found".format(
+    #         symbol=symbol, count=len(list_obj)
+    #     )
+    # )
+    # LogInfo.output_list(list_obj)
     # price = df_orders.loc[df_orders.id == order_id].filled_cash_amount.iloc[0]
     # position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
     # print(f"[SELL] Average Price: {price/position} ")
+
+    from huobi.client.market import MarketClient
+
+    market_client = MarketClient()
+    obj = market_client.get_market_detail_merged("btcusdt")
+    print(obj.vol)
+    # obj.print_object()

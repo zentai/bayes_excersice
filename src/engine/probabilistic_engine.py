@@ -140,6 +140,9 @@ class BayesianEngine(IEngine):
 
     def hunt_plan(self, base_df):
         base_df = pandas_util.equip_fields(base_df, BAYESIAN_ENGINE_COLUMNS)
+        base_df["Kelly"] = 1
+        return base_df
+        base_df = pandas_util.equip_fields(base_df, BAYESIAN_ENGINE_COLUMNS)
         windows = self._params.bayes_windows or 120
         df = base_df
 
