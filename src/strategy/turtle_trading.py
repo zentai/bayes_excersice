@@ -524,8 +524,7 @@ def calc_ADX(df, params, p=14):
     return df
 
 
-# def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.1, gamma=0.9):
-def calc_Kalman_Price(df, windows=60, Q=1e-2, R=1e-2, alpha=0.6, gamma=0.2, beta=0.2):
+def calc_Kalman_Price(df, windows=60, Q=1e-3, R=1e-3, alpha=0.6, gamma=0.2, beta=0.2):
     mask_lr = df["log_returns"].isna()
     df.loc[mask_lr, "log_returns"] = np.log(df["Close"] / df["Close"].shift(1))[mask_lr]
 
@@ -589,6 +588,38 @@ def rolling_kalman_update(df, idx, window, Q, R, alpha, gamma, beta):
     )
 
 
+# def kalman_update(
+#     features,
+#     Q,
+#     R_base,
+#     alpha,
+#     gamma,
+#     global_log_vol,
+#     global_log_volatility,
+# ):
+#     # features 的列顺序：[pred_price, Close, volatility, Vol]
+#     features = features.reshape(-1, 4)
+#     x = features[0, 0]
+#     P = 1.0
+#     for i in range(1, features.shape[0]):
+#         current_vol = features[i, 3]
+#         current_volatility = features[i, 2]
+#         current_log_vol = np.log(current_vol)
+#         current_log_volatility = (
+#             np.log(current_volatility) if current_volatility > 0 else 0
+#         )
+#         vol_factor = np.exp(-alpha * (current_log_vol - global_log_vol))
+#         volat_factor = np.exp(gamma * (current_log_volatility - global_log_volatility))
+#         R_t = R_base * vol_factor * volat_factor
+
+#         P_pred = P + Q
+#         K = P_pred / (P_pred + R_t)
+#         z = features[i, 1]
+#         x = x + K * (z - x)
+#         P = (1 - K) * P_pred
+#     return x
+
+
 def kalman_update(
     features,
     Q,
@@ -604,7 +635,7 @@ def kalman_update(
 ):
     """
     緊湊版卡爾曼濾波更新函數：
-    結合成交量、波動率與價格變化, 動態調整觀測噪聲 R_t。
+    結合成交量、波動率與價格變化，動態調整觀測噪聲 R_t。
 
     參數：
     - features: np.ndarray, 形狀 (N, 4), 欄位：[pred_price, Close, volatility, Vol]
@@ -615,9 +646,9 @@ def kalman_update(
     - beta: float, 價格變動調整係數
     - global_log_vol: float, 全球平均成交量的對數
     - global_log_volatility: float, 全球平均波動率的對數
-    - min_vol: float, 成交量下限（預設 1e-6）
-    - vol_clip_min: float, 成交量調整因子最小值（預設 0.1）
-    - vol_clip_max: float, 成交量調整因子最大值（預設 2.0）
+    - min_vol: float, 成交量下限（預設 1e-6)
+    - vol_clip_min: float, 成交量調整因子最小值（預設 0.1)
+    - vol_clip_max: float, 成交量調整因子最大值（預設 2.0)
 
     回傳：
     - x: float, 濾波後的價格估計值
@@ -635,7 +666,7 @@ def kalman_update(
             np.log(current_volatility) if current_volatility > 0 else 0
         )
 
-        # 成交量調整因子（限制範圍）, 波動率調整因子
+        # 成交量調整因子（限制範圍），波動率調整因子
         vol_factor = np.clip(
             np.exp(-alpha * (current_log_vol - global_log_vol)),
             vol_clip_min,
@@ -643,7 +674,7 @@ def kalman_update(
         )
         volat_factor = np.exp(gamma * (current_log_volatility - global_log_volatility))
 
-        # 價格變動因子：價格劇烈變動時, 信任度降低
+        # 價格變動因子：價格劇烈變動時，信任度降低
         current_close = features[i, 1]
         price_factor = np.exp(-beta * abs(current_close - previous_close))
 

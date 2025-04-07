@@ -12,6 +12,11 @@ from huobi.client.market import MarketClient
 from huobi.exception.huobi_api_exception import HuobiApiException
 from huobi.model.market.candlestick_event import CandlestickEvent
 
+from huobi.client.market import MarketClient
+from huobi.constant import *
+from huobi.exception.huobi_api_exception import HuobiApiException
+from huobi.model.market.candlestick_event import CandlestickEvent
+from datetime import datetime
 from ..hunterverse.interface import IHunter
 from ..hunterverse.interface import xOrder, xBuyOrder, xSellOrder
 from ..utils import pandas_util
@@ -812,6 +817,25 @@ if __name__ == "__main__":
     from hunterverse.interface import Symbol
     from hunterverse.interface import StrategyParam
 
+    # params.update(
+    #     {
+    #         "funds": funds,
+    #         "stake_cap": cap,
+    #         "symbol": Symbol(symbol),
+    #         "interval": interval,
+    #         "backtest": False,
+    #         "debug_mode": [
+    #             "statement",
+    #             "statement_to_csv",
+    #             "mission_review",
+    #             "final_statement_to_csv",
+    #         ],
+    #         "load_deals": deal_ids,
+    #         "api_key": "fefd13a1-bg2hyw2dfg-440b3c64-576f2",
+    #         "secret_key": "1a437824-042aa429-0beff3ba-03e26",
+    #     }
+    # )
+
     params = {
         # Buy
         "ATR_sample": 12,
@@ -835,10 +859,13 @@ if __name__ == "__main__":
             "mission_review",
             "final_statement_to_csv",
         ],
+        "load_deals": [],
+        "api_key": "fefd13a1-bg2hyw2dfg-440b3c64-576f2",
+        "secret_key": "1a437824-042aa429-0beff3ba-03e26",
     }
 
-    # sp = StrategyParam(**params)
-    # x = xHunter("x", sp, Huobi(sp))
+    sp = StrategyParam(**params)
+    x = (xHunter("x", params=sp, platform=Huobi("x", sp)),)
     # x.attack(
     #     xBuyOrder(
     #         "tid",
@@ -851,16 +878,15 @@ if __name__ == "__main__":
     # )
     # for i in range(2000):
     #     time.sleep(10)
-    x = xBuyOrder(
-        "tid",
-        target_price=0.0000240,
-        executed_price=0.0000240,
-        order_type="B",
-        operator="lte",
-        kelly=1,
-    )
+    # x = xBuyOrder(
+    #     "tid",
+    #     target_price=0.0000240,
+    #     executed_price=0.0000240,
+    #     order_type="B",
+    #     operator="lte",
+    #     kelly=1,
+    # )
 
-    y = replace(x)
-    y.order_id = "xdrser"
-    print(x)
-    print(y)
+    for i in range(10):
+        time.sleep(10)
+        print(f"{i} --")
