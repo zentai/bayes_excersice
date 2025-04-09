@@ -277,6 +277,8 @@ class TurtleScout(IStrategyScout):
     def train(self, df):
         windows = self.params.bayes_windows
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
+        df = self._calc_ATR(df)
+        df = self._calc_OBV(df)
 
         self.scaler = StandardScaler()
         self.hmm_model = GaussianHMM(
@@ -293,6 +295,7 @@ class TurtleScout(IStrategyScout):
         HMM_0 = df[df.HMM_State == 0].Slope.median()
         HMM_1 = df[df.HMM_State == 1].Slope.median()
         df["UP_State"] = int(HMM_1 > HMM_0)
+        df = self._calc_profit(df)
         return df
 
     def _calc_HMM_input(self, df, windows, scaler):
@@ -323,11 +326,12 @@ class TurtleScout(IStrategyScout):
         # df.loc[mask, "RVolume"] = df["volatility"][mask]
 
         # 填充 KReturnVol 和 RVolume 的缺失值, 采用向后填充策略
-        df.loc[:, ["KReturnVol", "RVolume", "Slope"]] = df.loc[
-            :, ["KReturnVol", "RVolume", "Slope"]
+        df.loc[:, ["KReturnVol", "RVolume", "Slope", "OBV_MA"]] = df.loc[
+            :, ["KReturnVol", "RVolume", "Slope", "OBV_MA"]
         ].fillna(method="bfill")
 
-        features = df[["KReturnVol", "RVolume", "Slope"]].values
+        # features = df[["KReturnVol", "RVolume", "Slope"]].values
+        features = df[["KReturnVol", "RVolume", "Slope", "OBV_MA"]].values
         X = scaler.fit_transform(features)
         return X
 
@@ -470,6 +474,75 @@ class TurtleScout(IStrategyScout):
         base_df.update(df)
         return base_df
 
+    def _calc_OBV(self, base_df, multiplier=3.4):
+        window = self.params.upper_sample
+        df = base_df.copy()
+
+        # Calculate price difference and direction
+        df["price_diff"] = df["Close"].diff()
+        df["direction"] = df["price_diff"].apply(
+            lambda x: 1 if x > 0 else -1 if x < 0 else 0
+        )
+        df["Vol"] *= df["direction"]
+
+        # Calculate OBV
+        df["OBV"] = df["Vol"].cumsum()
+
+        # Calculate moving average and standard deviation for OBV
+        df["OBV_MA"] = df["OBV"].rolling(window=window).mean()
+        df["OBV_std"] = df["OBV"].rolling(window=window).std()
+
+        # Calculate upper and lower bounds
+        df["upper_bound"] = df["OBV_MA"] + (multiplier * df["OBV_std"])
+        df["lower_bound"] = df["OBV_MA"] - (multiplier * df["OBV_std"])
+
+        # Calculate relative difference between bounds
+        df["bound_diff"] = (df["upper_bound"] - df["lower_bound"]) / df["OBV_MA"]
+
+        df["PRICE_UP"] = df["High"] >= (
+            df["Close"].rolling(window=self.params.upper_sample).mean()
+            + multiplier * df["Close"].rolling(window=self.params.upper_sample).std()
+        )
+        df["PRICE_LOW"] = df["Low"] <= (
+            df["Close"].rolling(window=self.params.lower_sample).mean()
+            + multiplier * df["Close"].rolling(window=self.params.lower_sample).std()
+        )
+
+        # 计算滚动窗口内的标准差
+        df["Rolling_Std"] = df["Close"].rolling(window=self.params.upper_sample).std()
+        df["Rolling_Std_Percent"] = (
+            df["Rolling_Std"]
+            / df["Close"].rolling(window=self.params.upper_sample).mean()
+        ) * 100
+
+        # Identify significant points where OBV crosses the upper bound
+        df["OBV_UP"] = (
+            (df["OBV"] > df["upper_bound"])
+            & (df["OBV"].shift(1) <= df["upper_bound"])
+            # & (df["bound_diff"] > 0.07)
+        )
+        # print(df["bound_diff"])
+
+        # Combine the new 'OBV_UP' column back to the original dataframe
+        base_df["OBV"] = df["OBV"]
+        base_df["OBV_MA"] = df["OBV_MA"]
+        # base_df["OBV_UP"] = df["OBV_UP"] & (df["Slope"] >= 0)
+        # base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_UP"]
+        base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_LOW"]
+        # base_df["OBV_UP"] = df["OBV_UP"]
+        # base_df.at[df.index[-1], "OBV_UP"] = (
+        #     df["Rolling_Std_Percent"].iloc[-1]
+        #     <= df["Rolling_Std_Percent"]
+        #     .rolling(window=self.params.bayes_windows)
+        #     .min()
+        #     .iloc[-1]
+        # )
+
+        base_df["Rolling_Std"] = df["Rolling_Std_Percent"]
+        base_df["upper_bound"] = df["upper_bound"]
+        base_df["lower_bound"] = df["lower_bound"]
+        return base_df
+
     def _calc_HMM_State(self, base_df):
         windows = self.params.bayes_windows
         mask = base_df["HMM_State"].isna()
@@ -482,8 +555,9 @@ class TurtleScout(IStrategyScout):
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         base_df = self._calc_ATR(base_df)
-        base_df = self._calc_HMM_State(base_df)
+        base_df = self._calc_OBV(base_df)
         base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
+        base_df = self._calc_HMM_State(base_df)
         base_df = self._calc_profit(base_df)
         return base_df
 
@@ -803,6 +877,7 @@ from ..hunterverse.interface import Symbol
 from ..hunterverse.interface import StrategyParam
 from ..hunterverse.interface import INTERVAL_TO_MIN
 from ..hunterverse.interface import xBuyOrder, xSellOrder
+from ..hunterverse.interface import DEBUG_COL, DUMP_COL
 from ..sensor.market_sensor import HuobiMarketSensor
 from config import config
 
@@ -909,9 +984,6 @@ if __name__ == "__main__":
         bsp.funds = 1000000
 
         base_df = sensor.scan(2000 if not sp.backtest else 100)
-        base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
-        base_df = scout._calc_ATR(base_df)
-        base_df = scout._calc_profit(base_df)
         base_df = scout.train(base_df)
         base_df = scout.market_recon(base_df)
 

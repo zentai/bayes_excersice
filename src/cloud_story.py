@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 from typing import Dict
 
-from config import config
 from huobi.constant.definition import OrderType
 
 from .strategy.turtle_trading import TurtleScout, emv_cross_strategy
@@ -23,6 +22,7 @@ from .hunterverse.interface import Symbol
 from .hunterverse.interface import StrategyParam
 from .hunterverse.interface import INTERVAL_TO_MIN
 from .hunterverse.interface import xBuyOrder, xSellOrder
+from .hunterverse.interface import DEBUG_COL, DUMP_COL
 
 # from .hunterverse.storage import HuntingCamp
 
@@ -39,97 +39,12 @@ from .tradingfirm.xtrader import (
     CUTOFF_FILLED,
 )
 
+from config import config
+
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
 # from .tradingfirm.trader import xHunter
 from pydispatch import dispatcher
-
-DEBUG_COL = [
-    "Date",
-    # "Open",
-    # "High",
-    # "Low",
-    "Close",
-    # "turtle_h",
-    # "ema_short",
-    # "ema_long",
-    "BuySignal",
-    "Stop_profit",
-    "exit_price",
-    # "time_cost",
-    # "buy",
-    # "sell",
-    # "profit",
-    # "OBV",
-    # "OBV_UP",
-    # "Matured",
-    # "Kelly",
-    # "Postrior",
-    # "P/L",
-    # "likelihood",
-    # "profit_margin",
-    # "loss_margin",
-    # "+DI",
-    # "-DI",
-    # "ADX_Signed",
-    # "drift",
-    # "volatility",
-    # "pred_price",
-    "Slope",
-    "Kalman",
-    "HMM_State",
-    "UP_State",
-]
-
-DUMP_COL = [
-    "Date",
-    "Open",
-    "High",
-    "Low",
-    "Close",
-    "HMM_State",
-    "Kalman",
-    "Vol",
-    "turtle_h",
-    "BuySignal",
-    "ema_short",
-    "ema_long",
-    "Stop_profit",
-    "exit_price",
-    "Matured",
-    "time_cost",
-    "buy",
-    "sell",
-    "profit",
-    "P/L",
-    # "turtle_l",
-    # "turtle_h",
-    # "OBV",
-    # "OBV_UP",
-    # "upper_bound",
-    # "lower_bound",
-    # "Kelly",
-    # "Postrior",
-    # "likelihood",
-    # "profit_margin",
-    # "loss_margin",
-    # "+DM",
-    # "-DM",
-    # "+DI",
-    # "-DI",
-    # "ADX_Signed",
-    "drift",
-    "volatility",
-    "pred_price",
-    "log_returns",
-    "volatility",
-    "global_log_volatility",
-    "global_log_vol",
-    "KReturnVol",
-    "RVolume",
-    "UP_State",
-    "Slope",
-]
 
 
 def hunterPause(sp):
@@ -190,7 +105,7 @@ class HuntingStory:
             self.base_df = self.engine.hunt_plan(self.base_df)
 
             for _, hunter in self.hunter.items():
-                hunter.load_memories(self.base_df, deals=self.params.load_deals)
+                hunter.load_memories(self.base_df)
                 hunter.strike_phase(lastest_candlestick=self.base_df.iloc[-1])
 
             if "statement" in self.params.debug_mode:
@@ -214,7 +129,7 @@ class HuntingStory:
         if client == "x":
             print(f"received {order_id} update")
             hunter = self.hunter[client]
-            hunter.load_memories(self.base_df, deals=self.params.load_deals)
+            hunter.load_memories(self.base_df)
             if "statement" in self.params.debug_mode:
                 print(self.base_df[self.debug_cols][-30:])
             if "mission_review" in self.params.debug_mode:
@@ -259,7 +174,7 @@ def start_journey(sp):
 
     base_df = sensor.scan(2000 if not sp.backtest else 100)
     base_df = scout.train(base_df)
-    hunter["x"].load_memories(base_df, deals=sp.load_deals)
+    hunter["x"].load_memories(base_df)
 
     debug_cols = DEBUG_COL + sum(
         [h.columns for h in hunter.values() if h.client == "x"], []
@@ -485,8 +400,8 @@ params = {
     # Sell
     "hard_cutoff": 0.9,
     "profit_loss_ratio": 3,
-    "atr_loss_margin": 3,
-    "surfing_level": 7,
+    "atr_loss_margin": 1.5,
+    "surfing_level": 5,
     # Period
     "interval": "1day",
     "funds": 100,

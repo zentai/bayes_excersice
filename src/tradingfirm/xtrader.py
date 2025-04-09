@@ -16,7 +16,6 @@ from huobi.client.market import MarketClient
 from huobi.constant import *
 from huobi.exception.huobi_api_exception import HuobiApiException
 from huobi.model.market.candlestick_event import CandlestickEvent
-from datetime import datetime
 from ..hunterverse.interface import IHunter
 from ..hunterverse.interface import xOrder, xBuyOrder, xSellOrder
 from ..utils import pandas_util
@@ -460,7 +459,7 @@ class xHunter(IHunter):
         position, cutoff_price, profit_leave_price, atr_exit = self.close_condition()
         cid = f"{self.params.symbol.name}_{self.latest_candlestick.Date.strftime('%Y%m%d_%H%M%S')}"
         if strike <= (cutoff_price * 1.0001):
-            self.load_memories(df=None, deals=self.params.load_deals)
+            self.load_memories(df=None)
             sell_order = xSellOrder(
                 order_id=f"{cid}_CUTOFF",
                 cutoff_price=min(strike, cutoff_price),
@@ -472,7 +471,7 @@ class xHunter(IHunter):
             )
             self.platform.place_order(sell_order)
         elif strike < (atr_exit * 1.0001):
-            self.load_memories(df=None, deals=self.params.load_deals)
+            self.load_memories(df=None)
             sell_order = xSellOrder(
                 order_id=f"{cid}_ATR_EXIT",
                 cutoff_price=min(strike, atr_exit),
@@ -484,7 +483,7 @@ class xHunter(IHunter):
             )
             self.platform.place_order(sell_order)
         elif strike >= (profit_leave_price * 0.99):
-            self.load_memories(df=None, deals=self.params.load_deals)
+            self.load_memories(df=None)
             sell_order = xSellOrder(
                 order_id=f"{cid}_PROFIT_LEAVE",
                 cutoff_price=profit_leave_price,
@@ -496,19 +495,26 @@ class xHunter(IHunter):
             )
             self.platform.place_order(sell_order)
 
-    def load_memories(self, df, fetch=True, deals=[], start_deal=None):
+    def load_memories(self, df, fetch=True):
+        deals = self.params.load_deals
+        start_deal = self.params.start_deal
+
         if not isinstance(self.platform, Huobi):
             return
         print(f"load_memories(self, fetch={fetch}, deals={deals})")
 
         cached_order_ids = []
-        db_path = f"{config.data_dir}/{self.params.symbol}.csv"
+        db_path = f"{config.data_dir}/{self.params.symbol}_orders.csv"
         print(f"Database path: {db_path}")
 
-        # fixme
-        # if os.path.exists(db_path):
-        #     print(f"Loading cached orders from: {db_path}")
-        #     cached_order_ids = pd.read_csv(db_path).id.tolist()
+        cached_orders = pd.DataFrame()
+        if os.path.exists(db_path):
+            print(f"Loading cached orders from: {db_path}")
+            cached_orders = pd.read_csv(db_path)
+
+        if not cached_orders.empty:
+            cached_order_ids = cached_orders.id.values.tolist()
+            deals = list(set(deals) - set(cached_order_ids))
 
         if fetch:
             self.gainsbag.reset()
@@ -516,13 +522,39 @@ class xHunter(IHunter):
                 self.params.api_key,
                 self.params.secret_key,
                 self.params.symbol.name,
-                set([str(i) for i in (cached_order_ids + deals)]),
-                start_deal,
+                order_ids=deals,
             )
+
+            # 合并缓存订单和新获取的订单
+            if not cached_orders.empty:
+                orders = pd.concat([cached_orders, orders], ignore_index=True)
+                orders = orders.drop_duplicates(subset=["id"], keep="last")
+                orders = orders.sort_values(by="finished_timestamp", ascending=True)
+
+            start_deal_timestamp = (
+                orders.loc[orders["id"] == start_deal, "finished_timestamp"].iloc[0]
+                if not orders[orders["id"] == start_deal].empty
+                else None
+            )
+            if start_deal_timestamp is not None:
+                print(f"找到起始订单 {start_deal} 的时间戳: {start_deal_timestamp}")
+
             for idx, order in orders.iterrows():
+                if (
+                    start_deal_timestamp
+                    and order.finished_timestamp <= start_deal_timestamp
+                ):
+                    print(
+                        f"跳过订单: ID={order.id}, 时间戳={order.finished_timestamp}, 原因: 早于起始订单 {start_deal} 的时间戳 {start_deal_timestamp}"
+                    )
+                    continue
                 print(f"process deals: [{idx}] - {order.client_order_id}")
                 self.process_single_order(df, order)
-            print("done")
+
+            # 保存订单到本地数据库
+            if not orders.empty:
+                print(f"保存 {len(orders)} 条订单记录到: {db_path}")
+                orders.to_csv(db_path, index=False)
 
     def process_single_order(self, df, order) -> None:
         """
@@ -757,6 +789,7 @@ class xHunter(IHunter):
                     exit_stats.ATR_Profit,
                     exit_stats.ATR_Loss,
                     exit_stats.CUTOFF,
+                    self.on_hold,
                 ]
             ],
             columns=[
@@ -778,6 +811,7 @@ class xHunter(IHunter):
                 "ATR_Profit",
                 "ATR_loss",
                 "CUTOFF",
+                "HOLD",
             ],
         )
 

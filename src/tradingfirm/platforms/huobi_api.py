@@ -71,7 +71,7 @@ def get_balance(
         return float(obj.balance)
 
 
-def load_orders(api_key, secret_key, symbol, order_ids=[], start_deal=None):
+def load_orders(api_key, secret_key, symbol, order_ids=[]):
     try:
         trade_client = TradeClient(api_key=api_key, secret_key=secret_key)
         cols = [
@@ -88,14 +88,20 @@ def load_orders(api_key, secret_key, symbol, order_ids=[], start_deal=None):
             "finished_timestamp",
         ]
 
-        orderlist = [
-            trade_client.get_order(order_id=order_id) for order_id in order_ids
-        ] or trade_client.get_orders(
+        orderlist = trade_client.get_orders(
             symbol=symbol,
             order_state=OrderState.FILLED,
             direct=QueryDirection.PREV,
-            start_id=start_deal,
         )
+
+        orderlist += trade_client.get_orders(
+            symbol=symbol,
+            order_state=OrderState.PARTIAL_CANCELED,
+            direct=QueryDirection.PREV,
+        )
+
+        for _id in set(order_ids) - set([order.id for order in orderlist]):
+            orderlist.append(trade_client.get_order(order_id=_id))
 
         orders = []
         for order in orderlist:
@@ -571,18 +577,53 @@ if __name__ == "__main__":
     # df_orders = get_orders([1296264021935932], api_key, secret_key)
     # print(df_orders)
 
-    # symbol = "buzzusdt"
-    # trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
-    # list_obj = trade_client.get_orders(
-    #     symbol=symbol,
-    #     order_state=OrderState.FILLED,
-    #     # order_type=OrderType.BUY_LIMIT,
-    #     start_date=None,
-    #     end_date=None,
-    #     start_id=None,
-    #     size=None,
-    #     direct=QueryDirection.PREV,
-    # )
+    symbol = "alchusdt"
+    trade_client = TradeClient(api_key=g_api_key, secret_key=g_secret_key)
+    list_obj = trade_client.get_orders(
+        symbol=symbol,
+        # order_state=OrderState.FILLED,
+        order_state=OrderState.FILLED,
+        # order_type=OrderType.BUY_LIMIT,
+        start_date=None,
+        end_date=None,
+        start_id=None,
+        size=None,
+        direct=QueryDirection.PREV,
+    )
+    orders = []
+    for order in list_obj:
+        finished_at = datetime.fromtimestamp(order.finished_at / 1000)
+        orders.append(
+            [
+                finished_at,
+                order.id,
+                order.symbol,
+                order.type,
+                order.state,
+                float(order.filled_amount),
+                float(order.filled_fees),
+                float(order.filled_cash_amount),
+                order.source,
+                order.client_order_id,
+                order.finished_at,
+            ]
+        )
+    cols = [
+        "Time",
+        "id",
+        "symbol",
+        "type",
+        "state",
+        "filled_amount",
+        "filled_fees",
+        "filled_cash_amount",
+        "source",
+        "client_order_id",
+        "finished_timestamp",
+    ]
+    orders = pd.DataFrame(orders, columns=cols)
+    orders = orders.sort_values(by=["Time"])
+    print(orders)
     # LogInfo.output(
     #     "===== step 1 ==== {symbol} {count} orders found".format(
     #         symbol=symbol, count=len(list_obj)
@@ -593,9 +634,9 @@ if __name__ == "__main__":
     # position = df_orders.loc[df_orders.id == order_id].filled_amount.iloc[0]
     # print(f"[SELL] Average Price: {price/position} ")
 
-    from huobi.client.market import MarketClient
+    # from huobi.client.market import MarketClient
 
-    market_client = MarketClient()
-    obj = market_client.get_market_detail_merged("btcusdt")
-    print(obj.vol)
+    # market_client = MarketClient()
+    # obj = market_client.get_market_detail_merged("btcusdt")
+    # print(obj.vol)
     # obj.print_object()
