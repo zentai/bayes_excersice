@@ -1,0 +1,48 @@
+// ==UserScript==
+// @name         Order ID Tracker
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Track unique order IDs after a specific user action.
+// @author       You
+// @match        https://www.htx.com/transac/*
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let isTrackingEnabled = false;
+    const uniqueOrderIds = new Set();
+
+    window.orderdump = function() {
+        isTrackingEnabled = true;
+        console.log('Started tracking order IDs.');
+    };
+
+    function trackOrderIdFromResponse(response) {
+        if (!isTrackingEnabled) return;
+
+        try {
+            const orders = JSON.parse(response);
+            if (orders.status === 'ok') {
+                orders.data.forEach(order => order.id && uniqueOrderIds.add(order.id));
+                console.log('IDs:', Array.from(uniqueOrderIds).join(','));
+            }
+        } catch (error) {
+            console.error('Could not parse orders response:', error);
+        }
+    }
+
+    function interceptOrderRequests() {
+        const open = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {
+            if (url.includes('/x/pro/v1/order/orders?states=')) {
+                this.addEventListener('load', () => this.status === 200 && trackOrderIdFromResponse(this.response));
+            }
+            return open.apply(this, arguments);
+        };
+    }
+
+    interceptOrderRequests();
+})();
