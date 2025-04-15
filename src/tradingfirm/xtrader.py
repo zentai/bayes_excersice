@@ -200,9 +200,9 @@ class Huobi:
     def is_onhold(self):
         _current_vol = huobi_api.get_market_detail_merged(self.params.symbol.name).vol
         ratio = _current_vol / self.benchmark_vol_for_24hour
-        if ratio < 0.8:
+        if ratio < 0.6:
             print(
-                f"[Volume Alert] {_current_vol:.2f} USDT / {self.benchmark_vol_for_24hour:.2f} USDT, {ratio:.2f} < 0.8"
+                f"[Volume Alert (USDT)] {_current_vol:.2f} / {self.benchmark_vol_for_24hour:.2f}, {ratio:.2f} < 0.6"
             )
             return True
         return False
@@ -525,7 +525,7 @@ class xHunter(IHunter):
                 order_ids=deals,
             )
 
-            # 合并缓存订单和新获取的订单
+            # Merge cached orders with newly fetched orders
             if not cached_orders.empty:
                 orders = pd.concat([cached_orders, orders], ignore_index=True)
                 orders = orders.drop_duplicates(subset=["id"], keep="last")
@@ -537,24 +537,23 @@ class xHunter(IHunter):
                 else None
             )
             if start_deal_timestamp is not None:
-                print(f"找到起始订单 {start_deal} 的时间戳: {start_deal_timestamp}")
+                print(
+                    f"Found start order {start_deal} timestamp: {start_deal_timestamp}"
+                )
 
             for idx, order in orders.iterrows():
                 if (
                     start_deal_timestamp
                     and order.finished_timestamp <= start_deal_timestamp
                 ):
-                    print(
-                        f"跳过订单: ID={order.id}, 时间戳={order.finished_timestamp}, 原因: 早于起始订单 {start_deal} 的时间戳 {start_deal_timestamp}"
-                    )
                     continue
-                print(f"process deals: [{idx}] - {order.client_order_id}")
+                # print(f"process deals: [{idx}] - {order.client_order_id}")
                 self.process_single_order(df, order)
 
-            # 保存订单到本地数据库
             if not orders.empty:
-                print(f"保存 {len(orders)} 条订单记录到: {db_path}")
+                print(f"Saving {len(orders)} order records to: {db_path}")
                 orders.to_csv(db_path, index=False)
+                print(f"{self.gainsbag:snapshot}")
 
     def process_single_order(self, df, order) -> None:
         """
