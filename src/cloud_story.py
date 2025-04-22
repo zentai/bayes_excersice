@@ -1,72 +1,63 @@
-import signal
-import sys
+# Standard libraries
+import datetime
 import threading
 import time
-import datetime
-from dataclasses import dataclass
+import signal
+import sys
+import copy
+
+# Third-party libraries
 import pandas as pd
 import numpy as np
-from typing import Dict
+from dataclasses import dataclass
+from typing import Dict, List
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pydispatch import dispatcher
+import click
 
-from huobi.constant.definition import OrderType
-
+# Internal modules
 from .strategy.turtle_trading import TurtleScout, emv_cross_strategy
 from .engine.probabilistic_engine import BayesianEngine
-
 from .utils import pandas_util
-from .hunterverse.interface import IStrategyScout
-from .hunterverse.interface import IMarketSensor
-from .hunterverse.interface import IEngine
-from .hunterverse.interface import IHunter
-from .hunterverse.interface import Symbol
-from .hunterverse.interface import StrategyParam
-from .hunterverse.interface import INTERVAL_TO_MIN
-from .hunterverse.interface import xBuyOrder, xSellOrder
-from .hunterverse.interface import DEBUG_COL, DUMP_COL
-
-# from .hunterverse.storage import HuntingCamp
-
-from .sensor.market_sensor import LocalMarketSensor
-from .sensor.market_sensor import HuobiMarketSensor
-from .sensor.market_sensor import MongoMarketSensor
-
-# from .tradingfirm.pubsub_trader import xHunter
-from .tradingfirm.xtrader import xHunter, Huobi
-from .tradingfirm.xtrader import (
-    HUNTER_COLUMNS,
-    BUY_FILLED,
-    SELL_FILLED,
-    CUTOFF_FILLED,
+from .hunterverse.interface import (
+    IStrategyScout,
+    IMarketSensor,
+    IEngine,
+    IHunter,
+    Symbol,
+    StrategyParam,
+    INTERVAL_TO_MIN,
+    DEBUG_COL,
+    DUMP_COL,
 )
-
+from .sensor.market_sensor import (
+    LocalMarketSensor,
+    HuobiMarketSensor,
+)
+from .tradingfirm.xtrader import (
+    xHunter,
+    Huobi,
+)
 from config import config
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
-# from .tradingfirm.trader import xHunter
-from pydispatch import dispatcher
 
-
-def hunterPause(sp):
+def hunter_pause(sp):
     if sp.backtest:
         return
-    else:
-        now = datetime.datetime.now()
-        minutes_interval = INTERVAL_TO_MIN.get(sp.interval)
-        next_whole_point = now.replace(second=0, microsecond=0) + datetime.timedelta(
-            minutes=minutes_interval
-        )
-        if now.minute % minutes_interval != 0:
-            extra_minutes = minutes_interval - now.minute % minutes_interval
-            next_whole_point = now + datetime.timedelta(minutes=extra_minutes)
-            next_whole_point = next_whole_point.replace(second=0, microsecond=0)
-        sleep_seconds = (next_whole_point - now).total_seconds()
-        seconds_to_wait = max(0, sleep_seconds) + 5  # Ensure non-negative value
-        print(
-            f"Will be start after: {seconds_to_wait} sec, {datetime.datetime.now()+datetime.timedelta(seconds=seconds_to_wait)}"
-        )
-        print()
-        time.sleep(seconds_to_wait)
+    now = datetime.datetime.now()
+    minutes_interval = INTERVAL_TO_MIN.get(sp.interval)
+    next_interval = (now.minute // minutes_interval + 1) * minutes_interval
+    next_time = now.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(
+        minutes=next_interval
+    )
+    sleep_seconds = (next_time - now).total_seconds() + 5  # add extra 5 seconds buffer
+    print(
+        f"Next scan at {datetime.datetime.now() + datetime.timedelta(seconds=sleep_seconds)}\n"
+    )
+    time.sleep(sleep_seconds)
 
 
 @dataclass
@@ -81,47 +72,58 @@ class HuntingStory:
     report_cols: str
 
     def pub_market_sensor(self, sp):
-        def run_market_sensor():
+        def run():
             while self.sensor.left():
                 try:
                     k = self.sensor.fetch_one()
                     dispatcher.send(signal="k_channel", message=k)
-                    hunterPause(sp)
+                    hunter_pause(sp)
                 except Exception as e:
                     print(f"error: {e}")
 
-        return threading.Thread(target=run_market_sensor)
+        return threading.Thread(target=run)
 
     def move_forward(self, message):
+        """Process incoming market data and update internal state."""
         try:
+            # Equip fields across all hunters
             for h in self.hunter.values():
                 message = pandas_util.equip_fields(message, h.columns)
-            self.base_df = pd.concat(
-                [self.base_df, message],
-                ignore_index=True,
-            )
+
+            # Concatenate and remove duplicated rows
+            self.base_df = pd.concat([self.base_df, message], ignore_index=True)
             self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
+
+            # Update market information with scout and engine processing
             self.base_df = self.scout.market_recon(self.base_df)
             self.base_df = self.engine.hunt_plan(self.base_df)
 
-            for _, hunter in self.hunter.items():
+            # Process each hunter's phases
+            for hunter in self.hunter.values():
                 hunter.load_memories(self.base_df)
                 hunter.strike_phase(lastest_candlestick=self.base_df.iloc[-1])
 
-            if "statement" in self.params.debug_mode:
-                print(self.base_df[self.debug_cols][-30:])
-            if "mission_review" in self.params.debug_mode:
-                print(hunter.review_mission(self.base_df))
-            if "statement_to_csv" in self.params.debug_mode:
-                self.base_df[self.report_cols].to_csv(
-                    f"{REPORTS_DIR}/{self.params}.csv", index=False
-                )
-                print(f"created: {REPORTS_DIR}/{self.params}.csv")
+            # Debug logging or CSV export based on debug_mode settings
+            self._debug_actions()
+
         except Exception as e:
-            print(e)
+            print(f"Error in move_forward: {e}")
             import traceback
 
             print(traceback.format_exc())
+
+    def _debug_actions(self):
+        """Handles debug outputs and CSV export if set in debug_mode."""
+        if "statement" in self.params.debug_mode:
+            print(self.base_df[self.debug_cols].tail(30))
+        if "mission_review" in self.params.debug_mode:
+            # 假設每個hunter皆有review_mission方法
+            for hunter in self.hunter.values():
+                print(hunter.review_mission(self.base_df))
+        if "statement_to_csv" in self.params.debug_mode:
+            csv_path = f"{REPORTS_DIR}/{self.params}.csv"
+            self.base_df[self.report_cols].to_csv(csv_path, index=False)
+            print(f"CSV created: {csv_path}")
 
     def callback_order_matched(
         self, client, order_id, order_status, price, position, execute_timestamp
@@ -130,15 +132,7 @@ class HuntingStory:
             print(f"received {order_id} update")
             hunter = self.hunter[client]
             hunter.load_memories(self.base_df)
-            if "statement" in self.params.debug_mode:
-                print(self.base_df[self.debug_cols][-30:])
-            if "mission_review" in self.params.debug_mode:
-                print(hunter.review_mission(self.base_df))
-            if "statement_to_csv" in self.params.debug_mode:
-                self.base_df[self.report_cols].to_csv(
-                    f"{REPORTS_DIR}/{self.params}.csv", index=False
-                )
-                print(f"created: {REPORTS_DIR}/{self.params}.csv")
+            self._debug_actions()
 
 
 def start_journey(sp):
@@ -148,7 +142,6 @@ def start_journey(sp):
     load_df = pd.DataFrame()
     if sp.backtest:
         sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
-        # sensor = MongoMarketSensor(symbol=sp.symbol, interval=sp.interval)
     else:
         sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
 
@@ -370,98 +363,3 @@ def visualize_backtest(df, window_size=60):
     plt.xticks(rotation=45)
     plt.grid(axis="y", linestyle="--", alpha=0.7)
     plt.show()
-
-
-# very good for BTCUSDT day K
-# params = {
-#     "ATR_sample": 15,
-#     "atr_loss_margin": 3,
-#     "hard_cutoff": 0.9,
-#     "profit_loss_ratio": 2,
-#     "bayes_windows": 15,
-#     "lower_sample": 15.0,
-#     "upper_sample": 15.0,
-#     "interval": "1min",
-#     "funds": 100,
-#     "stake_cap": 50,
-#     "symbol": None,
-#     "surfing_level": 3,
-#     "fetch_huobi": False,
-#     "simulate": True,
-# }
-
-
-params = {
-    # Buy
-    "ATR_sample": 60,
-    "bayes_windows": 10,
-    "lower_sample": 60,
-    "upper_sample": 60,
-    # Sell
-    "hard_cutoff": 0.9,
-    "profit_loss_ratio": 3,
-    "atr_loss_margin": 1.5,
-    "surfing_level": 5,
-    # Period
-    "interval": "1day",
-    "funds": 100,
-    "stake_cap": 100,
-    "symbol": None,
-    "backtest": True,
-    "debug_mode": [
-        # "statement",
-        # "statement_to_csv",
-        # "mission_review",
-        "final_statement_to_csv",
-    ],
-}
-import click
-from typing import List
-
-
-@click.command()
-@click.option("--symbol", default="moveusdt", help="Trading symbol (e.g. trxusdt)")
-@click.option("--interval", default="1min", help="Trading interval")
-@click.option("--funds", default=50.2, type=float, help="Available funds")
-@click.option("--cap", default=10.1, type=float, help="Stake cap")
-@click.option(
-    "--deals",
-    default="",
-    help="Comma separated deal IDs",
-)
-@click.option(
-    "--start_deal",
-    default=0,
-    type=int,
-    help="start to load from deal id",
-)
-def main(
-    symbol: str, interval: str, funds: float, cap: float, deals: str, start_deal: int
-):
-    deal_ids = [int(x.strip()) for x in deals.split(",") if x.strip()] if deals else []
-
-    params.update(
-        {
-            "funds": funds,
-            "stake_cap": cap,
-            "symbol": Symbol(symbol),
-            "interval": interval,
-            "backtest": False,
-            "debug_mode": [
-                "statement",
-                "statement_to_csv",
-                "mission_review",
-                "final_statement_to_csv",
-            ],
-            "load_deals": deal_ids,
-            "start_deal": start_deal,
-            "api_key": "fefd13a1-bg2hyw2dfg-440b3c64-576f2",
-            "secret_key": "1a437824-042aa429-0beff3ba-03e26",
-        }
-    )
-    sp = StrategyParam(**params)
-    start_journey(sp)
-
-
-if __name__ == "__main__":
-    main()
