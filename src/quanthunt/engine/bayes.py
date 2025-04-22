@@ -2,8 +2,10 @@ import pandas as pd
 from empiricaldist import Pmf
 import numpy as np
 from scipy.stats import gaussian_kde
-from config import config
+from quanthunt.config.core_config import config
+
 ZERO = config.zero
+
 
 def update(table):
     table["unnorm"] = table["prior"] * table["likelihood"]

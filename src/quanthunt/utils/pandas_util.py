@@ -11,7 +11,7 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 
-from config import config
+from quanthunt.config.core_config import config
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 

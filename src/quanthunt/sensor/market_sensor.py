@@ -1,11 +1,11 @@
 import pandas as pd
 import pymongo
-from ..hunterverse.interface import IMarketSensor
-from ..utils import pandas_util
+from quanthunt.hunterverse.interface import IMarketSensor
+from quanthunt.utils import pandas_util
 import yfinance as yf
 import datetime
 from datetime import timedelta
-from config import config
+from quanthunt.config.core_config import config
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 import os

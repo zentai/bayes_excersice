@@ -9,8 +9,8 @@ import logging
 from sklearn.preprocessing import StandardScaler
 from hmmlearn.hmm import GaussianHMM
 
-from ..hunterverse.interface import IStrategyScout
-from ..utils import pandas_util
+from quanthunt.hunterverse.interface import IStrategyScout
+from quanthunt.utils import pandas_util
 
 logger = logging.getLogger(__name__)
 epsilon = 1e-8
@@ -868,18 +868,18 @@ def debug_hmm(hmm_model, hidden_states, df, X):
     print("\n✅ HMM Debug 完成！請檢查上面的圖表來分析 HMM 是否合理地劃分了市場狀態。")
 
 
-from ..utils import pandas_util
-from ..hunterverse.interface import IStrategyScout
-from ..hunterverse.interface import IMarketSensor
-from ..hunterverse.interface import IEngine
-from ..hunterverse.interface import IHunter
-from ..hunterverse.interface import Symbol
-from ..hunterverse.interface import StrategyParam
-from ..hunterverse.interface import INTERVAL_TO_MIN
-from ..hunterverse.interface import xBuyOrder, xSellOrder
-from ..hunterverse.interface import DEBUG_COL, DUMP_COL
-from ..sensor.market_sensor import HuobiMarketSensor
-from config import config
+from quanthunt.utils import pandas_util
+from quanthunt.hunterverse.interface import IStrategyScout
+from quanthunt.hunterverse.interface import IMarketSensor
+from quanthunt.hunterverse.interface import IEngine
+from quanthunt.hunterverse.interface import IHunter
+from quanthunt.hunterverse.interface import Symbol
+from quanthunt.hunterverse.interface import StrategyParam
+from quanthunt.hunterverse.interface import INTERVAL_TO_MIN
+from quanthunt.hunterverse.interface import xBuyOrder, xSellOrder
+from quanthunt.hunterverse.interface import DEBUG_COL, DUMP_COL
+from quanthunt.sensor.market_sensor import HuobiMarketSensor
+from quanthunt.config.core_config import config
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 

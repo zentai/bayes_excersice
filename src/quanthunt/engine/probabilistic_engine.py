@@ -1,7 +1,7 @@
 import pandas as pd
-from ..bayes import prob_odd, sigmoid, pmf_n_cdf, kde_top
-from ..hunterverse.interface import IEngine
-from ..utils import pandas_util
+from quanthunt.engine.bayes import prob_odd, sigmoid, pmf_n_cdf, kde_top
+from quanthunt.hunterverse.interface import IEngine
+from quanthunt.utils import pandas_util
 
 BAYESIAN_ENGINE_COLUMNS = [
     "Postrior",
