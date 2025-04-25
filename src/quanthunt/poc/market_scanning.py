@@ -15,7 +15,7 @@ from huobi.constant import *
 from .utils import pandas_util
 from .hunterverse.interface import Symbol
 from config import config
-from .cloud_story import DEBUG_COL, params
+from .story import DEBUG_COL, params
 from .sensor.market_sensor import HuobiMarketSensor, YahooMarketSensor
 from .strategy.turtle_trading import TurtleScout
 from .hunterverse.interface import StrategyParam

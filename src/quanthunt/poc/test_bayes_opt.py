@@ -10,7 +10,7 @@ from .hunterverse.interface import Symbol
 from .sensor.market_sensor import LocalMarketSensor
 from .sensor.market_sensor import HuobiMarketSensor
 from .tradingfirm.pubsub_trader import xHunter
-from .cloud_story import HuntingStory, DUMP_COL
+from .story import HuntingStory, DUMP_COL
 from pydispatch import dispatcher
 from config import config
 

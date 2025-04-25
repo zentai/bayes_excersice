@@ -7,7 +7,7 @@ import click
 import os
 from dotenv import load_dotenv
 from quanthunt.hunterverse.interface import StrategyParam
-from quanthunt.cloud_story import start_journey
+from quanthunt.story import start_journey
 from quanthunt.hunterverse.interface import Symbol
 
 # Load API credentials from .env file

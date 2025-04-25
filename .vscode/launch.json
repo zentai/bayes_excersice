@@ -9,7 +9,7 @@
             "type": "python",
             "request": "launch",
             "justMyCode": false,
-            "module": "src.cloud_story",
+            "module": "src.story",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             }
@@ -38,7 +38,7 @@
             "name": "Python 调试程序: 模块",
             "type": "debugpy",
             "request": "launch",
-            "module": "src.cloud_story",
+            "module": "src.story",
             "args": ["--ccy", "turbousdt", "--interval", "60min", "--fund", "100"],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"

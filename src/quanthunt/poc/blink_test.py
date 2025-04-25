@@ -1,5 +1,5 @@
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from . import cloud_story
+from . import story
 from .hunterverse.interface import Symbol, StrategyParam
 from config import config
 import pandas as pd
@@ -11,7 +11,7 @@ DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports
 # Function to handle processing for each stock symbol (this runs in a separate process)
 def process_stock(stock_symbol):
     try:
-        cloud_story.params.update(
+        story.params.update(
             {
                 "interval": "1day",
                 "funds": 100,
@@ -19,8 +19,8 @@ def process_stock(stock_symbol):
                 "symbol": Symbol(stock_symbol),
             }
         )
-        sp = StrategyParam(**cloud_story.params)
-        df, review = cloud_story.start_journey(sp)
+        sp = StrategyParam(**story.params)
+        df, review = story.start_journey(sp)
         print(sp)
         print(review)
 
@@ -84,7 +84,7 @@ if __name__ == "__main__":
 
         # Output the DataFrame for review
         print(df_reviews)
-        cloud_story.params.update(
+        story.params.update(
             {
                 "interval": "1day",
                 "funds": 1000,
@@ -92,7 +92,7 @@ if __name__ == "__main__":
                 "symbol": Symbol(list(stock_list)[0]),
             }
         )
-        sp = StrategyParam(**cloud_story.params)
+        sp = StrategyParam(**story.params)
         df_reviews.to_csv(
             f"{REPORTS_DIR}/reviews_{str(sp).split('_')[-1]}.csv", index=False
         )
