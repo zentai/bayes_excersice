@@ -11,7 +11,7 @@ from quanthunt.story import start_journey
 from quanthunt.hunterverse.interface import Symbol
 
 # Load API credentials from .env file
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 api_key = os.getenv("API_KEY")
 secret_key = os.getenv("SECRET_KEY")
 
