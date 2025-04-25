@@ -408,7 +408,9 @@ class xHunter(IHunter):
         self.on_hold = False
         self.platform = platform or SimHuobi()
         self.dispatcher = dispatcher
-        self.columns = [f"{self.client}{col}" for col in HUNTER_COLUMNS]
+        self.columns = [
+            f"{self.client}{col}" for col in HUNTER_COLUMNS if "Order" not in col
+        ]
         self.sub_market_client()
         self.watchdog = time.time()
         self.latest_candlestick = None

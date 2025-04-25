@@ -1,9 +1,14 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
 import click
 import os
 from dotenv import load_dotenv
-from .hunterverse.interface import StrategyParam
-from .cloud_story import start_journey
-from hunterverse.interface import Symbol
+from quanthunt.hunterverse.interface import StrategyParam
+from quanthunt.cloud_story import start_journey
+from quanthunt.hunterverse.interface import Symbol
 
 # Load API credentials from .env file
 load_dotenv()

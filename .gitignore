@@ -163,3 +163,5 @@ cython_debug/
 */*.csv
 data/*.csv
 .env
+
+src/huobi

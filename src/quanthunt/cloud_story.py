@@ -88,6 +88,8 @@ class HuntingStory:
             for h in self.hunter.values():
                 message = pandas_util.equip_fields(message, h.columns)
 
+            message["Count_Hz"] = to_hz(self.params, message.Count)
+            message["Amount_Hz"] = to_hz(self.params, message.Amount)
             # Concatenate and remove duplicated rows
             self.base_df = pd.concat([self.base_df, message], ignore_index=True)
             self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
@@ -133,6 +135,25 @@ class HuntingStory:
             self._debug_actions()
 
 
+def to_hz(sp, value):
+    """
+    将任意值转换为每秒的频率(Hz)
+
+    Args:
+        sp: 策略参数对象，包含interval信息
+        value: 需要转换的值
+
+    Returns:
+        float: 转换后的Hz值
+
+    例如:
+    - 5分钟间隔,value=100,则Hz = 100/(5*60) = 0.333Hz
+    - 1分钟间隔,value=60,则Hz = 60/(1*60) = 1Hz
+    """
+    minutes_interval = INTERVAL_TO_MIN.get(sp.interval)
+    return value / (minutes_interval * 60)
+
+
 def start_journey(sp):
     base_df = None
     # camp = HuntingCamp(sp)
@@ -150,7 +171,6 @@ def start_journey(sp):
 
     # 合并 load_df 和 update_df，成为 base_df
     base_df = pd.concat([load_df, update_df], ignore_index=True)
-
     scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
     engine = BayesianEngine(params=sp)
     import copy
@@ -164,6 +184,8 @@ def start_journey(sp):
     }
 
     base_df = sensor.scan(2000 if not sp.backtest else 100)
+    base_df["Count_Hz"] = to_hz(sp, base_df.Count)
+    base_df["Amount_Hz"] = to_hz(sp, base_df.Amount)
     base_df = scout.train(base_df)
     hunter["x"].load_memories(base_df)
 

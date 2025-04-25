@@ -2,12 +2,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import sys
 import os
+import logging
 import pandas as pd
 import warnings
 from dotenv import load_dotenv
 
 # 加载 .env 文件中的环境变量
 load_dotenv()
+logging.getLogger("huobi-client").setLevel(logging.WARNING)
 
 # 忽略 pandas 的未來警告
 warnings.filterwarnings("ignore", category=FutureWarning)
