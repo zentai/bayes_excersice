@@ -211,6 +211,7 @@ DUMP_COL = [
     "Close",
     "HMM_State",
     "Kalman",
+    "Count",
     "Vol",
     "turtle_h",
     "BuySignal",
