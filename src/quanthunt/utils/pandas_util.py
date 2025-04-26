@@ -150,3 +150,8 @@ def setup_scheduler():
     )
 
     return scheduler
+
+
+def to_hz(interval: str, value: float) -> float:
+    minutes_interval = INTERVAL_TO_MIN.get(interval)
+    return value / (minutes_interval * 60)

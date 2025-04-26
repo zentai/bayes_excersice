@@ -2,6 +2,7 @@
 import datetime
 import threading
 import time
+import traceback
 
 # Third-party libraries
 import pandas as pd
@@ -51,11 +52,6 @@ def hunter_pause(interval: str):
     time.sleep(sleep_seconds)
 
 
-def to_hz(interval: str, value: float) -> float:
-    minutes_interval = INTERVAL_TO_MIN.get(interval)
-    return value / (minutes_interval * 60)
-
-
 @dataclass
 class HuntingStory:
     params: StrategyParam
@@ -67,13 +63,13 @@ class HuntingStory:
     debug_cols: str
     report_cols: str
 
-    def pub_market_sensor(self, sp):
+    def pub_market_sensor(self):
         def run():
             while self.sensor.left():
                 try:
                     k = self.sensor.fetch_one()
                     dispatcher.send(signal="k_channel", message=k)
-                    hunter_pause(sp.interval)
+                    hunter_pause(self.params.interval)
                 except Exception as e:
                     print(f"error: {e}")
 
@@ -81,11 +77,8 @@ class HuntingStory:
 
     def move_forward(self, message):
         try:
-            # FIXMIE: we can use better logic
-            for h in self.hunter.values():
-                message = pandas_util.equip_fields(message, h.columns)
-            message["Count_Hz"] = to_hz(self.params.interval, message.Count)
-            message["Amount_Hz"] = to_hz(self.params.interval, message.Amount)
+            required_columns = set().union(*(h.columns for h in self.hunter.values()))
+            message = pandas_util.equip_fields(message, list(required_columns))
             self.base_df = pd.concat([self.base_df, message], ignore_index=True)
             self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
             self.base_df = self.scout.market_recon(self.base_df)
@@ -97,8 +90,6 @@ class HuntingStory:
 
         except Exception as e:
             print(f"Error in move_forward: {e}")
-            import traceback
-
             print(traceback.format_exc())
 
     def _debug_actions(self):
@@ -149,9 +140,6 @@ def start_journey(sp):
         "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
     }
 
-    base_df = sensor.scan(2000 if not sp.backtest else 100)
-    base_df["Count_Hz"] = to_hz(sp.interval, base_df.Count)
-    base_df["Amount_Hz"] = to_hz(sp.interval, base_df.Amount)
     base_df = scout.train(base_df)
     hunter["x"].load_memories(base_df)
 
@@ -172,7 +160,7 @@ def start_journey(sp):
     )
     story.setup_dispatcher()
 
-    pub_thread = story.pub_market_sensor(sp)
+    pub_thread = story.pub_market_sensor()
     pub_thread.start()
     pub_thread.join()
 

@@ -55,6 +55,8 @@ TURTLE_COLUMNS = [
     "HMM_State",
     "UP_State",
     "adjusted_margin",
+    "Count_Hz",
+    "Amount_Hz",
 ]
 
 
@@ -463,6 +465,8 @@ class TurtleScout(IStrategyScout):
 
         df = base_df.iloc[start_idx:].copy()
         idx = df.ATR.isna()
+        df.loc[idx, "Count_Hz"] = pandas_util.to_hz(self.params.interval, df.Count)
+        df.loc[idx, "Amount_Hz"] = pandas_util.to_hz(self.params.interval, df.Amount)
         df.loc[idx, "turtle_h"] = df.High.shift(1).rolling(upper_sample).max()
         df.loc[idx, "turtle_l"] = df.Low.shift(1).rolling(lower_sample).min()
         df.loc[idx, "h_l"] = df.High - df.Low
