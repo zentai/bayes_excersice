@@ -5,52 +5,14 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python 调试程序: 模块",
-            "type": "python",
-            "request": "launch",
-            "justMyCode": false,
-            "module": "src.story",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            }
-        },
-        {
-            "name": "Python 调试程序: 模块",
-            "type": "python",
-            "request": "launch",
-            "justMyCode": false,
-            "module": "src.test_real",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            }
-        },
-        {
-            "name": "Python 调试程序: 模块",
-            "type": "python",
-            "request": "launch",
-            "module": "src.tradingfirm.platforms.huobi_api",
-            "args": [],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}/src"
-            }
-        },
-        {
-            "name": "Python 调试程序: 模块",
+            "name": "Run QuantHunt (run.py)",
             "type": "debugpy",
             "request": "launch",
-            "module": "src.story",
-            "args": ["--ccy", "turbousdt", "--interval", "60min", "--fund", "100"],
+            "program": "${workspaceFolder}/run.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
             "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            }
-        },
-        {
-            "name": "Python 调试程序: 模块",
-            "type": "python",
-            "request": "launch",
-            "module": "src.portfolio",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
+                "PYTHONPATH": "${workspaceFolder}/src"
             }
         },
     ]

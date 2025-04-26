@@ -73,7 +73,7 @@ class HuntingStory:
                 try:
                     k = self.sensor.fetch_one()
                     dispatcher.send(signal="k_channel", message=k)
-                    hunter_pause(sp)
+                    hunter_pause(sp.interval)
                 except Exception as e:
                     print(f"error: {e}")
 
@@ -131,22 +131,13 @@ class HuntingStory:
 
 
 def start_journey(sp):
-    base_df = None
-    # camp = HuntingCamp(sp)
-    # load_df = camp.load()
-    load_df = pd.DataFrame()
-    if sp.backtest:
-        sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
-    else:
-        sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
-
-    # 移除 load_df 中已存在的日期部分
-    update_df = sensor.scan(2000 if not sp.backtest else 100)
-    if not load_df.empty:
-        update_df = update_df[~update_df["Date"].isin(load_df["Date"])]
-
-    # 合并 load_df 和 update_df，成为 base_df
-    base_df = pd.concat([load_df, update_df], ignore_index=True)
+    sensor = (
+        LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
+        if sp.backtest
+        else HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
+    )
+    camp = HuntingCamp(sp, sensor)
+    base_df = camp.update()
     scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
     engine = BayesianEngine(params=sp)
 
