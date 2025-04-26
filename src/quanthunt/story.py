@@ -46,9 +46,7 @@ def hunter_pause(interval: str):
         minutes=next_interval
     )
     sleep_seconds = (next_time - now).total_seconds() + 5
-    print(
-        f"Next scan at {datetime.datetime.now() + datetime.timedelta(seconds=sleep_seconds)}\n"
-    )
+    print(f"Pausing {sleep_seconds:.1f}s, until {next_time}")
     time.sleep(sleep_seconds)
 
 
@@ -71,7 +69,8 @@ class HuntingStory:
                     dispatcher.send(signal="k_channel", message=k)
                     hunter_pause(self.params.interval)
                 except Exception as e:
-                    print(f"error: {e}")
+                    print(f"Error in pub_market_sensor: {e}")
+                    print(traceback.format_exc())
 
         return threading.Thread(target=run)
 
@@ -96,9 +95,13 @@ class HuntingStory:
         if "statement" in self.params.debug_mode:
             print(self.base_df[self.debug_cols].tail(30))
         if "mission_review" in self.params.debug_mode:
-            # FIXME: no need to loop all hunter
-            for hunter in self.hunter.values():
-                print(hunter.review_mission(self.base_df))
+            target_key = "s" if self.params.backtest else "x"
+            if target_key in self.hunter:
+                symbol = self.params.symbol.name.replace("usdt", "/usdt")
+                client = target_key.upper()
+                now = datetime.datetime.now().strftime("%H:%M:%S")
+                print(f"\n\033[32m✅ [{now}] {symbol} | {client} Review\033[0m")
+                print(self.hunter[target_key].review_mission(self.base_df))
         if "statement_to_csv" in self.params.debug_mode:
             csv_path = f"{config.reports_dir}/{self.params}.csv"
             self.base_df[self.report_cols].to_csv(csv_path, index=False)
@@ -108,7 +111,6 @@ class HuntingStory:
         self, client, order_id, order_status, price, position, execute_timestamp
     ):
         if client == "x":
-            print(f"received {order_id} update")
             hunter = self.hunter[client]
             hunter.load_memories(self.base_df)
             self._debug_actions()
@@ -135,17 +137,14 @@ def start_journey(sp):
     bsp = copy.deepcopy(sp)
     bsp.funds = 1000000
     hunter = {
-        "s": xHunter("s", params=sp),
-        # "b": xHunter("b", params=sp),
+        "s": xHunter("s", params=bsp),
         "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
     }
 
     base_df = scout.train(base_df)
     hunter["x"].load_memories(base_df)
-
-    debug_cols = DEBUG_COL + sum(
-        [h.columns for h in hunter.values() if h.client == "x"], []
-    )
+    target_key = "s" if sp.backtest else "x"
+    debug_cols = DEBUG_COL + hunter[target_key].columns
     report_cols = DUMP_COL + sum([h.columns for h in hunter.values()], [])
 
     story = HuntingStory(

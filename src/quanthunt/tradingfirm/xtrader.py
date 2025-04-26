@@ -498,6 +498,8 @@ class xHunter(IHunter):
             self.platform.place_order(sell_order)
 
     def load_memories(self, df, fetch=True):
+        if self.client != "x":
+            return
         deals = self.params.load_deals
         start_deal = self.params.start_deal
 

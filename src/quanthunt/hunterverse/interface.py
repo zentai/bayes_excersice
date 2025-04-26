@@ -171,7 +171,6 @@ DEBUG_COL = [
     # "Low",
     "Close",
     "Count_Hz",
-    "Amount_Hz",
     # "turtle_h",
     # "ema_short",
     # "ema_long",
@@ -253,5 +252,4 @@ DUMP_COL = [
     "UP_State",
     "Slope",
     "Count_Hz",
-    "Amount_Hz",
 ]
