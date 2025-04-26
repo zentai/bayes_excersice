@@ -2,21 +2,17 @@
 import datetime
 import threading
 import time
-import signal
-import sys
-import copy
 
 # Third-party libraries
 import pandas as pd
-import numpy as np
 from dataclasses import dataclass
-from typing import Dict, List
-import matplotlib.pyplot as plt
-import seaborn as sns
+from typing import Dict
 from pydispatch import dispatcher
-import click
+import copy
 
 # Internal modules
+from quanthunt.sensor.market_sensor import LocalMarketSensor, HuobiMarketSensor
+from quanthunt.hunterverse.storage import HuntingCamp
 from quanthunt.strategy.turtle_trading import TurtleScout, emv_cross_strategy
 from quanthunt.engine.probabilistic_engine import BayesianEngine
 from quanthunt.utils import pandas_util
@@ -25,7 +21,6 @@ from quanthunt.hunterverse.interface import (
     IMarketSensor,
     IEngine,
     IHunter,
-    Symbol,
     StrategyParam,
     INTERVAL_TO_MIN,
     DEBUG_COL,
@@ -42,20 +37,23 @@ from quanthunt.tradingfirm.xtrader import (
 from quanthunt.config.core_config import config
 
 
-def hunter_pause(sp):
-    if sp.backtest:
-        return
+def hunter_pause(interval: str):
     now = datetime.datetime.now()
-    minutes_interval = INTERVAL_TO_MIN.get(sp.interval)
+    minutes_interval = INTERVAL_TO_MIN.get(interval)
     next_interval = (now.minute // minutes_interval + 1) * minutes_interval
     next_time = now.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(
         minutes=next_interval
     )
-    sleep_seconds = (next_time - now).total_seconds() + 5  # add extra 5 seconds buffer
+    sleep_seconds = (next_time - now).total_seconds() + 5
     print(
         f"Next scan at {datetime.datetime.now() + datetime.timedelta(seconds=sleep_seconds)}\n"
     )
     time.sleep(sleep_seconds)
+
+
+def to_hz(interval: str, value: float) -> float:
+    minutes_interval = INTERVAL_TO_MIN.get(interval)
+    return value / (minutes_interval * 60)
 
 
 @dataclass
@@ -82,28 +80,19 @@ class HuntingStory:
         return threading.Thread(target=run)
 
     def move_forward(self, message):
-        """Process incoming market data and update internal state."""
         try:
-            # Equip fields across all hunters
+            # FIXMIE: we can use better logic
             for h in self.hunter.values():
                 message = pandas_util.equip_fields(message, h.columns)
-
-            message["Count_Hz"] = to_hz(self.params, message.Count)
-            message["Amount_Hz"] = to_hz(self.params, message.Amount)
-            # Concatenate and remove duplicated rows
+            message["Count_Hz"] = to_hz(self.params.interval, message.Count)
+            message["Amount_Hz"] = to_hz(self.params.interval, message.Amount)
             self.base_df = pd.concat([self.base_df, message], ignore_index=True)
             self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
-
-            # Update market information with scout and engine processing
             self.base_df = self.scout.market_recon(self.base_df)
             self.base_df = self.engine.hunt_plan(self.base_df)
-
-            # Process each hunter's phases
             for hunter in self.hunter.values():
                 hunter.load_memories(self.base_df)
                 hunter.strike_phase(lastest_candlestick=self.base_df.iloc[-1])
-
-            # Debug logging or CSV export based on debug_mode settings
             self._debug_actions()
 
         except Exception as e:
@@ -113,11 +102,10 @@ class HuntingStory:
             print(traceback.format_exc())
 
     def _debug_actions(self):
-        """Handles debug outputs and CSV export if set in debug_mode."""
         if "statement" in self.params.debug_mode:
             print(self.base_df[self.debug_cols].tail(30))
         if "mission_review" in self.params.debug_mode:
-            # 假設每個hunter皆有review_mission方法
+            # FIXME: no need to loop all hunter
             for hunter in self.hunter.values():
                 print(hunter.review_mission(self.base_df))
         if "statement_to_csv" in self.params.debug_mode:
@@ -134,24 +122,12 @@ class HuntingStory:
             hunter.load_memories(self.base_df)
             self._debug_actions()
 
-
-def to_hz(sp, value):
-    """
-    将任意值转换为每秒的频率(Hz)
-
-    Args:
-        sp: 策略参数对象，包含interval信息
-        value: 需要转换的值
-
-    Returns:
-        float: 转换后的Hz值
-
-    例如:
-    - 5分钟间隔,value=100,则Hz = 100/(5*60) = 0.333Hz
-    - 1分钟间隔,value=60,则Hz = 60/(1*60) = 1Hz
-    """
-    minutes_interval = INTERVAL_TO_MIN.get(sp.interval)
-    return value / (minutes_interval * 60)
+    def setup_dispatcher(self):
+        dispatcher.connect(self.move_forward, signal="k_channel")
+        for h in self.hunter.values():
+            dispatcher.connect(
+                self.callback_order_matched, signal=h.platform.TOPIC_ORDER_MATCHED
+            )
 
 
 def start_journey(sp):
@@ -173,7 +149,6 @@ def start_journey(sp):
     base_df = pd.concat([load_df, update_df], ignore_index=True)
     scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
     engine = BayesianEngine(params=sp)
-    import copy
 
     bsp = copy.deepcopy(sp)
     bsp.funds = 1000000
@@ -184,8 +159,8 @@ def start_journey(sp):
     }
 
     base_df = sensor.scan(2000 if not sp.backtest else 100)
-    base_df["Count_Hz"] = to_hz(sp, base_df.Count)
-    base_df["Amount_Hz"] = to_hz(sp, base_df.Amount)
+    base_df["Count_Hz"] = to_hz(sp.interval, base_df.Count)
+    base_df["Amount_Hz"] = to_hz(sp.interval, base_df.Amount)
     base_df = scout.train(base_df)
     hunter["x"].load_memories(base_df)
 
@@ -204,21 +179,16 @@ def start_journey(sp):
         debug_cols=debug_cols,
         report_cols=report_cols,
     )
-    dispatcher.connect(story.move_forward, signal="k_channel")
-    for h in hunter.values():
-        dispatcher.connect(
-            story.callback_order_matched, signal=h.platform.TOPIC_ORDER_MATCHED
-        )
+    story.setup_dispatcher()
+
     pub_thread = story.pub_market_sensor(sp)
     pub_thread.start()
     pub_thread.join()
-    # print(story.base_df[report_cols])
-    # review = story.hunter.review_mission(story.base_df)
-    # sensor.db.save(collection_name=f"{sp.symbol.name}_review", df=review)
+
     if "final_statement_to_csv" in sp.debug_mode:
         review = story.hunter["s"].review_mission(story.base_df)
         print(review)
         story.base_df[report_cols].to_csv(f"{config.reports_dir}/{sp}.csv", index=False)
         print(f"created: {config.reports_dir}/{sp}.csv")
-    # visualize_backtest(story.base_df)
+
     return story.base_df[report_cols], story.hunter["s"].review_mission(story.base_df)
