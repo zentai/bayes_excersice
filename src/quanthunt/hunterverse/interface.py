@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import Optional, List
 from datetime import datetime
 
+ZERO = 1e-8
+
 INTERVAL_TO_MIN = {
     "1min": 1,
     "5min": 5,

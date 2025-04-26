@@ -1,4 +1,5 @@
 import logging
+import os
 
 import numpy as np
 import pandas as pd
@@ -6,11 +7,10 @@ import statistics
 from sklearn.preprocessing import StandardScaler
 from hmmlearn.hmm import GaussianHMM
 
-from quanthunt.hunterverse.interface import IStrategyScout
+from quanthunt.hunterverse.interface import IStrategyScout, ZERO
 from quanthunt.utils import pandas_util
 
 logger = logging.getLogger(__name__)
-epsilon = 1e-8
 
 # FIXME: move some columns to IEngine
 TURTLE_COLUMNS = [
@@ -100,7 +100,7 @@ class TurtleScout(IStrategyScout):
             df.loc[mask, "Kalman"]
             / (
                 df["Kalman"].shift(1).rolling(window=60, min_periods=5).mean()[mask]
-                + epsilon
+                + ZERO
             )
         )
 
@@ -113,9 +113,9 @@ class TurtleScout(IStrategyScout):
         # df.loc[mask, "RVolume"] = df.loc[mask, "Vol"] / vol_rolling
 
         rolling_mean = (
-            df.loc[mask, "Vol"].rolling(window=windows, min_periods=5).mean() + epsilon
+            df.loc[mask, "Vol"].rolling(window=windows, min_periods=5).mean() + ZERO
         )
-        df.loc[mask, "RVolume"] = np.log((df.loc[mask, "Vol"] + epsilon) / rolling_mean)
+        df.loc[mask, "RVolume"] = np.log((df.loc[mask, "Vol"] + ZERO) / rolling_mean)
 
         # df.loc[mask, "RVolume"] = df["volatility"][mask]
 
@@ -431,7 +431,7 @@ def calc_Kalman_Price(df, windows=60, Q=1e-3, R=1e-3, alpha=0.6, gamma=0.2, beta
     df.loc[mask_new, "local_low"] = (
         df.Kalman.rolling(windows * 2, min_periods=1, closed="left").min().shift(1)
     )
-    slope = (df.Kalman - df.local_low + epsilon) / (windows * 2)
+    slope = (df.Kalman - df.local_low + ZERO) / (windows * 2)
     df.loc[mask_new, "Slope"] = slope[mask_new]
     return df
 
@@ -679,115 +679,46 @@ from quanthunt.config.core_config import config
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
 if __name__ == "__main__":
-    params = {
-        # Buy
-        "ATR_sample": 60,
-        "bayes_windows": 10,
-        "lower_sample": 60,
-        "upper_sample": 60,
-        # Sell
-        "hard_cutoff": 0.9,
-        "profit_loss_ratio": 3,
-        "atr_loss_margin": 1.5,
-        "surfing_level": 5,
-        # Period
-        "interval": "1day",
-        "funds": 100,
-        "stake_cap": 100,
-        "symbol": None,
-        "backtest": True,
-        "debug_mode": [
-            # "statement",
-            # "statement_to_csv",
-            # "mission_review",
-            "final_statement_to_csv",
-        ],
-    }
-
     import click
-    from typing import List
 
     @click.command()
     @click.option("--symbol", default="moveusdt", help="Trading symbol (e.g. trxusdt)")
     @click.option("--interval", default="1min", help="Trading interval")
-    @click.option("--funds", default=50.2, type=float, help="Available funds")
-    @click.option("--cap", default=10.1, type=float, help="Stake cap")
-    @click.option(
-        "--deals",
-        default="",
-        help="Comma separated deal IDs",
-    )
-    @click.option(
-        "--start_deal",
-        default=0,
-        type=int,
-        help="start to load from deal id",
-    )
     def main(
         symbol: str,
         interval: str,
-        funds: float,
-        cap: float,
-        deals: str,
-        start_deal: int,
     ):
-        """
-        调试用主函数，用于测试策略参数和运行回测
-        """
-        deal_ids = (
-            [int(x.strip()) for x in deals.split(",") if x.strip()] if deals else []
-        )
-
-        params.update(
-            {
-                "funds": funds,
-                "stake_cap": cap,
-                "symbol": Symbol(symbol),
-                "interval": interval,
-                "backtest": False,
-                "debug_mode": [
-                    "statement",
-                    "statement_to_csv",
-                    "mission_review",
-                    "final_statement_to_csv",
-                ],
-                "load_deals": deal_ids,
-                "start_deal": start_deal,
-                "api_key": "fefd13a1-bg2hyw2dfg-440b3c64-576f2",
-                "secret_key": "1a437824-042aa429-0beff3ba-03e26",
-            }
-        )
+        params = {
+            "ATR_sample": 60,
+            "bayes_windows": 10,
+            "lower_sample": 60,
+            "upper_sample": 60,
+            "hard_cutoff": 0.9,
+            "profit_loss_ratio": 3,
+            "atr_loss_margin": 1.5,
+            "surfing_level": 5,
+            "interval": interval,
+            "funds": 50,
+            "stake_cap": 10,
+            "symbol": Symbol(symbol),
+            "backtest": True,
+            "debug_mode": ["statement"],
+            "api_key": os.getenv("API_KEY"),
+            "secret_key": os.getenv("SECRET_KEY"),
+        }
         sp = StrategyParam(**params)
 
-        # 调试用代码块
-        base_df = None
-        load_df = pd.DataFrame()
         sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
-
-        # 移除 load_df 中已存在的日期部分
-        update_df = sensor.scan(2000 if not sp.backtest else 100)
-        if not load_df.empty:
-            update_df = update_df[~update_df["Date"].isin(load_df["Date"])]
-
-        # 合并 load_df 和 update_df，成为 base_df
-        base_df = pd.concat([load_df, update_df], ignore_index=True)
+        base_df = sensor.scan(200)
 
         scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
-        import copy
-
-        bsp = copy.deepcopy(sp)
-        bsp.funds = 1000000
-
-        base_df = sensor.scan(2000 if not sp.backtest else 100)
+        scout = TurtleScout(sp)
         base_df = scout.train(base_df)
         base_df = scout.market_recon(base_df)
-
         report_cols = DUMP_COL
 
-        if "final_statement_to_csv" in sp.debug_mode:
-            base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
-            print(f"created: {REPORTS_DIR}/{sp}.csv")
-        # visualize_backtest(base_df)
+        base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
+        print(f"created: {REPORTS_DIR}/{sp}.csv")
         return base_df[report_cols]
 
     main()
