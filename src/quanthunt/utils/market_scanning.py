@@ -9,13 +9,14 @@ import click
 from huobi.client.market import MarketClient
 from huobi.constant import CandlestickInterval
 from quanthunt.utils.telegram_helper import telegram_msg
+import traceback
 
 INTERVAL_MAP: Dict[str, CandlestickInterval] = {
     "1min": CandlestickInterval.MIN1,
     "5min": CandlestickInterval.MIN5,
     "15min": CandlestickInterval.MIN15,
     "30min": CandlestickInterval.MIN30,
-    "1hour": CandlestickInterval.MIN60,
+    "60min": CandlestickInterval.MIN60,
 }
 
 
@@ -43,10 +44,53 @@ def calc_avg_hz(
     try:
         candles = mc.get_candlestick(symbol, interval_const, size)
         hz_list = [c.count / period_sec for c in candles if c and c.count is not None]
+        import os
+        from quanthunt.hunterverse.interface import StrategyParam
+        from quanthunt.hunterverse.interface import Symbol
+        from quanthunt.strategy.turtle_trading import TurtleScout, emv_cross_strategy
+        from quanthunt.tradingfirm.platforms.huobi_api import Candlestick
 
+        candlesticks = [
+            Candlestick(
+                stick.id,
+                stick.high,
+                stick.low,
+                stick.open,
+                stick.close,
+                stick.amount,
+                stick.count,
+                stick.vol,
+            )
+            for stick in candles
+        ]
+        base_df = pd.DataFrame(candlesticks)
+
+        params = {
+            "ATR_sample": 60,
+            "bayes_windows": 10,
+            "lower_sample": 60,
+            "upper_sample": 60,
+            "hard_cutoff": 0.9,
+            "profit_loss_ratio": 3,
+            "atr_loss_margin": 1.5,
+            "surfing_level": 5,
+            "interval": "5min",
+            "funds": 50,
+            "stake_cap": 10,
+            "symbol": Symbol(symbol),
+            "backtest": True,
+            "debug_mode": ["statement"],
+            "api_key": os.getenv("API_KEY"),
+            "secret_key": os.getenv("SECRET_KEY"),
+        }
+        sp = StrategyParam(**params)
+        scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
+        scout = TurtleScout(sp)
+        base_df = scout.train(base_df)
         if not hz_list:
             return {
                 "symbol": symbol,
+                "HMM": 0,
                 "avg_hz": 0.0,
                 "std_hz": 0.0,
                 "max_hz": 0.0,
@@ -59,12 +103,14 @@ def calc_avg_hz(
         std_hz = stdev(hz_list) if len(hz_list) > 1 else 0.0
         result = {
             "symbol": symbol,
+            "HMM": base_df.UP_State.iloc[-1],
             "avg_hz": avg_hz,
             "std_hz": std_hz,
             "max_hz": max(hz_list),
             "min_hz": min(hz_list),
             "hz_list": hz_list,
             "valid_points": len(hz_list),
+            "link": f"https://www.htx.com/trade/{symbol.replace('usdt', '_usdt')}/",
         }
 
         if debug:
@@ -74,8 +120,10 @@ def calc_avg_hz(
         return result
     except Exception as e:
         print(f"[ERROR] 拉取 {symbol} 出错: {e}")
+        # print(traceback.format_exc())
         return {
             "symbol": symbol,
+            "HMM": 0,
             "avg_hz": 0.0,
             "std_hz": 0.0,
             "max_hz": 0.0,
@@ -108,7 +156,7 @@ def run_once(
     for i, sym in enumerate(symbols):
         click.echo(f"[...] 正在处理 {i+1}/{len(symbols)}: {sym}")
         res = calc_avg_hz(mc, sym, interval_const, size, period_sec)
-        if res["avg_hz"] >= hz_threshold:
+        if res["avg_hz"] >= hz_threshold and res["HMM"] == 1:
             rows.append(res)
 
     if not rows:
@@ -121,14 +169,14 @@ def run_once(
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     click.echo(f"\n[✓] {timestamp} 结果共 {len(df)} 项，按 Hz 降序排序：")
     click.echo(
-        df[["symbol", "avg_hz", "std_hz"]].to_string(
+        df[["symbol", "avg_hz", "std_hz", "link"]].to_string(
             index=False,
             formatters={"avg_hz": "{:.2f}".format, "std_hz": "{:.2f}".format},
         )
     )
-    telegram_msg(
-        f"""<pre>{df[["symbol", "avg_hz", "std_hz"]].to_markdown(index=False)}</pre>"""
-    )
+    # telegram_msg(
+    #     f"""<pre>{df[["symbol", "avg_hz", "std_hz"]].to_markdown(index=False)}</pre>"""
+    # )
 
 
 @click.command()

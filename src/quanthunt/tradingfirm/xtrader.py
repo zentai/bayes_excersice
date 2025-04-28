@@ -649,15 +649,15 @@ class xHunter(IHunter):
         if all(
             [
                 lastest_candlestick.BuySignal,
-                lastest_candlestick.HMM_State == lastest_candlestick.UP_State,
+                lastest_candlestick.UP_State == 1,
                 self.gainsbag.is_enough_cash(),
                 not self.on_hold,
             ]
         ):
             cutoff_price = self.gainsbag.cutoff_price(self.params.hard_cutoff)
-            exit_price = (
-                min(lastest_candlestick.exit_price, cutoff_price)
-                or lastest_candlestick.exit_price
+            exit_price = min(
+                lastest_candlestick.exit_price,
+                (cutoff_price or lastest_candlestick.exit_price),
             )
             if (strike / exit_price) < 1.002:
                 print(

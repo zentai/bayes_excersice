@@ -67,36 +67,53 @@ class TurtleScout(IStrategyScout):
         self.buy_signal_func = buy_signal_func or self._simple_turtle_strategy
         self.scaler = None
         self.hmm_model = None
+        self.scaler = StandardScaler()
+        self.hmm_model = GaussianHMM(
+            n_components=5, covariance_type="full", n_iter=4000, random_state=42
+        )
 
     def train(self, df):
-        windows = self.params.bayes_windows
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
         df = self._calc_ATR(df)
         df = self._calc_OBV(df)
-
-        self.scaler = StandardScaler()
-        self.hmm_model = GaussianHMM(
-            n_components=2, covariance_type="full", n_iter=4000, random_state=42
-        )
-
-        X = self._calc_HMM_input(df, windows, self.scaler)
-        self.hmm_model.fit(X)
-        hidden_states = self.hmm_model.predict(X)
-        df["HMM_State"] = hidden_states
-
-        # debug_hmm(self.hmm_model, hidden_states, df, X)
-
-        HMM_0 = df[df.HMM_State == 0].Slope.median()
-        HMM_1 = df[df.HMM_State == 1].Slope.median()
-        df["UP_State"] = int(HMM_1 > HMM_0)
+        df = self.train_hmm(df)
         df = self._calc_profit(df)
         return df
 
-    def _calc_HMM_input(self, df, windows, scaler):
+    def define_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        自动定义UP_State，只补充未定义的部分，不覆盖已有UP_State。
+        """
+        slope_median = df.groupby("HMM_State")["Slope"].median()
+        up_state = slope_median.idxmax()
+        s = df["UP_State"].isna()
+        df.loc[s, "UP_State"] = (df.loc[s, "HMM_State"] == up_state).astype(int)
+        # Old code
+        # HMM_0 = df[df.HMM_State == 0].Slope.median()
+        # HMM_1 = df[df.HMM_State == 1].Slope.median()
+        # df["UP_State"] = int(HMM_1 > HMM_0)
+        return df
+
+    def train_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
+        X = self._prepare_hmm_features(df)
+        self.hmm_model.fit(X)
+        hidden_states = self.hmm_model.predict(X)
+        mask = df["HMM_State"].isna()
+        df.loc[mask, "HMM_State"] = hidden_states[mask]
+        df = self.define_market_states(df)
+
+        # # 选配 debug
+        # if getattr(self, "debug_mode", False):
+        #     debug_hmm(self.hmm_model, hidden_states, df, X)
+
+        return df
+
+    def _prepare_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
+        windows = self.params.bayes_windows
         df = calc_Kalman_Price(df, windows=windows)
         mask = df["KReturn"].isna()
+
         df.loc[mask, "KReturn"] = np.log(
-            # df.loc[mask, "Kalman"] / df["Kalman"].shift(1)[mask]
             df.loc[mask, "Kalman"]
             / (
                 df["Kalman"].shift(1).rolling(window=60, min_periods=5).mean()[mask]
@@ -108,26 +125,22 @@ class TurtleScout(IStrategyScout):
             df["KReturn"].rolling(window=windows, min_periods=5).mean()
         )
 
-        # 计算 RVolume：log(Vol / Vol_rolling), Vol_rolling 为 Vol 的 rolling 均值
-        # vol_rolling = df.loc[mask, "Vol"].rolling(window=windows, min_periods=1).mean()
-        # df.loc[mask, "RVolume"] = df.loc[mask, "Vol"] / vol_rolling
-
         rolling_mean = (
             df.loc[mask, "Vol"].rolling(window=windows, min_periods=5).mean() + ZERO
         )
         df.loc[mask, "RVolume"] = np.log((df.loc[mask, "Vol"] + ZERO) / rolling_mean)
 
-        # df.loc[mask, "RVolume"] = df["volatility"][mask]
+        features = ["KReturnVol", "RVolume", "Slope", "OBV_MA"]
+        df[features] = df[features].fillna(method="bfill")
+        return self.scaler.fit_transform(df[features].values)
 
-        # 填充 KReturnVol 和 RVolume 的缺失值, 采用向后填充策略
-        df.loc[:, ["KReturnVol", "RVolume", "Slope", "OBV_MA"]] = df.loc[
-            :, ["KReturnVol", "RVolume", "Slope", "OBV_MA"]
-        ].fillna(method="bfill")
-
-        # features = df[["KReturnVol", "RVolume", "Slope"]].values
-        features = df[["KReturnVol", "RVolume", "Slope", "OBV_MA"]].values
-        X = scaler.fit_transform(features)
-        return X
+    def predict_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
+        X = self._prepare_hmm_features(df)
+        hidden_states = self.hmm_model.predict(X)
+        mask = df["HMM_State"].isna()
+        df.loc[mask, "HMM_State"] = hidden_states[mask]
+        df = self.define_market_states(df)
+        return df
 
     def adjust_exit_price_by_slope(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -144,11 +157,9 @@ class TurtleScout(IStrategyScout):
         # ===【参数载入】===
         up_state = df.iloc[-1].UP_State  # 关键字：HMM、上升趋势状态
         slope_col = "Slope"
-        hmm_col = "HMM_State"
-        atr_margin_max = self.params.atr_loss_margin  # 关键字：ATR最大门槛
-        atr_margin_min = getattr(
-            self.params, "atr_margin_min", 0.1
-        )  # 可调，关键字：最小止损门槛
+        up_col = "UP_State"
+        atr_margin_max = self.params.atr_loss_margin
+        atr_margin_min = getattr(self.params, "atr_margin_min", 0.1)
 
         # ===【趋势强弱】Slope 已预先存在，避免重复计算===
         slope = df[slope_col]
@@ -168,7 +179,7 @@ class TurtleScout(IStrategyScout):
         dynamic_margin = atr_margin_min + (atr_margin_max - atr_margin_min) * normalized
 
         # ===【趋势判断：若为上升趋势，保持最大margin，否则使用动态margin】===
-        final_margin = np.where(df[hmm_col] == up_state, atr_margin_max, dynamic_margin)
+        final_margin = np.where(df[up_col] == 1, atr_margin_max, dynamic_margin)
 
         df["adjusted_margin"] = final_margin  # 保留用于分析，关键字：动态ATR系数
 
@@ -176,7 +187,6 @@ class TurtleScout(IStrategyScout):
         df.loc[df.exit_price.isna(), "exit_price"] = (
             df.Kalman.shift(1) - df.ATR.shift(1) * df.adjusted_margin
         )
-
         return df
 
     def _calc_profit(self, base_df):
@@ -338,21 +348,12 @@ class TurtleScout(IStrategyScout):
         base_df["lower_bound"] = df["lower_bound"]
         return base_df
 
-    def _calc_HMM_State(self, base_df):
-        windows = self.params.bayes_windows
-        mask = base_df["HMM_State"].isna()
-        X = self._calc_HMM_input(base_df, windows, self.scaler)
-        hidden_states = self.hmm_model.predict(X)
-        base_df.loc[mask, "HMM_State"] = hidden_states[mask]
-        base_df.UP_State.ffill(inplace=True)
-        return base_df
-
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_OBV(base_df)
         base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
-        base_df = self._calc_HMM_State(base_df)
+        base_df = self.predict_hmm(base_df)
         base_df = self._calc_profit(base_df)
         return base_df
 
@@ -684,9 +685,11 @@ if __name__ == "__main__":
     @click.command()
     @click.option("--symbol", default="moveusdt", help="Trading symbol (e.g. trxusdt)")
     @click.option("--interval", default="1min", help="Trading interval")
+    @click.option("--count", default=2000, help="load datas")
     def main(
         symbol: str,
         interval: str,
+        count: int,
     ):
         params = {
             "ATR_sample": 60,
@@ -709,7 +712,7 @@ if __name__ == "__main__":
         sp = StrategyParam(**params)
 
         sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
-        base_df = sensor.scan(200)
+        base_df = sensor.scan(count)
 
         scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
         scout = TurtleScout(sp)
@@ -717,8 +720,8 @@ if __name__ == "__main__":
         base_df = scout.market_recon(base_df)
         report_cols = DUMP_COL
 
-        base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}.csv", index=False)
-        print(f"created: {REPORTS_DIR}/{sp}.csv")
+        base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}_hmm_test.csv", index=False)
+        print(f"created: {REPORTS_DIR}/{sp}_hmm_test.csv")
         return base_df[report_cols]
 
     main()

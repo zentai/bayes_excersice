@@ -76,15 +76,52 @@ class HuntingStory:
 
     def move_forward(self, message):
         try:
+
+            def current_buy_index(df: pd.DataFrame) -> int | None:
+                """
+                找出「最后一次卖出」之后仍未平仓的买入 index。
+                若目前无持仓则回传 None。
+                """
+                # 1️⃣ 最近一次有卖出的行
+                last_sell_idx = df.index[df["xSell"].notna()].max()
+
+                # 2️⃣ 根据 last_sell_idx 切片；若从未卖出过，则从头搜
+                if pd.isna(last_sell_idx):
+                    sub_df = df
+                else:
+                    sub_df = df.loc[last_sell_idx:]
+
+                # 3️⃣ 在剩余区段寻找 still-holding 的 buy
+                holding_mask = (sub_df["xBuy"].notna()) & (sub_df["xSell"].isna())
+                if holding_mask.any():
+                    return sub_df[holding_mask].index[0]  # 取最早那笔买入
+                return None
+
+            def get_chandelier_exit_price(df: pd.DataFrame) -> float | None:
+                """
+                回传目前持仓的『动态止损线』（买入以来最高 exit_price）。
+                若目前无持仓则回传 None。
+                """
+                # 第 1 步：找到当前持仓的 buy_index
+                buy_idx = current_buy_index(df)
+                if buy_idx is None:
+                    return df.iloc[-1].exit_price  # 目前无持仓
+
+                # 第 2 步：切片 [buy_idx : ]，取 exit_price 最大值
+                stop_line = df.loc[buy_idx:, "exit_price"].max()
+                return stop_line
+
             required_columns = set().union(*(h.columns for h in self.hunter.values()))
             message = pandas_util.equip_fields(message, list(required_columns))
             self.base_df = pd.concat([self.base_df, message], ignore_index=True)
             self.base_df = self.base_df[~self.base_df.index.duplicated(keep="last")]
             self.base_df = self.scout.market_recon(self.base_df)
             self.base_df = self.engine.hunt_plan(self.base_df)
+            last_candlestick = self.base_df.iloc[-1]
+            last_candlestick.exit_price = get_chandelier_exit_price(self.base_df)
             for hunter in self.hunter.values():
                 hunter.load_memories(self.base_df)
-                hunter.strike_phase(lastest_candlestick=self.base_df.iloc[-1])
+                hunter.strike_phase(lastest_candlestick=last_candlestick)
             self._debug_actions()
 
         except Exception as e:
