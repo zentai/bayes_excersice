@@ -41,7 +41,8 @@ secret_key = os.getenv("SECRET_KEY")
 @click.option("--cap", default=10.1, type=float, help="Stake cap")
 @click.option("--deals", default="", help="Comma separated deal IDs")
 @click.option("--start_deal", default=0, type=int, help="Start to load from deal ID")
-def cli_main(symbol, interval, funds, cap, deals, start_deal):
+@click.option("--hmm_split", default=5, type=int, help="hmm status split")
+def cli_main(symbol, interval, funds, cap, deals, start_deal, hmm_split):
     deal_ids = [int(x.strip()) for x in deals.split(",") if x.strip()] if deals else []
 
     params = {
@@ -57,6 +58,7 @@ def cli_main(symbol, interval, funds, cap, deals, start_deal):
         "funds": funds,
         "stake_cap": cap,
         "symbol": Symbol(symbol),
+        "hmm_split": hmm_split,
         "backtest": False,
         "debug_mode": [
             "statement",

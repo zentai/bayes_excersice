@@ -112,6 +112,7 @@ class StrategyParam:
     funds: float = 100
     stake_cap: int = 50
     interval: str = "1min"
+    hmm_split: int = 5
     backtest: bool = False
     debug_mode: list = field(default_factory=list)
     load_deals: list = field(default_factory=list)
@@ -122,6 +123,7 @@ class StrategyParam:
         self.bayes_windows = int(self.bayes_windows)
         self.lower_sample = int(self.lower_sample)
         self.upper_sample = int(self.upper_sample)
+        self.hmm_split = int(self.hmm_split)
 
     def __str__(self):
         return self.__repr__()

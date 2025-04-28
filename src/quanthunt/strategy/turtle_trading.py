@@ -68,8 +68,12 @@ class TurtleScout(IStrategyScout):
         self.scaler = None
         self.hmm_model = None
         self.scaler = StandardScaler()
+        print(f"\n🤖 初始化 HMM 模型: {self.params.hmm_split} 个状态")
         self.hmm_model = GaussianHMM(
-            n_components=5, covariance_type="full", n_iter=4000, random_state=42
+            n_components=self.params.hmm_split,
+            covariance_type="full",
+            n_iter=4000,
+            random_state=42,
         )
 
     def train(self, df):
@@ -686,11 +690,8 @@ if __name__ == "__main__":
     @click.option("--symbol", default="moveusdt", help="Trading symbol (e.g. trxusdt)")
     @click.option("--interval", default="1min", help="Trading interval")
     @click.option("--count", default=2000, help="load datas")
-    def main(
-        symbol: str,
-        interval: str,
-        count: int,
-    ):
+    @click.option("--hmm_split", default=5, type=int, help="hmm status split")
+    def main(symbol: str, interval: str, count: int, hmm_split: int):
         params = {
             "ATR_sample": 60,
             "bayes_windows": 10,
@@ -704,6 +705,7 @@ if __name__ == "__main__":
             "funds": 50,
             "stake_cap": 10,
             "symbol": Symbol(symbol),
+            "hmm_split": hmm_split,
             "backtest": True,
             "debug_mode": ["statement"],
             "api_key": os.getenv("API_KEY"),
