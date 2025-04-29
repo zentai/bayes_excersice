@@ -242,20 +242,20 @@ class Huobi:
             execute_timestamp=None,
         )
 
-    def place_order(self, order):
-        def cancel(isBuy=True):
-            try:
-                success = (
-                    huobi_api.cancel_algo_open_orders(
-                        self.api_key, self.secret_key, self.params.symbol.name, isBuy
-                    )
-                    or []
+    def cancel(self, isBuy=True):
+        try:
+            success = (
+                huobi_api.cancel_algo_open_orders(
+                    self.api_key, self.secret_key, self.params.symbol.name, isBuy
                 )
-                for id in success:
-                    print(f"Cancel {id} success")
-            except Exception as e:
-                print(f"Cancel {'Buy' if isBuy else 'Sell'} order failed: {e}")
+                or []
+            )
+            for id in success:
+                print(f"Cancel {id} success")
+        except Exception as e:
+            print(f"Cancel {'Buy' if isBuy else 'Sell'} order failed: {e}")
 
+    def place_order(self, order):
         def place(client_id, amount, price, trigger_price, order):
             huobi_api.place_order(
                 symbol=self.params.symbol,
@@ -270,7 +270,7 @@ class Huobi:
 
         if isinstance(order, xBuyOrder):
             client_order_id = order.order_id
-            cancel(isBuy=True)
+            self.cancel(isBuy=True)
             place(
                 client_id=client_order_id,
                 amount=order.position,
@@ -281,7 +281,7 @@ class Huobi:
 
         elif isinstance(order, xSellOrder):
             client_order_id = order.order_id
-            cancel(isBuy=False)
+            self.cancel(isBuy=False)
             place(
                 client_id=order.order_id,
                 amount=order.position,
@@ -316,6 +316,9 @@ class SimHuobi:
             self.order_book[client]["Buy"] = order
         elif isinstance(order, xSellOrder):
             self.order_book[client]["Sell"] = order
+
+    def cancel(self, isBuy=True):
+        return True
 
     def is_onhold(self):
         return False
@@ -641,6 +644,10 @@ class xHunter(IHunter):
         self.on_hold = self.platform.is_onhold()
         if not self.strike:
             self.strike = huobi_api.get_strike(f"{self.params.symbol}")
+        if lastest_candlestick.UP_State != 1:
+            self.platform.cancel(
+                isBuy=True
+            )  # cancel all pending buy order when down trend
         self.retreat(self.strike, lastest_candlestick)
         self.attack(self.strike, lastest_candlestick)
 
