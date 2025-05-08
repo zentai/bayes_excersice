@@ -656,7 +656,7 @@ class xHunter(IHunter):
         if all(
             [
                 lastest_candlestick.BuySignal,
-                lastest_candlestick.UP_State == 1,
+                lastest_candlestick.HMM_Signal == 1,
                 self.gainsbag.is_enough_cash(),
                 not self.on_hold,
             ]

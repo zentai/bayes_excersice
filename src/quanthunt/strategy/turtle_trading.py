@@ -51,6 +51,7 @@ TURTLE_COLUMNS = [
     "RVolume",
     "HMM_State",
     "UP_State",
+    "HMM_Signal",
     "adjusted_margin",
     "Count_Hz",
 ]
@@ -88,10 +89,33 @@ class TurtleScout(IStrategyScout):
         """
         自动定义UP_State，只补充未定义的部分，不覆盖已有UP_State。
         """
-        slope_median = df.groupby("HMM_State")["Slope"].median()
-        up_state = slope_median.idxmax()
+        grp = df.groupby("HMM_State")["Slope"]
+        med = grp.median()
+        std = grp.std().replace(0, ZERO)  # 避免除 0
+        std_clipped = std.clip(lower=std.median())
+        print(f"std.median: {std.median()}")
+        cnt = grp.count()
+
+        # Using Z-score confidence interval adjustment to penalize high-median low-sample groups;
+        # keywords: confidence interval, z-score, sample size correction, robust ranking
+        z = 2.58
+        score = med - z * (std / np.sqrt(cnt))
+        from collections import Counter
+
+        print(f"Counter: {Counter(df.HMM_State.values)}")
+        print(f"n_components: {self.hmm_model.n_components}")
+        print(f"score: {score}")
+        print(score.idxmax())
+
+        up_state = score.idxmax()
         s = df["UP_State"].isna()
-        df.loc[s, "UP_State"] = (df.loc[s, "HMM_State"] == up_state).astype(int)
+        df.loc[s, "UP_State"] = up_state
+
+        s = df["HMM_Signal"].isna()
+        df.loc[s, "HMM_Signal"] = (
+            df.loc[s, "HMM_State"] == df.loc[s, "UP_State"]
+        ).astype(int)
+
         # Old code
         # HMM_0 = df[df.HMM_State == 0].Slope.median()
         # HMM_1 = df[df.HMM_State == 1].Slope.median()
@@ -159,9 +183,8 @@ class TurtleScout(IStrategyScout):
         """
 
         # ===【参数载入】===
-        up_state = df.iloc[-1].UP_State  # 关键字：HMM、上升趋势状态
+        hmm_signal = df.iloc[-1].HMM_Signal  # 关键字：HMM、上升趋势状态
         slope_col = "Slope"
-        up_col = "UP_State"
         atr_margin_max = self.params.atr_loss_margin
         atr_margin_min = getattr(self.params, "atr_margin_min", 0.1)
 
@@ -183,7 +206,7 @@ class TurtleScout(IStrategyScout):
         dynamic_margin = atr_margin_min + (atr_margin_max - atr_margin_min) * normalized
 
         # ===【趋势判断：若为上升趋势，保持最大margin，否则使用动态margin】===
-        final_margin = np.where(df[up_col] == 1, atr_margin_max, dynamic_margin)
+        final_margin = np.where(hmm_signal == 1, atr_margin_max, dynamic_margin)
 
         df["adjusted_margin"] = final_margin  # 保留用于分析，关键字：动态ATR系数
 

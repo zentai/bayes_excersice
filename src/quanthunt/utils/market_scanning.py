@@ -103,7 +103,8 @@ def calc_avg_hz(
         std_hz = stdev(hz_list) if len(hz_list) > 1 else 0.0
         result = {
             "symbol": symbol,
-            "HMM": base_df.UP_State.iloc[-1],
+            "HMM": base_df.HMM_Signal.iloc[0],
+            "Slope": base_df.Slope.iloc[0],
             "avg_hz": avg_hz,
             "std_hz": std_hz,
             "max_hz": max(hz_list),
@@ -156,20 +157,18 @@ def run_once(
     for i, sym in enumerate(symbols):
         click.echo(f"[...] 正在处理 {i+1}/{len(symbols)}: {sym}")
         res = calc_avg_hz(mc, sym, interval_const, size, period_sec)
-        if res["avg_hz"] >= hz_threshold and res["HMM"] == 1:
+        if res["avg_hz"] >= hz_threshold and res["HMM"] == 1 and res["Slope"] > 0.0001:
             rows.append(res)
 
     if not rows:
         click.echo("[⚠️] 无符合条件的交易对")
         return
 
-    df = (
-        pd.DataFrame(rows).sort_values("std_hz", ascending=False).reset_index(drop=True)
-    )
+    df = pd.DataFrame(rows).sort_values("Slope", ascending=False).reset_index(drop=True)
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     click.echo(f"\n[✓] {timestamp} 结果共 {len(df)} 项，按 Hz 降序排序：")
     click.echo(
-        df[["symbol", "avg_hz", "std_hz", "link"]].to_string(
+        df[["symbol", "avg_hz", "std_hz", "Slope", "link"]].to_string(
             index=False,
             formatters={"avg_hz": "{:.2f}".format, "std_hz": "{:.2f}".format},
         )

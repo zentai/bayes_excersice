@@ -204,6 +204,7 @@ DEBUG_COL = [
     "Kalman",
     "HMM_State",
     "UP_State",
+    "HMM_Signal",
 ]
 
 DUMP_COL = [
@@ -213,6 +214,8 @@ DUMP_COL = [
     "Low",
     "Close",
     "HMM_State",
+    "UP_State",
+    "HMM_Signal",
     "Kalman",
     "Count",
     "Vol",
@@ -253,7 +256,6 @@ DUMP_COL = [
     "global_log_vol",
     "KReturnVol",
     "RVolume",
-    "UP_State",
     "Slope",
     "Count_Hz",
 ]

@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from quanthunt.config.core_config import config
 
@@ -41,6 +42,9 @@ class HuntingCamp:
         - Return the merged DataFrame.
         """
         base_df = self.load()
+        base_df["HMM_State"] = np.nan
+        base_df["UP_State"] = np.nan
+        base_df["HMM_Signal"] = np.nan
 
         # Always scan new market data
         update_df = self.sensor.scan(2000 if not self.strategy_param.backtest else 100)
