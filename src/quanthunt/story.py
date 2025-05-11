@@ -6,7 +6,7 @@ import traceback
 
 # Third-party libraries
 import pandas as pd
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict
 from pydispatch import dispatcher
 import copy
@@ -60,19 +60,21 @@ class HuntingStory:
     base_df: pd.DataFrame
     debug_cols: str
     report_cols: str
+    stop_flag: threading.Event = field(default_factory=threading.Event)
 
     def pub_market_sensor(self):
-        def run():
-            while self.sensor.left():
-                try:
-                    k = self.sensor.fetch_one()
-                    dispatcher.send(signal="k_channel", message=k)
-                    hunter_pause(self.params.interval)
-                except Exception as e:
-                    print(f"Error in pub_market_sensor: {e}")
-                    print(traceback.format_exc())
-
-        return threading.Thread(target=run)
+        while self.sensor.left():
+            try:
+                k = self.sensor.fetch_one()
+                dispatcher.send(signal="k_channel", message=k)
+                if self.stop_flag.is_set():
+                    print("Stop fetching market data... (stop flag is set)")
+                    break
+                hunter_pause(self.params.interval)
+            except Exception as e:
+                print(f"Error in pub_market_sensor: {e}")
+                print(traceback.format_exc())
+                time.sleep(5)
 
     def move_forward(self, message):
         try:
@@ -121,7 +123,20 @@ class HuntingStory:
             last_candlestick.exit_price = get_chandelier_exit_price(self.base_df)
             for hunter in self.hunter.values():
                 hunter.load_memories(self.base_df)
-                hunter.strike_phase(lastest_candlestick=last_candlestick)
+                is_trend_gone = hunter.strike_phase(
+                    lastest_candlestick=last_candlestick
+                )
+                if is_trend_gone:
+                    from huobi.connection.subscribe_client import SubscribeClient
+
+                    scheduler = SubscribeClient.subscribe_watch_dog.scheduler
+                    if scheduler.running:
+                        scheduler.remove_all_jobs()
+                        scheduler.shutdown(wait=False)
+
+                    print("⚠️ Terminating: trend ended + no position.")
+                    self.stop_flag.set()
+                    break  # 避免重复触发
             self._debug_actions()
 
         except Exception as e:
@@ -196,9 +211,10 @@ def start_journey(sp):
     )
     story.setup_dispatcher()
 
-    pub_thread = story.pub_market_sensor()
-    pub_thread.start()
-    pub_thread.join()
+    story.pub_market_sensor()
+    # pub_thread = story.pub_market_sensor()
+    # pub_thread.start()
+    # pub_thread.join()
 
     if "final_statement_to_csv" in sp.debug_mode:
         review = story.hunter["s"].review_mission(story.base_df)
@@ -206,4 +222,4 @@ def start_journey(sp):
         story.base_df[report_cols].to_csv(f"{config.reports_dir}/{sp}.csv", index=False)
         print(f"created: {config.reports_dir}/{sp}.csv")
 
-    return story.base_df[report_cols], story.hunter["s"].review_mission(story.base_df)
+    print("Mission accomplished. The hunt is over.")

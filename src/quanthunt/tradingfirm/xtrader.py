@@ -418,6 +418,8 @@ class xHunter(IHunter):
         self.watchdog = time.time()
         self.latest_candlestick = None
         self.strike = None
+        self.hunting = False
+        self.hunting_count = None
 
     def sub_market_client(self):
         print("Re-subscribing market data")
@@ -641,22 +643,37 @@ class xHunter(IHunter):
             df.loc[mask, f"{p}Matured"] = order.finished_timestamp
 
     def strike_phase(self, lastest_candlestick):
-        self.on_hold = self.platform.is_onhold()
+        low_volumn = self.platform.is_onhold()
+        trend_gone = False
+        if self.latest_candlestick is not None:
+            trend_gone = self.latest_candlestick.get("HMM_Signal", 0) != 1
+        self.on_hold = low_volumn or trend_gone
+
         if not self.strike:
             self.strike = huobi_api.get_strike(f"{self.params.symbol}")
-        if lastest_candlestick.UP_State != 1:
-            self.platform.cancel(
-                isBuy=True
-            )  # cancel all pending buy order when down trend
+        if trend_gone:
+            self.platform.cancel(isBuy=True)
         self.retreat(self.strike, lastest_candlestick)
         self.attack(self.strike, lastest_candlestick)
+
+        # Check if mission should be terminated:
+        # 1. Must be real trading client (self.client == "x")
+        # 2. Must have started real trading (self.hunting=True means order execution confirmed)
+        # 3. Market conditions unfavorable (self.on_hold=True means low volume or trend gone)
+        # 4. No current position (not is_enough_position means fully closed positions)
+        mission_complete = bool(
+            self.client == "x"
+            and self.hunting  # Ensure real order execution before checking end conditions
+            and self.on_hold
+            and not self.gainsbag.is_enough_position(self.strike)
+        )
+        return mission_complete
 
     def attack(self, strike, lastest_candlestick):
         strike = lastest_candlestick.Kalman
         if all(
             [
                 lastest_candlestick.BuySignal,
-                lastest_candlestick.HMM_Signal == 1,
                 self.gainsbag.is_enough_cash(),
                 not self.on_hold,
             ]
@@ -728,6 +745,12 @@ class xHunter(IHunter):
         # df = base_df[base_df.BuySignal == 1]
         df = base_df
         sample = df[hBuy].notna().sum() or 0.00001
+        if not self.hunting_count:
+            self.hunting_count = sample
+        elif self.hunting_count < sample:
+            self.hunting_count = sample
+            self.hunting = True
+
         profit_sample = "0.00"
         # profit_sample = (
         #     f"{len(df[df.hProfit > 0])/sample:.2f}({len(df[df.hProfit > 0])}/{sample})"

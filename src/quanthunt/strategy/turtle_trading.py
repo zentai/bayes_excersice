@@ -69,7 +69,7 @@ class TurtleScout(IStrategyScout):
         self.scaler = None
         self.hmm_model = None
         self.scaler = StandardScaler()
-        print(f"\n🤖 初始化 HMM 模型: {self.params.hmm_split} 个状态")
+        # print(f"\n🤖 初始化 HMM 模型: {self.params.hmm_split} 个状态")
         self.hmm_model = GaussianHMM(
             n_components=self.params.hmm_split,
             covariance_type="full",
@@ -93,7 +93,7 @@ class TurtleScout(IStrategyScout):
         med = grp.median()
         std = grp.std().replace(0, ZERO)  # 避免除 0
         std_clipped = std.clip(lower=std.median())
-        print(f"std.median: {std.median()}")
+        # print(f"std.median: {std.median()}")
         cnt = grp.count()
 
         # Using Z-score confidence interval adjustment to penalize high-median low-sample groups;
@@ -102,10 +102,10 @@ class TurtleScout(IStrategyScout):
         score = med - z * (std / np.sqrt(cnt))
         from collections import Counter
 
-        print(f"Counter: {Counter(df.HMM_State.values)}")
-        print(f"n_components: {self.hmm_model.n_components}")
-        print(f"score: {score}")
-        print(score.idxmax())
+        # print(f"Counter: {Counter(df.HMM_State.values)}")
+        # print(f"n_components: {self.hmm_model.n_components}")
+        # print(f"score: {score}")
+        # print(score.idxmax())
 
         up_state = score.idxmax()
         s = df["UP_State"].isna()

@@ -129,9 +129,9 @@ class StrategyParam:
         return self.__repr__()
 
     def __repr__(self):
-        # btcusdt1min_atrw15bw15up15lw15_cut0.99pnl2ext3stp3
-        header = f"{self.symbol.name}{self.interval}"
-        buy_params = f"atr{self.ATR_sample}bw{self.bayes_windows}up{self.upper_sample}lw{self.lower_sample}"
+        # btcusdt1min_atr15bw15up15lw15_cut0.99pnl2ext3stp3
+        header = f"{self.symbol.name}_{self.interval}"
+        buy_params = f"atr{self.ATR_sample}bw{self.bayes_windows}up{self.upper_sample}lw{self.lower_sample}hmm{self.hmm_split}"
         sell_params = f"cut{self.hard_cutoff}pnl{self.profit_loss_ratio}ext{self.atr_loss_margin}stp{self.surfing_level}"
         return f"{header}_{buy_params}_{sell_params}"
 

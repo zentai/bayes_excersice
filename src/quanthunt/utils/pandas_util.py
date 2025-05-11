@@ -11,6 +11,7 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 
+from quanthunt.hunterverse.interface import Symbol, StrategyParam
 from quanthunt.config.core_config import config
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
@@ -158,3 +159,34 @@ def setup_scheduler():
 def to_hz(interval: str, value: float) -> float:
     minutes_interval = INTERVAL_TO_MIN.get(interval)
     return value / (minutes_interval * 60)
+
+
+def build_strategy_param(overrides: dict = {}) -> StrategyParam:
+    default = {
+        "ATR_sample": 60,
+        "bayes_windows": 10,
+        "lower_sample": 60,
+        "upper_sample": 60,
+        "hard_cutoff": 0.95,
+        "profit_loss_ratio": 3,
+        "atr_loss_margin": 3,
+        "surfing_level": 5,
+        "interval": "5min",
+        "funds": 15,
+        "stake_cap": 15,
+        "symbol": Symbol("btcusdt"),
+        "hmm_split": 5,
+        "backtest": False,
+        "debug_mode": [
+            "statement",
+            "statement_to_csv",
+            "mission_review",
+            "final_statement_to_csv",
+        ],
+        "load_deals": None,
+        "start_deal": None,
+        "api_key": None,
+        "secret_key": None,
+    }
+    default.update(overrides)
+    return StrategyParam(**default)

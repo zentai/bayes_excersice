@@ -8,6 +8,7 @@ import pandas as pd
 import click
 from huobi.client.market import MarketClient
 from huobi.constant import CandlestickInterval
+from quanthunt.utils import pandas_util
 from quanthunt.utils.telegram_helper import telegram_msg
 import traceback
 
@@ -65,16 +66,7 @@ def calc_avg_hz(
         ]
         base_df = pd.DataFrame(candlesticks)
 
-        params = {
-            "ATR_sample": 60,
-            "bayes_windows": 10,
-            "lower_sample": 60,
-            "upper_sample": 60,
-            "hard_cutoff": 0.9,
-            "profit_loss_ratio": 3,
-            "atr_loss_margin": 1.5,
-            "surfing_level": 5,
-            "interval": "5min",
+        overrides = {
             "funds": 50,
             "stake_cap": 10,
             "symbol": Symbol(symbol),
@@ -83,7 +75,7 @@ def calc_avg_hz(
             "api_key": os.getenv("API_KEY"),
             "secret_key": os.getenv("SECRET_KEY"),
         }
-        sp = StrategyParam(**params)
+        sp = pandas_util.build_strategy_param(overrides)
         scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
         scout = TurtleScout(sp)
         base_df = scout.train(base_df)

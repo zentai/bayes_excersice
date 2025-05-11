@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from quanthunt.hunterverse.interface import StrategyParam
 from quanthunt.story import start_journey
 from quanthunt.hunterverse.interface import Symbol
+from quanthunt.utils import pandas_util
 
 # Load API credentials from .env file
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
@@ -45,33 +46,19 @@ secret_key = os.getenv("SECRET_KEY")
 def cli_main(symbol, interval, funds, cap, deals, start_deal, hmm_split):
     deal_ids = [int(x.strip()) for x in deals.split(",") if x.strip()] if deals else []
 
-    params = {
-        "ATR_sample": 60,
-        "bayes_windows": 10,
-        "lower_sample": 60,
-        "upper_sample": 60,
-        "hard_cutoff": 0.95,
-        "profit_loss_ratio": 3,
-        "atr_loss_margin": 3,
-        "surfing_level": 5,
+    overrides = {
         "interval": interval,
         "funds": funds,
         "stake_cap": cap,
         "symbol": Symbol(symbol),
         "hmm_split": hmm_split,
-        "backtest": False,
-        "debug_mode": [
-            "statement",
-            "statement_to_csv",
-            "mission_review",
-            "final_statement_to_csv",
-        ],
         "load_deals": deal_ids,
         "start_deal": start_deal,
         "api_key": api_key,
         "secret_key": secret_key,
     }
-    sp = StrategyParam(**params)
+
+    sp = pandas_util.build_strategy_param(overrides)
     start_journey(sp)
 
 
