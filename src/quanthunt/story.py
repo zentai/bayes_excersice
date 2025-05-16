@@ -137,13 +137,13 @@ class HuntingStory:
                     print("⚠️ Terminating: trend ended + no position.")
                     self.stop_flag.set()
                     break  # 避免重复触发
-            self._debug_actions()
+            self._debug_actions(mission_status="Running")
 
         except Exception as e:
             print(f"Error in move_forward: {e}")
             print(traceback.format_exc())
 
-    def _debug_actions(self):
+    def _debug_actions(self, mission_status):
         if "statement" in self.params.debug_mode:
             print(self.base_df[self.debug_cols].tail(30))
         if "mission_review" in self.params.debug_mode:
@@ -159,13 +159,20 @@ class HuntingStory:
             self.base_df[self.report_cols].to_csv(csv_path, index=False)
             print(f"CSV created: {csv_path}")
 
+        if not self.params.backtest:
+            pandas_util.write_status(
+                sp=self.params,
+                review_df=self.hunter["x"].review_mission(self.base_df),
+                status=mission_status,
+            )
+
     def callback_order_matched(
         self, client, order_id, order_status, price, position, execute_timestamp
     ):
         if client == "x":
             hunter = self.hunter[client]
             hunter.load_memories(self.base_df)
-            self._debug_actions()
+            self._debug_actions(mission_status="Running")
 
     def setup_dispatcher(self):
         dispatcher.connect(self.move_forward, signal="k_channel")
@@ -221,5 +228,5 @@ def start_journey(sp):
         print(review)
         story.base_df[report_cols].to_csv(f"{config.reports_dir}/{sp}.csv", index=False)
         print(f"created: {config.reports_dir}/{sp}.csv")
-
     print("Mission accomplished. The hunt is over.")
+    story._debug_actions(mission_status="Completed")

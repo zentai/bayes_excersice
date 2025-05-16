@@ -513,11 +513,13 @@ class xHunter(IHunter):
         print(f"load_memories(self, fetch={fetch}, deals={deals})")
 
         cached_order_ids = []
-        db_path = f"{config.data_dir}/{self.params.symbol}_orders.csv"
+        from pathlib import Path
+
+        db_path = Path(f"{config.data_dir}_{self.params}_orders.csv")
         print(f"Database path: {db_path}")
 
         cached_orders = pd.DataFrame()
-        if os.path.exists(db_path):
+        if db_path.exists():
             print(f"Loading cached orders from: {db_path}")
             cached_orders = pd.read_csv(db_path)
 

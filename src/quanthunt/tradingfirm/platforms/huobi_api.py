@@ -100,7 +100,11 @@ def load_orders(api_key, secret_key, symbol, order_ids=[]):
             direct=QueryDirection.PREV,
         )
 
-        for _id in set(order_ids) - set([order.id for order in orderlist]):
+        orders_set = set([order.id for order in orderlist])
+        if order_ids:
+            orders_set = set(order_ids) - orders_set
+
+        for _id in orders_set:
             orderlist.append(trade_client.get_order(order_id=_id))
 
         orders = []

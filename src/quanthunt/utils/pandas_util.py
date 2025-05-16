@@ -1,6 +1,8 @@
-import pandas as pd
-
 import time
+import json
+import os
+from pathlib import Path
+
 from huobi.client.trade import TradeClient
 from huobi.client.account import AccountClient
 from huobi.client.market import MarketClient
@@ -10,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import pandas as pd
 import numpy as np
+
 
 from quanthunt.hunterverse.interface import Symbol, StrategyParam
 from quanthunt.config.core_config import config
@@ -183,10 +186,31 @@ def build_strategy_param(overrides: dict = {}) -> StrategyParam:
             "mission_review",
             "final_statement_to_csv",
         ],
-        "load_deals": None,
-        "start_deal": None,
+        "load_deals": [],
+        "start_deal": "",
         "api_key": None,
         "secret_key": None,
     }
     default.update(overrides)
     return StrategyParam(**default)
+
+
+def write_status(sp: StrategyParam, review_df: pd.DataFrame, status: str = "finished"):
+    if review_df.empty:
+        raise ValueError("Empty review dataframe, cannot write status.")
+
+    result = review_df.iloc[0].to_dict()
+    result = {k: (None if pd.isna(v) else v) for k, v in result.items()}
+    result["symbol"] = sp.symbol.name
+    status_data = {
+        "task_id": f"{sp}",
+        "status": status,
+        "last_update": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "pid": os.getpid(),
+        "result": result,
+    }
+
+    status_path = Path(f"{config.data_dir}/status/{sp}.json")
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(status_path, "w") as f:
+        json.dump(status_data, f, indent=2)

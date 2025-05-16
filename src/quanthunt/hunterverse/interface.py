@@ -117,6 +117,7 @@ class StrategyParam:
     debug_mode: list = field(default_factory=list)
     load_deals: list = field(default_factory=list)
     start_deal: int = 0
+    task_id: Optional[str] = None
 
     def __post_init__(self):
         self.ATR_sample = int(self.ATR_sample)
@@ -124,6 +125,8 @@ class StrategyParam:
         self.lower_sample = int(self.lower_sample)
         self.upper_sample = int(self.upper_sample)
         self.hmm_split = int(self.hmm_split)
+        if self.task_id is None:
+            self.task_id = datetime.now().strftime("%m%d_%H%M%S")
 
     def __str__(self):
         return self.__repr__()
@@ -131,9 +134,9 @@ class StrategyParam:
     def __repr__(self):
         # btcusdt1min_atr15bw15up15lw15_cut0.99pnl2ext3stp3
         header = f"{self.symbol.name}_{self.interval}"
-        buy_params = f"atr{self.ATR_sample}bw{self.bayes_windows}up{self.upper_sample}lw{self.lower_sample}hmm{self.hmm_split}"
+        buy_params = f"fun{self.funds}cap{self.stake_cap}atr{self.ATR_sample}bw{self.bayes_windows}up{self.upper_sample}lw{self.lower_sample}hmm{self.hmm_split}"
         sell_params = f"cut{self.hard_cutoff}pnl{self.profit_loss_ratio}ext{self.atr_loss_margin}stp{self.surfing_level}"
-        return f"{header}_{buy_params}_{sell_params}"
+        return f"{self.task_id}_{header}_{buy_params}_{sell_params}"
 
 
 @dataclass

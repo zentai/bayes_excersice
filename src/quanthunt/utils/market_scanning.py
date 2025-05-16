@@ -149,7 +149,7 @@ def run_once(
     for i, sym in enumerate(symbols):
         click.echo(f"[...] 正在处理 {i+1}/{len(symbols)}: {sym}")
         res = calc_avg_hz(mc, sym, interval_const, size, period_sec)
-        if res["avg_hz"] >= hz_threshold and res["HMM"] == 1 and res["Slope"] > 0.0001:
+        if res["avg_hz"] >= hz_threshold and res["HMM"] == 1 and res["Slope"] < -0.0001:
             rows.append(res)
 
     if not rows:

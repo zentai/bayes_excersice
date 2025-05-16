@@ -43,7 +43,8 @@ secret_key = os.getenv("SECRET_KEY")
 @click.option("--deals", default="", help="Comma separated deal IDs")
 @click.option("--start_deal", default=0, type=int, help="Start to load from deal ID")
 @click.option("--hmm_split", default=3, type=int, help="hmm status split")
-def cli_main(symbol, interval, funds, cap, deals, start_deal, hmm_split):
+@click.option("--task_id", type=str, help="task_id, keep format %m%d_%H%M%S")
+def cli_main(symbol, interval, funds, cap, deals, start_deal, hmm_split, task_id):
     deal_ids = [int(x.strip()) for x in deals.split(",") if x.strip()] if deals else []
 
     overrides = {
@@ -56,6 +57,7 @@ def cli_main(symbol, interval, funds, cap, deals, start_deal, hmm_split):
         "start_deal": start_deal,
         "api_key": api_key,
         "secret_key": secret_key,
+        "task_id": task_id,
     }
 
     sp = pandas_util.build_strategy_param(overrides)
