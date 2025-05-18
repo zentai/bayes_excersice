@@ -23,7 +23,7 @@ class QuantHall:
     def restart_task(self, task_id: str):
         print(f"[QuantHall] Restarting task {task_id}...")
         strategy_dict = parse_strategy_from_task_id(task_id)
-        sp = StrategyParam(api_key="", secret_key="", **strategy_dict)
+        sp = StrategyParam(**strategy_dict)
         fm = FrontMission(sp)
         fm.start()
 
@@ -66,9 +66,9 @@ class QuantHall:
                 f"[QuantHall] Task for {strategy.symbol.name} already running. Skipping."
             )
             return False
-        if not self.bank.get_balance() > strategy.funds:
-            print(f"[QuantHall] Not enough funds to launch {strategy.symbol.name}")
-            return False
+        # if not self.bank.get_balance() >= strategy.funds:
+        #     print(f"[QuantHall] Not enough funds to launch {strategy.symbol.name}")
+        #     return False
         return True
 
     def launch_task(self, strategy: StrategyParam):
@@ -87,7 +87,7 @@ class QuantHall:
             interval=interval,
             funds=funds,
             stake_cap=stake_cap,
-            hmm_split=5,
+            hmm_split=3,
             api_key="TBD",
             secret_key="TBD",
         )

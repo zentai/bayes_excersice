@@ -6,7 +6,7 @@ from quanthall.dispatcher import QuantHall
 from quanthunt.hunterverse.interface import StrategyParam, Symbol
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-AUTHORIZED_USER_ID = int(os.getenv("TELEGRAM_USER_ID", "0"))
+AUTHORIZED_USER_ID = (1200093945, 6824651770)
 
 hall = QuantHall()
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -15,7 +15,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 @bot.message_handler(commands=["start"])
 def start(message):
     print("Your Telegram ID:", message.from_user.id)  # 👈 加这一行
-    if message.from_user.id != AUTHORIZED_USER_ID:
+    if message.from_user.id not in AUTHORIZED_USER_ID:
         return
     bot.reply_to(
         message,
@@ -25,7 +25,7 @@ def start(message):
 
 @bot.message_handler(commands=["summary"])
 def summary(message):
-    if message.from_user.id != AUTHORIZED_USER_ID:
+    if message.from_user.id not in AUTHORIZED_USER_ID:
         return
     mission = hall.scan_status()
     balance = hall.bank.get_balance()
@@ -35,7 +35,7 @@ def summary(message):
 
 @bot.message_handler(commands=["mission"])
 def mission(message):
-    if message.from_user.id != AUTHORIZED_USER_ID:
+    if message.from_user.id not in AUTHORIZED_USER_ID:
         return
     try:
         args = message.text.strip().split()[1:]
@@ -60,13 +60,14 @@ def mission(message):
 
 
 def telegram_msg(msg):
-    response = bot.send_message(AUTHORIZED_USER_ID, msg, parse_mode="HTML")
+    for uid in AUTHORIZED_USER_ID:
+        response = bot.send_message(uid, msg, parse_mode="HTML")
     return response
 
 
 def launch_bot():
     telegram_msg("Telegram bot is running...")
-    bot.polling()
+    bot.polling(non_stop=True)
 
 
 if __name__ == "__main__":
