@@ -167,18 +167,18 @@ def to_hz(interval: str, value: float) -> float:
 def build_strategy_param(overrides: dict = {}) -> StrategyParam:
     default = {
         "ATR_sample": 60,
-        "bayes_windows": 10,
+        "bayes_windows": 20,
         "lower_sample": 60,
         "upper_sample": 60,
-        "hard_cutoff": 0.95,
-        "profit_loss_ratio": 3,
-        "atr_loss_margin": 3,
+        "hard_cutoff": 0.975,
+        "profit_loss_ratio": 3.0,
+        "atr_loss_margin": 1.0,
         "surfing_level": 5,
         "interval": "5min",
         "funds": 15,
         "stake_cap": 15,
         "symbol": Symbol("btcusdt"),
-        "hmm_split": 5,
+        "hmm_split": 4,
         "backtest": False,
         "debug_mode": [
             "statement",

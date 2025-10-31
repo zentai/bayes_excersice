@@ -8,9 +8,18 @@ import pandas as pd
 import click
 from huobi.client.market import MarketClient
 from huobi.constant import CandlestickInterval
+from quanthunt.hunterverse.interface import DEBUG_COL
 from quanthunt.utils import pandas_util
 from quanthunt.utils.telegram_helper import telegram_msg
+from quanthunt.tradingfirm.platforms.huobi_api import Candlestick
 import traceback
+
+import os
+from quanthunt.sensor.market_sensor import HuobiMarketSensor
+from quanthunt.hunterverse.storage import HuntingCamp
+from quanthunt.hunterverse.interface import StrategyParam
+from quanthunt.hunterverse.interface import Symbol
+from quanthunt.strategy.turtle_trading import TurtleScout, emv_cross_strategy
 
 INTERVAL_MAP: Dict[str, CandlestickInterval] = {
     "1min": CandlestickInterval.MIN1,
@@ -21,12 +30,151 @@ INTERVAL_MAP: Dict[str, CandlestickInterval] = {
 }
 
 
+class CoinAnalyzer:
+    def __init__(self, symbol: str, candles: list, period_sec: int):
+        self.symbol = symbol
+        self.period_sec = period_sec
+        self.df = self._prepare_df(candles)
+
+        self.filter_rules = {
+            "drop_pct": 0.5,
+            "HMM_min": 1,
+            "Slope_max": 0.0001,
+            "avg_hz_min": 0.4,
+        }
+        self.score_weight = {
+            "drop_pct": 0.5,
+            "HMM": 0.2,
+            "avg_hz": 0.1,
+            "Slope": 0.2,
+        }
+        self.result = self.analyze()
+        self.result["Score"] = self.score()
+
+    def _prepare_df(self, candles):
+        df = pd.DataFrame(
+            [
+                Candlestick(
+                    stick.id,
+                    stick.high,
+                    stick.low,
+                    stick.open,
+                    stick.close,
+                    stick.amount,
+                    stick.count,
+                    stick.vol,
+                )
+                for stick in candles
+            ]
+        )
+        overrides = {
+            "funds": 50,
+            "stake_cap": 10,
+            "hmm_split": 4,
+            "bayes_windows": 20,
+            "symbol": Symbol(self.symbol),
+            "backtest": True,
+            "debug_mode": ["statement"],
+            "api_key": os.getenv("API_KEY"),
+            "secret_key": os.getenv("SECRET_KEY"),
+        }
+        sp = pandas_util.build_strategy_param(overrides)
+        sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
+        camp = HuntingCamp(sp, sensor)
+        scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
+        scout = TurtleScout(sp)
+        df = camp.update()
+
+        df["hz"] = df["Count"] / self.period_sec
+        df["pct_change"] = df["Close"].pct_change().fillna(0)
+        df = scout.train(df)
+        return df
+
+    def _hmm_score(self):
+        s = (self.df["HMM_Signal"] == 1).astype(int)  # 1 for up-state, 0 otherwise
+        streak = s.iloc[::-1].cumprod().sum()  # reverse → cumprod → sum
+        if streak > 3:
+            print(f"Symbol: {self.symbol} [{streak}]")
+            print(self.df[DEBUG_COL][-15:])
+        return int(streak)
+
+    def _slope(self):
+        return self.df.Slope.iloc[0]
+
+    def _drop_pct(self):
+        drop_pct = (
+            (self.df["Close"].iloc[-1] - self.df["Close"].iloc[0])
+            / self.df["Close"].iloc[0]
+            if len(self.df) > 1
+            else 0.0
+        )
+        avg_hz = mean(self.df["hz"])
+        std_hz = self.df["hz"].std()
+        max_hz = self.df["hz"].max()
+        min_hz = self.df["hz"].min()
+        drop_from_high = (
+            (self.df["Close"].iloc[-1] - self.df["High"].max()) / self.df["High"].max()
+            if len(self.df) > 0
+            else 0.0
+        )
+        running_max = self.df["Close"].cummax()
+        drawdowns = (self.df["Close"] - running_max) / running_max
+        max_drawdown = drawdowns.min() if not drawdowns.empty else 0.0
+        print(self.symbol, drop_from_high, max_drawdown)
+        return drop_pct, avg_hz, std_hz, max_hz, min_hz, drop_from_high, max_drawdown
+
+    def analyze(self) -> Dict[str, Any]:
+        drop_pct, avg_hz, std_hz, max_hz, min_hz, drop_from_high, max_drawdown = (
+            self._drop_pct()
+        )
+
+        self.result = {
+            "symbol": self.symbol,
+            "drop_pct": drop_pct,
+            "drop_from_high": drop_from_high,
+            "max_drawdown": max_drawdown,
+            "avg_hz": avg_hz,
+            "std_hz": std_hz,
+            "max_hz": max_hz,
+            "min_hz": min_hz,
+            "valid_points": len(self.df),
+            "HMM": self._hmm_score(),
+            "Slope": self._slope(),
+            "link": f"https://www.htx.com/trade/{self.symbol.replace('usdt', '_usdt')}/",
+        }
+        return self.result
+
+    def is_candidate(self) -> bool:
+        r = self.result
+        return all(
+            [
+                # r["drop_pct"] <= self.filter_rules.get("drop_pct_max", 0),
+                r["HMM"] >= self.filter_rules.get("HMM_min", 0),
+                # r["drop_from_high"] <= -0.1,
+                # r["max_drawdown"] >= 1,
+                # r["Slope"] <= self.filter_rules.get("Slope_max", 0),
+                # r["avg_hz"] >= self.filter_rules.get("avg_hz_min", 0),
+            ]
+        )
+
+    def score(self) -> float:
+        r = self.result
+        return (
+            r["drop_pct"] * self.score_weight.get("drop_pct", 0.0)
+            + r["drop_from_high"] * self.score_weight.get("drop_from_high", 0.0)
+            + r["max_drawdown"] * self.score_weight.get("max_drawdown", 0.0)
+            + r["HMM"] * self.score_weight.get("HMM", 0.0)
+            + r["avg_hz"] * self.score_weight.get("avg_hz", 0.0)
+            + r["Slope"] * self.score_weight.get("Slope", 0.0)
+        )
+
+
 def get_active_symbols(mc: MarketClient, volume_threshold: float) -> List[str]:
     tickers = mc.get_market_tickers()
     symbols = [
         t.symbol
         for t in tickers
-        if t.symbol.endswith("usdt") and t.amount >= volume_threshold
+        if (t.symbol.endswith("usdt") and t.amount >= volume_threshold)
     ]
     click.echo(
         f"[✓] 获取 {len(tickers)} 个 ticker，筛选出 {len(symbols)} 个 USDT 交易对成交量 > {volume_threshold}"
@@ -40,90 +188,19 @@ def calc_avg_hz(
     interval_const: CandlestickInterval,
     size: int,
     period_sec: int,
-    debug: bool = False,
 ) -> Dict[str, Any]:
     try:
         candles = mc.get_candlestick(symbol, interval_const, size)
-        hz_list = [c.count / period_sec for c in candles if c and c.count is not None]
-        import os
-        from quanthunt.hunterverse.interface import StrategyParam
-        from quanthunt.hunterverse.interface import Symbol
-        from quanthunt.strategy.turtle_trading import TurtleScout, emv_cross_strategy
-        from quanthunt.tradingfirm.platforms.huobi_api import Candlestick
-
-        candlesticks = [
-            Candlestick(
-                stick.id,
-                stick.high,
-                stick.low,
-                stick.open,
-                stick.close,
-                stick.amount,
-                stick.count,
-                stick.vol,
-            )
-            for stick in candles
-        ]
-        base_df = pd.DataFrame(candlesticks)
-
-        overrides = {
-            "funds": 50,
-            "stake_cap": 10,
-            "symbol": Symbol(symbol),
-            "backtest": True,
-            "debug_mode": ["statement"],
-            "api_key": os.getenv("API_KEY"),
-            "secret_key": os.getenv("SECRET_KEY"),
-        }
-        sp = pandas_util.build_strategy_param(overrides)
-        scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
-        scout = TurtleScout(sp)
-        base_df = scout.train(base_df)
-        if not hz_list:
-            return {
-                "symbol": symbol,
-                "HMM": 0,
-                "avg_hz": 0.0,
-                "std_hz": 0.0,
-                "max_hz": 0.0,
-                "min_hz": 0.0,
-                "hz_list": [],
-                "valid_points": 0,
-            }
-
-        avg_hz = mean(hz_list)
-        std_hz = stdev(hz_list) if len(hz_list) > 1 else 0.0
-        result = {
-            "symbol": symbol,
-            "HMM": (base_df["HMM_Signal"] == 1).cumprod().sum(),
-            "Slope": base_df.Slope.iloc[0],
-            "avg_hz": avg_hz,
-            "std_hz": std_hz,
-            "max_hz": max(hz_list),
-            "min_hz": min(hz_list),
-            "hz_list": hz_list,
-            "valid_points": len(hz_list),
-            "link": f"https://www.htx.com/trade/{symbol.replace('usdt', '_usdt')}/",
-        }
-
-        if debug:
-            print(f"[debug] {symbol} Hz list: {hz_list}")
-            print(f"[debug] {symbol} avg={avg_hz:.2f} Hz, std={std_hz:.2f}")
-
-        return result
+        analyzer = CoinAnalyzer(
+            symbol=symbol,
+            candles=candles,
+            period_sec=period_sec,
+        )
+        return analyzer
     except Exception as e:
         print(f"[ERROR] 拉取 {symbol} 出错: {e}")
         # print(traceback.format_exc())
-        return {
-            "symbol": symbol,
-            "HMM": 0,
-            "avg_hz": 0.0,
-            "std_hz": 0.0,
-            "max_hz": 0.0,
-            "min_hz": 0.0,
-            "hz_list": [],
-            "valid_points": 0,
-        }
+        return None
 
 
 def run_once(
@@ -148,10 +225,9 @@ def run_once(
     rows = []
     for i, sym in enumerate(symbols):
         click.echo(f"[...] 正在处理 {i+1}/{len(symbols)}: {sym}")
-        res = calc_avg_hz(mc, sym, interval_const, size, period_sec)
-        # if res["avg_hz"] >= hz_threshold and res["HMM"] == 1 and res["Slope"] < -0.0001:
-        if res["HMM"] > 1:
-            rows.append(res)
+        coin = calc_avg_hz(mc, sym, interval_const, size, period_sec)
+        if coin and coin.is_candidate():
+            rows.append(coin.result)
 
     if not rows:
         click.echo("[⚠️] 无符合条件的交易对")
@@ -159,13 +235,24 @@ def run_once(
 
     df = (
         pd.DataFrame(rows)
-        .sort_values(["HMM", "Slope"], ascending=False)
+        .sort_values(["drop_from_high", "HMM", "Slope"], ascending=False)
         .reset_index(drop=True)
     )
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     click.echo(f"\n[✓] {timestamp} 结果共 {len(df)} 项，按 Hz 降序排序：")
     click.echo(
-        df[["symbol", "HMM", "avg_hz", "std_hz", "Slope", "link"]].to_string(
+        df[
+            [
+                "symbol",
+                "HMM",
+                "avg_hz",
+                "std_hz",
+                "Slope",
+                "drop_from_high",
+                "Score",
+                "link",
+            ]
+        ].to_string(
             index=False,
             formatters={"avg_hz": "{:.2f}".format, "std_hz": "{:.2f}".format},
         )

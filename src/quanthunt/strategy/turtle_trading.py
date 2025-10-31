@@ -54,6 +54,11 @@ TURTLE_COLUMNS = [
     "HMM_Signal",
     "adjusted_margin",
     "Count_Hz",
+    "close_sortino",
+    "vol_sortino",
+    "trend",
+    "cv",
+    "cv_sum",
 ]
 
 
@@ -79,6 +84,7 @@ class TurtleScout(IStrategyScout):
 
     def train(self, df):
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
+        emv_cross_strategy(df, self.params)
         df = self._calc_ATR(df)
         df = self._calc_OBV(df)
         df = self.train_hmm(df)
@@ -86,28 +92,8 @@ class TurtleScout(IStrategyScout):
         return df
 
     def define_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        自动定义UP_State，只补充未定义的部分，不覆盖已有UP_State。
-        """
-        grp = df.groupby("HMM_State")["Slope"]
-        med = grp.median()
-        std = grp.std().replace(0, ZERO)  # 避免除 0
-        std_clipped = std.clip(lower=std.median())
-        # print(f"std.median: {std.median()}")
-        cnt = grp.count()
+        up_state = hmm_performance(df)
 
-        # Using Z-score confidence interval adjustment to penalize high-median low-sample groups;
-        # keywords: confidence interval, z-score, sample size correction, robust ranking
-        z = 2.58
-        score = med - z * (std / np.sqrt(cnt))
-        from collections import Counter
-
-        # print(f"Counter: {Counter(df.HMM_State.values)}")
-        # print(f"n_components: {self.hmm_model.n_components}")
-        # print(f"score: {score}")
-        # print(score.idxmax())
-
-        up_state = score.idxmax()
         s = df["UP_State"].isna()
         df.loc[s, "UP_State"] = up_state
 
@@ -116,11 +102,61 @@ class TurtleScout(IStrategyScout):
             df.loc[s, "HMM_State"] == df.loc[s, "UP_State"]
         ).astype(int)
 
-        # Old code
-        # HMM_0 = df[df.HMM_State == 0].Slope.median()
-        # HMM_1 = df[df.HMM_State == 1].Slope.median()
-        # df["UP_State"] = int(HMM_1 > HMM_0)
         return df
+
+    # def define_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
+    #     trend_score = hmm_performance(df)
+    #     print(trend_score)
+    #     up_state = trend_score.loc[trend_score["weighted_score"].idxmax(), "HMM_State"]
+
+    #     s = df["UP_State"].isna()
+    #     df.loc[s, "UP_State"] = up_state
+
+    #     s = df["HMM_Signal"].isna()
+    #     df.loc[s, "HMM_Signal"] = (
+    #         df.loc[s, "HMM_State"] == df.loc[s, "UP_State"]
+    #     ).astype(int)
+
+    #     return df
+
+    # def define_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
+    #     """
+    #     自动定义UP_State，只补充未定义的部分，不覆盖已有UP_State。
+    #     """
+    #     df["log_return"] = np.log(df.Close / df.Close.shift(1))
+    #     grp = df.groupby("HMM_State")["log_return"]
+    #     med = grp.median()
+    #     std = grp.std().replace(0, ZERO)  # 避免除 0
+    #     std_clipped = std.clip(lower=std.median())
+    #     # print(f"std.median: {std.median()}")
+    #     cnt = grp.count()
+
+    #     # Using Z-score confidence interval adjustment to penalize high-median low-sample groups;
+    #     # keywords: confidence interval, z-score, sample size correction, robust ranking
+    #     z = 2.58
+    #     score = med - z * (std / np.sqrt(cnt))
+
+    #     from collections import Counter
+
+    #     # print(f"Counter: {Counter(df.HMM_State.values)}")
+    #     # print(f"n_components: {self.hmm_model.n_components}")
+    #     # print(f"score: {score}")
+    #     # print(score.idxmax())
+
+    #     up_state = score.idxmax()
+    #     s = df["UP_State"].isna()
+    #     df.loc[s, "UP_State"] = up_state
+
+    #     s = df["HMM_Signal"].isna()
+    #     df.loc[s, "HMM_Signal"] = (
+    #         df.loc[s, "HMM_State"] == df.loc[s, "UP_State"]
+    #     ).astype(int)
+
+    #     # Old code
+    #     # HMM_0 = df[df.HMM_State == 0].Slope.median()
+    #     # HMM_1 = df[df.HMM_State == 1].Slope.median()
+    #     # df["UP_State"] = int(HMM_1 > HMM_0)
+    #     return df
 
     def train_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
         X = self._prepare_hmm_features(df)
@@ -158,8 +194,28 @@ class TurtleScout(IStrategyScout):
         )
         df.loc[mask, "RVolume"] = np.log((df.loc[mask, "Vol"] + ZERO) / rolling_mean)
 
-        features = ["KReturnVol", "RVolume", "Slope", "OBV_MA"]
+        log_return = np.log(df.Close / df.Close.shift(1))
+        df.loc[mask, "log_return"] = log_return[mask]
+        close_log, close_ma, close_relative_strength, close_zscore = hmm_standardize(
+            df.Close, windows
+        )
+        df.loc[mask, "close_log"] = close_log[mask]
+        df.loc[mask, "close_ma"] = close_ma[mask]
+        df.loc[mask, "close_relative_strength"] = close_relative_strength[mask]
+        df.loc[mask, "close_zscore"] = close_zscore[mask]
+
+        vol_log, vol_ma, vol_relative_strength, vol_zscore = hmm_standardize(
+            df.Vol, windows
+        )
+        df.loc[mask, "vol_log"] = vol_log[mask]
+        df.loc[mask, "vol_ma"] = vol_ma[mask]
+        df.loc[mask, "vol_relative_strength"] = vol_relative_strength[mask]
+        df.loc[mask, "vol_zscore"] = vol_zscore[mask]
+
+        df["trend"] = df.Kalman - df.ema_long
+        features = ["trend", "cv_sum", "Slope", "TR"]
         df[features] = df[features].fillna(method="bfill")
+
         return self.scaler.fit_transform(df[features].values)
 
     def predict_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -303,6 +359,10 @@ class TurtleScout(IStrategyScout):
         df.loc[idx, "TR"] = df[["h_l", "c_h", "c_l"]].max(axis=1)
         df.loc[idx, "ATR"] = df["TR"].rolling(ATR_sample).mean()
         df.loc[idx, "ATR_STDV"] = df["TR"].rolling(ATR_sample).std()
+
+        df.loc[idx, "cv"] = np.log(df.Close * df.Vol)
+        df.loc[idx, "cv_sum"] = df.cv.rolling(window=ATR_sample).sum()
+
         base_df.update(df)
         return base_df
 
@@ -377,6 +437,7 @@ class TurtleScout(IStrategyScout):
 
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
+        emv_cross_strategy(base_df, self.params)
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_OBV(base_df)
         base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
@@ -395,9 +456,10 @@ def emv_cross_strategy(df, params, short_windows=5, long_windws=60):
     idx = df.ema_short.isna()
     df.loc[idx, "ema_short"] = df.Close.ewm(span=short_windows, adjust=False).mean()
     df.loc[idx, "ema_long"] = df.Close.ewm(span=long_windws, adjust=False).mean()
-    return (df.iloc[-1].ema_short > df.iloc[-1].ema_long) & (
-        df.iloc[-1].Kalman > df.iloc[-1].ema_short
-    )
+    return (df.Kalman > df.ema_short) & (df.ema_short > df.ema_long)
+    # return (df.iloc[-1].ema_short > df.iloc[-1].ema_long) & (
+    #     df.iloc[-1].Kalman > df.iloc[-1].ema_short
+    # )
 
 
 def calc_ADX(df, params, p=14):
@@ -423,7 +485,7 @@ def calc_ADX(df, params, p=14):
 
 def calc_Kalman_Price(df, windows=60, Q=1e-3, R=1e-3, alpha=0.6, gamma=0.2, beta=0.2):
     mask_lr = df["log_returns"].isna()
-    df.loc[mask_lr, "log_returns"] = np.log(df["Close"] / df["Close"].shift(1))[mask_lr]
+    df.loc[mask_lr, "log_returns"] = np.log(df["cv"] / df["cv"].shift(1))[mask_lr]
 
     # 计算 rolling window 的 drift（均值）和 volatility（标准差）
     drift = df["log_returns"].rolling(windows, min_periods=1).mean()
@@ -691,6 +753,97 @@ def debug_hmm(hmm_model, hidden_states, df, X):
     print("\n✅ HMM Debug 完成！請檢查上面的圖表來分析 HMM 是否合理地劃分了市場狀態。")
 
 
+def hmm_standardize(series: pd.Series, window: int = 20) -> pd.DataFrame:
+    _log = np.log(series + ZERO)
+    _ma = series.rolling(window).mean()
+    _relative_strength = series / _ma
+    _zscore = (series - _ma) / series.rolling(window).std()
+    # _sortino = sortino_ratio(series)
+    return _log, _ma, _relative_strength, _zscore
+
+
+def sortino_ratio(series, rf=0.0):
+    downside = series[series < rf]
+    downside_std = downside.std(ddof=0)
+    if np.isnan(downside_std):
+        downside_std = ZERO
+    return (series.mean() - rf) / downside_std
+
+
+def hmm_performance(df: pd.DataFrame):
+    df = df.copy()
+    df["log_return"] = np.log(df.Close / df.Close.shift(1))
+    df.dropna(subset=["log_return", "HMM_State"], inplace=True)
+    result = (
+        df.groupby("HMM_State")
+        .agg(
+            avg_return=("log_return", "mean"),
+            std_return=("log_return", "std"),
+            count=("log_return", "count"),
+            sortino_ratio=("log_return", sortino_ratio),
+        )
+        .reset_index()
+    )
+
+    return result.sortino_ratio.idxmax()
+
+
+# def hmm_performance(df: pd.DataFrame):
+#     df = df.copy()
+
+#     # 計算 log return
+#     df["log_return"] = np.log(df.Close / df.Close.shift(1))
+
+#     # 移除 NaN
+#     df.dropna(subset=["log_return", "HMM_State"], inplace=True)
+
+#     # 建立輸出表格
+#     result = (
+#         df.groupby("HMM_State")
+#         .agg(
+#             avg_return=("log_return", "mean"),
+#             std_return=("log_return", "std"),
+#             count=("log_return", "count"),
+#             sortino_ratio=("log_return", sortino_ratio),
+#         )
+#         .reset_index()
+#     )
+
+#     # 計算平均持續時間（每段連續出現狀態的長度）
+#     durations = []
+#     prev_state = None
+#     count_duration = 0
+#     for state in df["HMM_State"]:
+#         if state == prev_state:
+#             count_duration += 1
+#         else:
+#             if prev_state is not None:
+#                 durations.append((prev_state, count_duration))
+#             prev_state = state
+#             count_duration = 1
+#     if prev_state is not None:
+#         durations.append((prev_state, count_duration))
+
+#     duration_df = pd.DataFrame(durations, columns=["state", "duration"])
+#     avg_durations = (
+#         duration_df.groupby("state")["duration"]
+#         .mean()
+#         .reset_index()
+#         .rename(columns={"state": "HMM_State", "duration": "avg_duration"})
+#     )
+
+#     # 合併兩張表
+#     result = result.merge(avg_durations, on="HMM_State", how="left")
+
+#     # 加入 weighted score 計算（正規化方式）
+#     result["weight_count_std"] = (result["count"] / result["std_return"]).rank(pct=True)
+#     result["weight_duration"] = np.sqrt(result["avg_duration"]).rank(pct=True)
+#     result["weighted_score"] = result["sortino_ratio"] * (
+#         0.6 * result["weight_count_std"] + 0.4 * result["weight_duration"]
+#     )
+#     return result
+
+
 from quanthunt.utils import pandas_util
 from quanthunt.hunterverse.interface import IStrategyScout
 from quanthunt.hunterverse.interface import IMarketSensor
@@ -717,7 +870,7 @@ if __name__ == "__main__":
     def main(symbol: str, interval: str, count: int, hmm_split: int):
         params = {
             "ATR_sample": 60,
-            "bayes_windows": 10,
+            "bayes_windows": 20,
             "lower_sample": 60,
             "upper_sample": 60,
             "hard_cutoff": 0.9,
@@ -738,6 +891,8 @@ if __name__ == "__main__":
 
         sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
         base_df = sensor.scan(count)
+        # cut = pd.Timestamp("2025-06-04 15:00:00")
+        # base_df = base_df[base_df["Date"] >= cut].reset_index()
 
         scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
         scout = TurtleScout(sp)
@@ -747,6 +902,11 @@ if __name__ == "__main__":
 
         base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}_hmm_test.csv", index=False)
         print(f"created: {REPORTS_DIR}/{sp}_hmm_test.csv")
+        hmm_table = hmm_performance(base_df)
+        # print(hmm_table)
+        print(
+            f"BEST HMM_STATE: {hmm_table.loc[hmm_table['weighted_score'].idxmax(), 'HMM_State']}"
+        )
         return base_df[report_cols]
 
     main()

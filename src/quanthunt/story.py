@@ -197,9 +197,9 @@ def start_journey(sp):
     bsp.funds = 1000000
     hunter = {
         "s": xHunter("s", params=bsp),
-        "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
+        # "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
+        "x": xHunter("x", params=sp),
     }
-
     base_df = scout.train(base_df)
     hunter["x"].load_memories(base_df)
     target_key = "s" if sp.backtest else "x"
