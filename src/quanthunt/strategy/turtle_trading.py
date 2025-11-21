@@ -172,48 +172,120 @@ class TurtleScout(IStrategyScout):
 
         return df
 
+    # def _prepare_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
+    #     windows = self.params.bayes_windows
+    #     df = calc_Kalman_Price(df, windows=windows)
+    #     mask = df["KReturn"].isna()
+
+    #     df.loc[mask, "KReturn"] = np.log(
+    #         df.loc[mask, "Kalman"]
+    #         / (
+    #             df["Kalman"].shift(1).rolling(window=60, min_periods=5).mean()[mask]
+    #             + ZERO
+    #         )
+    #     )
+
+    #     df.loc[mask, "KReturnVol"] = (
+    #         df["KReturn"].rolling(window=windows, min_periods=5).mean()
+    #     )
+
+    #     rolling_mean = (
+    #         df.loc[mask, "Vol"].rolling(window=windows, min_periods=5).mean() + ZERO
+    #     )
+    #     df.loc[mask, "RVolume"] = np.log((df.loc[mask, "Vol"] + ZERO) / rolling_mean)
+
+    #     log_return = np.log(df.Close / df.Close.shift(1))
+    #     df.loc[mask, "log_return"] = log_return[mask]
+    #     close_log, close_ma, close_relative_strength, close_zscore = hmm_standardize(
+    #         df.Close, windows
+    #     )
+    #     df.loc[mask, "close_log"] = close_log[mask]
+    #     df.loc[mask, "close_ma"] = close_ma[mask]
+    #     df.loc[mask, "close_relative_strength"] = close_relative_strength[mask]
+    #     df.loc[mask, "close_zscore"] = close_zscore[mask]
+
+    #     vol_log, vol_ma, vol_relative_strength, vol_zscore = hmm_standardize(
+    #         df.Vol, windows
+    #     )
+    #     df.loc[mask, "vol_log"] = vol_log[mask]
+    #     df.loc[mask, "vol_ma"] = vol_ma[mask]
+    #     df.loc[mask, "vol_relative_strength"] = vol_relative_strength[mask]
+    #     df.loc[mask, "vol_zscore"] = vol_zscore[mask]
+
+    #     df["trend"] = df.Kalman - df.ema_long
+    #     features = ["trend", "cv_sum", "Slope", "TR"]
+    #     df[features] = df[features].fillna(method="bfill")
+
+    #     return self.scaler.fit_transform(df[features].values)
+
     def _prepare_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        HMM 特征工程（V3 行为 + 结构混合版）
+
+        原理说明：
+        ------------------------
+        HMM 最难的部分不是模型，而是 **feature 的物理意义**。
+
+        这版 V3 明确区分两种维度：
+
+        1）结构类（结构是价格分布、惯性、波动）
+            - trend_norm：趋势强弱（Kalman - EMA）标准化
+            - TR_norm：波动强弱（ATR / ATR均值）标准化
+            - bias_off_norm：价格偏离中心的程度（|Kalman - Close| / ATR）
+
+        2）行为类（行为是“市场参与者到底有没有共识”）
+            - RCS：Resonance Consensus Strength
+            由动能、成交量与稳定性构成，是“趋势是否被集体认同”的强度指标。
+
+        目的：
+            让 HMM 自动学出：
+            - state0：共识弱、趋势弱（震荡）
+            - state1：共识强、趋势健康（你要吃核心仓位的“金状态”）
+            - state2：共识过热或极端波动（高风险区）
+
+        最终 features：
+            ["RCS", "trend_norm", "TR_norm", "bias_off_norm"]
+
+        ------------------------
+        """
+
         windows = self.params.bayes_windows
+        ATR_sample = self.params.ATR_sample
+
+        # --- Kalman 价格 ---
         df = calc_Kalman_Price(df, windows=windows)
-        mask = df["KReturn"].isna()
 
-        df.loc[mask, "KReturn"] = np.log(
-            df.loc[mask, "Kalman"]
-            / (
-                df["Kalman"].shift(1).rolling(window=60, min_periods=5).mean()[mask]
-                + ZERO
-            )
+        ZERO = 1e-9
+
+        # ===== 行为因子（RCS） =====
+        df["momentum_factor"] = (df.High - df.Close) / (df.TR + ZERO)
+        df["res_strength"] = df.TR * df.Vol * df.momentum_factor
+
+        df["consensus_strength"] = (df.Kalman / df.Close).clip(0.1, 10) * df.Vol
+        df["consensus_norm"] = (
+            df.consensus_strength
+            / df.consensus_strength.rolling(window=ATR_sample).mean()
         )
 
-        df.loc[mask, "KReturnVol"] = (
-            df["KReturn"].rolling(window=windows, min_periods=5).mean()
+        df["RCS"] = df.res_strength * df.consensus_norm
+
+        # ===== 结构因子 =====
+
+        # 趋势强弱（趋势越大 → 越偏向趋势盘）
+        df["trend"] = df.Kalman - df["ema_long"]
+        df["trend_norm"] = df.trend / (df.ATR + ZERO)
+
+        # 波动强弱（波动越大 → 越偏向危险盘）
+        df["TR_norm"] = np.log(df.ATR) / np.log(
+            df.ATR.rolling(window=ATR_sample).mean() + ZERO
         )
 
-        rolling_mean = (
-            df.loc[mask, "Vol"].rolling(window=windows, min_periods=5).mean() + ZERO
-        )
-        df.loc[mask, "RVolume"] = np.log((df.loc[mask, "Vol"] + ZERO) / rolling_mean)
+        # 价格偏离中心（偏离越大 → 越危险）
+        df["bias_off_norm"] = (df.Kalman - df.Close).abs() / (df.ATR + ZERO)
 
-        log_return = np.log(df.Close / df.Close.shift(1))
-        df.loc[mask, "log_return"] = log_return[mask]
-        close_log, close_ma, close_relative_strength, close_zscore = hmm_standardize(
-            df.Close, windows
-        )
-        df.loc[mask, "close_log"] = close_log[mask]
-        df.loc[mask, "close_ma"] = close_ma[mask]
-        df.loc[mask, "close_relative_strength"] = close_relative_strength[mask]
-        df.loc[mask, "close_zscore"] = close_zscore[mask]
+        # --- Final features ---
+        features = ["RCS", "trend_norm", "TR_norm", "bias_off_norm"]
 
-        vol_log, vol_ma, vol_relative_strength, vol_zscore = hmm_standardize(
-            df.Vol, windows
-        )
-        df.loc[mask, "vol_log"] = vol_log[mask]
-        df.loc[mask, "vol_ma"] = vol_ma[mask]
-        df.loc[mask, "vol_relative_strength"] = vol_relative_strength[mask]
-        df.loc[mask, "vol_zscore"] = vol_zscore[mask]
-
-        df["trend"] = df.Kalman - df.ema_long
-        features = ["trend", "cv_sum", "Slope", "TR"]
         df[features] = df[features].fillna(method="bfill")
 
         return self.scaler.fit_transform(df[features].values)
@@ -360,7 +432,7 @@ class TurtleScout(IStrategyScout):
         df.loc[idx, "ATR"] = df["TR"].rolling(ATR_sample).mean()
         df.loc[idx, "ATR_STDV"] = df["TR"].rolling(ATR_sample).std()
 
-        df.loc[idx, "cv"] = np.log(df.Close * df.Vol)
+        df.loc[idx, "cv"] = np.log(df.TR * df.Vol)
         df.loc[idx, "cv_sum"] = df.cv.rolling(window=ATR_sample).sum()
 
         base_df.update(df)
@@ -635,7 +707,7 @@ def kalman_update(
 
         # 價格變動因子：價格劇烈變動時，信任度降低
         current_close = features[i, 1]
-        price_factor = np.exp(-beta * abs(current_close - previous_close))
+        price_factor = np.exp(beta * abs(current_close - previous_close))
 
         # 綜合調整後的觀測噪聲
         R_t = R_base * vol_factor * volat_factor * price_factor
@@ -770,22 +842,60 @@ def sortino_ratio(series, rf=0.0):
     return (series.mean() - rf) / downside_std
 
 
-def hmm_performance(df: pd.DataFrame):
+def hmm_performance(df: pd.DataFrame, min_count: int = 300) -> int:
+    """
+    原理（直覺版）：
+    1) HMM 每個 state 代表一種「市場狀態」；我們不想被樣本太少的 state 騙。
+    2) 先用 state 的出現次數過濾掉「冷門/不可靠」狀態（count >= min_count）。
+    3) 對每個可靠 state 取特徵均值，跟「理想的核心趨勢狀態」做距離比較：
+       - consensus_norm 越高越好（+1）
+       - trend_norm 越高越好（+1）
+       - TR_norm 越接近 0 越好（0，代表不過熱不過冷）
+       - bias_off_norm 越低越好（-1）
+    4) 距離越小越像核心趨勢狀態；回傳該 state id。
+    """
     df = df.copy()
-    df["log_return"] = np.log(df.Close / df.Close.shift(1))
-    df.dropna(subset=["log_return", "HMM_State"], inplace=True)
-    result = (
-        df.groupby("HMM_State")
-        .agg(
-            avg_return=("log_return", "mean"),
-            std_return=("log_return", "std"),
-            count=("log_return", "count"),
-            sortino_ratio=("log_return", sortino_ratio),
-        )
-        .reset_index()
+
+    counts = df["HMM_State"].value_counts()
+    valid_states = counts[counts >= min_count].index
+
+    prof = (
+        df.groupby("HMM_State")[
+            ["consensus_norm", "trend_norm", "TR_norm", "bias_off_norm"]
+        ]
+        .mean()
+        .loc[valid_states]
     )
 
-    return result.sortino_ratio.idxmax()
+    ideal = pd.Series(
+        {
+            "consensus_norm": +1.0,
+            "trend_norm": +1.0,
+            "TR_norm": 0.0,
+            "bias_off_norm": -1.0,
+        }
+    )
+
+    prof["score"] = (prof.sub(ideal) ** 2).sum(axis=1)
+    return int(prof["score"].idxmin())
+
+
+# def hmm_performance(df: pd.DataFrame):
+#     df = df.copy()
+#     df["log_return"] = np.log(df.Close / df.Close.shift(1))
+#     df.dropna(subset=["log_return", "HMM_State"], inplace=True)
+#     result = (
+#         df.groupby("HMM_State")
+#         .agg(
+#             avg_return=("log_return", "mean"),
+#             std_return=("log_return", "std"),
+#             count=("log_return", "count"),
+#             sortino_ratio=("log_return", sortino_ratio),
+#         )
+#         .reset_index()
+#     )
+
+#     return result.sortino_ratio.idxmax()
 
 
 # def hmm_performance(df: pd.DataFrame):
