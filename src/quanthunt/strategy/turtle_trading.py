@@ -860,16 +860,14 @@ def hmm_performance(df: pd.DataFrame, min_count: int = 300) -> int:
     valid_states = counts[counts >= min_count].index
 
     prof = (
-        df.groupby("HMM_State")[
-            ["consensus_norm", "trend_norm", "TR_norm", "bias_off_norm"]
-        ]
+        df.groupby("HMM_State")[["RCS", "trend_norm", "TR_norm", "bias_off_norm"]]
         .mean()
         .loc[valid_states]
     )
 
     ideal = pd.Series(
         {
-            "consensus_norm": +1.0,
+            "RCS": +1.0,
             "trend_norm": +1.0,
             "TR_norm": 0.0,
             "bias_off_norm": -1.0,
