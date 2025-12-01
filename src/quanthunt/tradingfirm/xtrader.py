@@ -515,7 +515,7 @@ class xHunter(IHunter):
         cached_order_ids = []
         from pathlib import Path
 
-        db_path = Path(f"{config.data_dir}_{self.params}_orders.csv")
+        db_path = Path(f"{config.data_dir}/{self.params}_orders.csv")
         print(f"Database path: {db_path}")
 
         cached_orders = pd.DataFrame()
@@ -648,7 +648,8 @@ class xHunter(IHunter):
         low_volumn = self.platform.is_onhold()
         trend_gone = False
         if self.latest_candlestick is not None:
-            trend_gone = self.latest_candlestick.get("HMM_Signal", 0) != 1
+            # trend_gone = self.latest_candlestick.get("HMM_Signal", 0) != 1
+            trend_gone = False
         self.on_hold = low_volumn or trend_gone
 
         if not self.strike:

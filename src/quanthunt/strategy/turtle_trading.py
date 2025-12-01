@@ -6,6 +6,7 @@ import pandas as pd
 import statistics
 from sklearn.preprocessing import StandardScaler
 from hmmlearn.hmm import GaussianHMM
+from quanthunt.strategy.algo_util.hmm_selector import HMMTrendSelector
 
 from quanthunt.hunterverse.interface import IStrategyScout, ZERO
 from quanthunt.utils import pandas_util
@@ -59,6 +60,10 @@ TURTLE_COLUMNS = [
     "trend",
     "cv",
     "cv_sum",
+    "RCS",
+    "trend_norm",
+    "TR_norm",
+    "bias_off_norm",
 ]
 
 
@@ -164,7 +169,8 @@ class TurtleScout(IStrategyScout):
         hidden_states = self.hmm_model.predict(X)
         mask = df["HMM_State"].isna()
         df.loc[mask, "HMM_State"] = hidden_states[mask]
-        df = self.define_market_states(df)
+        # df = self.define_market_states(df)
+        df = self.predict_market_states(df)
 
         # # 选配 debug
         # if getattr(self, "debug_mode", False):
@@ -217,7 +223,7 @@ class TurtleScout(IStrategyScout):
     #     df[features] = df[features].fillna(method="bfill")
 
     #     return self.scaler.fit_transform(df[features].values)
-
+    '''
     def _prepare_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
         """
         HMM 特征工程（V3 行为 + 结构混合版）
@@ -237,6 +243,13 @@ class TurtleScout(IStrategyScout):
             - RCS：Resonance Consensus Strength
             由动能、成交量与稳定性构成，是“趋势是否被集体认同”的强度指标。
 
+        新增特徵（對應 Trend μ 思想，但完全不碰 profit，不洩漏績效）：
+        ----------------------------------------------------------------
+        - up_streak_norm   : 連續上漲天數 / ATR_sample（趨勢持續性）
+        - down_streak_norm : 連續下跌天數 / ATR_sample（反向持續性）
+        - skew_ret         : 報酬偏態（正尾巴 / 假突破區分）
+        - dd_proxy         : 由價格本身推得的「局部回撤」指標
+
         目的：
             让 HMM 自动学出：
             - state0：共识弱、趋势弱（震荡）
@@ -251,13 +264,11 @@ class TurtleScout(IStrategyScout):
 
         windows = self.params.bayes_windows
         ATR_sample = self.params.ATR_sample
-
-        # --- Kalman 价格 ---
-        df = calc_Kalman_Price(df, windows=windows)
-
         ZERO = 1e-9
 
-        # ===== 行为因子（RCS） =====
+        # --- Kalman 價格 ---
+        df = calc_Kalman_Price(df, windows=windows)
+        # ========== 行為因子（RCS） ==========
         df["momentum_factor"] = (df.High - df.Close) / (df.TR + ZERO)
         df["res_strength"] = df.TR * df.Vol * df.momentum_factor
 
@@ -269,33 +280,229 @@ class TurtleScout(IStrategyScout):
 
         df["RCS"] = df.res_strength * df.consensus_norm
 
-        # ===== 结构因子 =====
-
-        # 趋势强弱（趋势越大 → 越偏向趋势盘）
+        # ========== 結構因子 ==========
+        # 趨勢強弱（Kalman - EMA_long）
         df["trend"] = df.Kalman - df["ema_long"]
         df["trend_norm"] = df.trend / (df.ATR + ZERO)
 
-        # 波动强弱（波动越大 → 越偏向危险盘）
-        df["TR_norm"] = np.log(df.ATR) / np.log(
+        # 波動強弱（ATR 相對於自身歷史均值）
+        df["TR_norm"] = np.log(df.ATR + ZERO) / np.log(
             df.ATR.rolling(window=ATR_sample).mean() + ZERO
         )
 
-        # 价格偏离中心（偏离越大 → 越危险）
+        # 價格偏離中心（離 Kalman 多遠）
         df["bias_off_norm"] = (df.Kalman - df.Close).abs() / (df.ATR + ZERO)
 
-        # --- Final features ---
-        features = ["RCS", "trend_norm", "TR_norm", "bias_off_norm"]
+        # ========== 新增：趨勢持續性 / 偏態 / 回撤 Proxy ==========
 
-        df[features] = df[features].fillna(method="bfill")
+        # 報酬（用 log return，避免比值爆炸）
+        df["ret"] = np.log(df.Close / df.Close.shift(1)).replace(
+            [np.inf, -np.inf], np.nan
+        )
+
+        # 1) 上漲 / 下跌連續天數（對應 Trend μ 裡的 L）
+        up_streak = []
+        down_streak = []
+        cur_up = 0
+        cur_dn = 0
+        for r in df["ret"].fillna(0).to_numpy():
+            if r > 0:
+                cur_up += 1
+                cur_dn = 0
+            elif r < 0:
+                cur_dn += 1
+                cur_up = 0
+            else:
+                cur_up = 0
+                cur_dn = 0
+            up_streak.append(cur_up)
+            down_streak.append(cur_dn)
+
+        df["up_streak_norm"] = np.array(up_streak) / max(ATR_sample, 1)
+        df["down_streak_norm"] = np.array(down_streak) / max(ATR_sample, 1)
+
+        # 2) 報酬偏態（正尾巴明顯 → 爆發趨勢傾向）
+        df["skew_ret"] = df["ret"].rolling(window=ATR_sample, min_periods=10).skew()
+
+        # 3) 局部 Drawdown proxy（用價格本身推，避免碰 profit）
+        roll_max = df["Close"].cummax()
+        df["dd_proxy"] = (roll_max - df["Close"]) / (roll_max + ZERO)
+
+        # --- Final features ---
+        features = [
+            "RCS",
+            "trend_norm",
+            "TR_norm",
+            "bias_off_norm",
+            "up_streak_norm",
+            "down_streak_norm",
+            "skew_ret",
+            "dd_proxy",
+        ]
+
+        df[features] = df[features].fillna(method="bfill").fillna(method="ffill")
 
         return self.scaler.fit_transform(df[features].values)
+    '''
+
+    def _prepare_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        HMM 特徵工程（V4 行為 + 結構 + 趨勢方向版）
+
+        結構類：
+            - trend_norm      : 趨勢強弱（Kalman - EMA_long）/ ATR
+            - TR_norm         : 波動強弱（ATR / ATR均值）的 log 比
+            - bias_off_norm   : 價格偏離中心（|Kalman - Close| / ATR）
+            - slope_norm      : Kalman 斜率 / ATR（真正的趨勢方向）
+
+        行為類：
+            - RCS             : Resonance Consensus Strength（共識強度）
+            - up_streak_norm  : 連續上漲天數 / ATR_sample
+            - down_streak_norm: 連續下跌天數 / ATR_sample
+            - skew_ret        : 報酬偏態（正尾巴 / 假突破）
+            - dd_proxy        : 價格自身推得的局部回撤比例
+        """
+
+        windows = self.params.bayes_windows
+        ATR_sample = self.params.ATR_sample
+        ZERO = 1e-9
+
+        # --- Kalman 價格 ---
+        df = calc_Kalman_Price(df, windows=windows)
+
+        # ========== 行為因子（RCS） ==========
+        df["momentum_factor"] = (df.High - df.Close) / (df.TR + ZERO)
+        df["res_strength"] = df.TR * df.Vol * df.momentum_factor
+
+        df["consensus_strength"] = (df.Kalman / df.Close).clip(0.1, 10) * df.Vol
+        df["consensus_norm"] = (
+            df.consensus_strength
+            / df.consensus_strength.rolling(window=ATR_sample).mean()
+        )
+
+        df["RCS"] = df.res_strength * df.consensus_norm
+
+        # ========== 結構因子 ==========
+        # 趨勢強弱（Kalman - EMA_long）
+        df["trend"] = df.Kalman - df["ema_long"]
+        df["trend_norm"] = df.trend / (df.ATR + ZERO)
+
+        # 波動強弱（ATR 相對於自身歷史均值）
+        df["TR_norm"] = np.log(df.ATR + ZERO) / np.log(
+            df.ATR.rolling(window=ATR_sample).mean() + ZERO
+        )
+
+        # 價格偏離中心（離 Kalman 多遠）
+        df["bias_off_norm"] = (df.Kalman - df.Close).abs() / (df.ATR + ZERO)
+
+        # **新增：趨勢方向（Kalman 斜率）**
+        df["kalman_slope"] = df.Kalman.diff()
+        df["slope_norm"] = df["kalman_slope"] / (df.ATR + ZERO)
+
+        # ========== 新增：趨勢持續性 / 偏態 / 回撤 Proxy ==========
+
+        # 報酬（log return）
+        df["ret"] = np.log(df.Close / df.Close.shift(1)).replace(
+            [np.inf, -np.inf], np.nan
+        )
+
+        # 1) 上漲 / 下跌連續天數
+        up_streak = []
+        down_streak = []
+        cur_up = 0
+        cur_dn = 0
+        for r in df["ret"].fillna(0).to_numpy():
+            if r > 0:
+                cur_up += 1
+                cur_dn = 0
+            elif r < 0:
+                cur_dn += 1
+                cur_up = 0
+            else:
+                cur_up = 0
+                cur_dn = 0
+            up_streak.append(cur_up)
+            down_streak.append(cur_dn)
+
+        df["up_streak_norm"] = np.array(up_streak) / max(ATR_sample, 1)
+        df["down_streak_norm"] = np.array(down_streak) / max(ATR_sample, 1)
+
+        # 2) 報酬偏態
+        df["skew_ret"] = df["ret"].rolling(window=ATR_sample, min_periods=10).skew()
+
+        # 3) 局部 Drawdown proxy
+        roll_max = df["Close"].cummax()
+        df["dd_proxy"] = (roll_max - df["Close"]) / (roll_max + ZERO)
+
+        # --- Final features ---
+        features = [
+            "RCS",
+            "trend_norm",
+            "TR_norm",
+            "bias_off_norm",
+            "slope_norm",
+            "up_streak_norm",
+            "down_streak_norm",
+            "skew_ret",
+            "dd_proxy",
+        ]
+
+        df[features] = df[features].fillna(method="bfill").fillna(method="ffill")
+
+        return self.scaler.fit_transform(df[features].values)
+
+    def predict_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        根據 HMMTrendSelector 選出「最值得做多的 HMM_State」
+        並填入：
+            - UP_State  : 全局推薦的上升狀態（單一 state id）
+            - HMM_Signal: 當前 row 的 HMM_State == UP_State 時，給 1，否則 0
+        """
+
+        # 確保 profit 欄位存在（這裡假設你回測已經算好）
+        if "profit" not in df.columns:
+            raise ValueError(
+                "define_market_states 需要 df 內含 'profit' 欄位，請先回填策略盈虧。"
+            )
+
+        # 1) 用 Trend μ 挑出最強的單一 state
+        selector = HMMTrendSelector(
+            df,
+            state_col="HMM_State",
+            profit_col="profit",
+            min_samples=500,  # 可改成 self.params.min_hmm_samples 之類
+        )
+        best_states = selector.best_states(top_n=1)
+        best_combo = selector.best_combos(top_n=1)
+        combo_states = set(best_combo.iloc[0]["combo"])
+        print(selector.best_combos(top_n=1))
+        if best_states.empty or best_states["trend_mu"].iloc[0] <= 0:
+            # 找不到有正期望的 state，就不要亂打 HMM_Signal
+            return df
+
+        up_state = int(best_states["state"].iloc[0])
+
+        # 2) 只填尚未設定的 UP_State
+        s = df["UP_State"].isna()
+        df.loc[s, "UP_State"] = up_state
+
+        # 3) HMM_Signal：當前 HMM_State == UP_State 時標記 1
+        s = df["HMM_Signal"].isna()
+        # Single HMM State
+        # df.loc[s, "HMM_Signal"] = (
+        #     df.loc[s, "HMM_State"] == df.loc[s, "UP_State"]
+        # ).astype(int)
+        # Combo HMM State
+        df.loc[s, "HMM_Signal"] = df.loc[s, "HMM_State"].isin(combo_states).astype(int)
+        return df
 
     def predict_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
         X = self._prepare_hmm_features(df)
         hidden_states = self.hmm_model.predict(X)
         mask = df["HMM_State"].isna()
         df.loc[mask, "HMM_State"] = hidden_states[mask]
-        df = self.define_market_states(df)
+        # df = self.define_market_states(df)
+        df = self.predict_market_states(df)
         return df
 
     def adjust_exit_price_by_slope(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -875,6 +1082,7 @@ def hmm_performance(df: pd.DataFrame, min_count: int = 300) -> int:
     )
 
     prof["score"] = (prof.sub(ideal) ** 2).sum(axis=1)
+    print(prof)
     return int(prof["score"].idxmin())
 
 

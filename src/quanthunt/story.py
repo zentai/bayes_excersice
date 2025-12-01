@@ -147,8 +147,8 @@ class HuntingStory:
         if "statement" in self.params.debug_mode:
             print(self.base_df[self.debug_cols].tail(30))
         if "mission_review" in self.params.debug_mode:
-            # target_key = "s" if self.params.backtest else "x"
-            target_key = "s"
+            target_key = "s" if self.params.backtest else "x"
+            # target_key = "s"
             if target_key in self.hunter:
                 symbol = self.params.symbol.name.replace("usdt", "/usdt")
                 client = target_key.upper()
@@ -170,10 +170,10 @@ class HuntingStory:
     def callback_order_matched(
         self, client, order_id, order_status, price, position, execute_timestamp
     ):
-        # if client == "x":
-        #     hunter = self.hunter[client]
-        #     hunter.load_memories(self.base_df)
-        #     self._debug_actions(mission_status="Running")
+        if client == "x":
+            hunter = self.hunter[client]
+            hunter.load_memories(self.base_df)
+            self._debug_actions(mission_status="Running")
         hunter = self.hunter[client]
         self._debug_actions(mission_status="Running")
 
@@ -200,13 +200,13 @@ def start_journey(sp):
     bsp.funds = 1000000
     hunter = {
         "s": xHunter("s", params=bsp),
-        # "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
-        "x": xHunter("x", params=sp),
+        "x": xHunter("x", params=sp, platform=Huobi("x", sp)),
+        # "x": xHunter("x", params=sp),
     }
     base_df = scout.train(base_df)
     hunter["x"].load_memories(base_df)
-    # target_key = "s" if sp.backtest else "x"
-    target_key = "s"
+    target_key = "s" if sp.backtest else "x"
+    # target_key = "s"
     debug_cols = DEBUG_COL + hunter[target_key].columns
     report_cols = DUMP_COL + sum([h.columns for h in hunter.values()], [])
 
