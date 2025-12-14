@@ -7,6 +7,7 @@ import statistics
 from sklearn.preprocessing import StandardScaler
 from hmmlearn.hmm import GaussianHMM
 from quanthunt.strategy.algo_util.hmm_selector import HMMTrendSelector
+from quanthunt.strategy.algo_util.bocpd import apply_bocpd_to_df
 
 from quanthunt.hunterverse.interface import IStrategyScout, ZERO
 from quanthunt.utils import pandas_util
@@ -64,6 +65,11 @@ TURTLE_COLUMNS = [
     "trend_norm",
     "TR_norm",
     "bias_off_norm",
+    "pred_mean",
+    "pred_var",
+    "cp_prob",
+    "cp_signal",
+    "run_length",
 ]
 
 
@@ -721,6 +727,14 @@ class TurtleScout(IStrategyScout):
         base_df = self._calc_OBV(base_df)
         base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
         base_df = self.predict_hmm(base_df)
+
+        hazard_lambda = 200.0
+        base_df = apply_bocpd_to_df(
+            base_df, price_col="Kalman", hazard_lambda=hazard_lambda, max_run_length=100
+        )
+        H = 1.0 / hazard_lambda  # 和 hazard_lambda 一樣
+        base_df["cp_signal"] = (base_df["cp_prob"] > 3 * H).astype(int)
+
         base_df = self._calc_profit(base_df)
         return base_df
 

@@ -209,6 +209,11 @@ DEBUG_COL = [
     # "UP_State",
     "HMM_Signal",
     "cv_sum",
+    "cp_prob",
+    "cp_signal",
+    "pred_mean",
+    "pred_var",
+    "run_length",
 ]
 
 DUMP_COL = [
@@ -265,4 +270,7 @@ DUMP_COL = [
     "trend",
     "cv",
     "cv_sum",
+    "cp_prob",
+    "cp_signal",
+    "run_length",
 ]
