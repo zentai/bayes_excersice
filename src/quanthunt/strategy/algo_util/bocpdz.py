@@ -78,32 +78,38 @@ class BOCPD:
             self.means = self.means[:self.r_max]
             self.vars = self.vars[:self.r_max]
             self.counts = self.counts[:self.r_max]
+#fixme
+def _expand_sufficient_statistics(self, x_t):
+    """
+    Expand stats to align with new run-lengths.
+    Must be called immediately after log_R is updated.
+    """
+    new_means = np.empty(len(self.log_R))
+    new_vars = np.empty(len(self.log_R))
+    new_counts = np.empty(len(self.log_R))
 
-    def _update_sufficient_statistics(self, x_t):
-        new_means = np.empty(len(self.means) + 1)
-        new_vars = np.empty(len(self.vars) + 1)
-        new_counts = np.empty(len(self.counts) + 1)
+    # r = 0 (new regime)
+    new_means[0] = x_t
+    new_vars[0] = 1.0
+    new_counts[0] = 1
 
-        new_means[0] = x_t
-        new_vars[0] = 1.0
-        new_counts[0] = 1
+    # r > 0 (shift old stats)
+    for i in range(len(self.means)):
+        n = self.counts[i]
+        mean = self.means[i]
+        var = self.vars[i]
 
-        for i in range(len(self.means)):
-            n = self.counts[i]
-            mean = self.means[i]
-            var = self.vars[i]
+        n_new = n + 1
+        mean_new = mean + (x_t - mean) / n_new
+        var_new = ((n - 1) * var + (x_t - mean) * (x_t - mean_new)) / max(n, 1)
 
-            n_new = n + 1
-            mean_new = mean + (x_t - mean) / n_new
-            var_new = ((n - 1) * var + (x_t - mean) * (x_t - mean_new)) / max(n, 1)
+        new_means[i + 1] = mean_new
+        new_vars[i + 1] = max(var_new, 1e-6)
+        new_counts[i + 1] = n_new
 
-            new_means[i + 1] = mean_new
-            new_vars[i + 1] = max(var_new, 1e-6)
-            new_counts[i + 1] = n_new
-
-        self.means = new_means
-        self.vars = new_vars
-        self.counts = new_counts
+    self.means = new_means
+    self.vars = new_vars
+    self.counts = new_counts
 
     def _compute_outputs(self):
         R = np.exp(self.log_R)
