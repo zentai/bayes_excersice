@@ -19,6 +19,29 @@ import seaborn as sns
 from scipy.stats import norm, entropy
 
 
+from scipy.stats import norm, entropy, gaussian_kde
+
+
+def simulate_profit_by_kde(
+    profit_array, n_simulated=1000, bandwidth="scott", seed=None
+):
+    if seed is not None:
+        np.random.seed(seed)
+
+    profit_array = np.asarray(profit_array)
+    profit_array = profit_array[~np.isnan(profit_array)]
+
+    kde = gaussian_kde(profit_array, bw_method=bandwidth)
+
+    xmin, xmax = profit_array.min(), profit_array.max()
+    x_range = (xmax - xmin) * 0.5
+    xmin -= x_range
+    xmax += x_range
+
+    samples = kde.resample(n_simulated).reshape(-1)
+    return samples
+
+
 # ================================
 #  样本量檢查（勝率估計）
 # ================================

@@ -7,6 +7,7 @@ from plot_performance import (
     plot_strategy_cdf_comparison,
     plot_kl_matrix,
     plot_tail_quadrant,
+    simulate_profit_by_kde,
 )
 
 
@@ -201,7 +202,7 @@ def kalman_trend_force_multi_obs(df, window=200, Q=None, R=None, init_state=None
 
     if R is None:
         # 兩個觀測通道各自的噪音
-        R = np.diag([1e-2, 1e-2]).astype(float)  # (2,2)
+        R = np.diag([1e-1, 1e-1]).astype(float)  # (2,2)
 
     # 初始狀態
     if init_state is None:
@@ -560,11 +561,10 @@ def add_addon_signal(df, atr_window=14, atr_factor=1.2):
 
 # 實際跑一次
 if __name__ == "__main__":
-    df = pd.read_csv(
-        "/Users/zen/Documents/code/bayes/reports/1214_021515_xrpusdt_60min_fun15.0cap10.1atr60bw20up60lw60hmm3_cut0.95pnl3.0ext1.5stp5.csv"
-    )
+    file_name = "/Users/zen/code/bayes_excersice/reports/1216_044620_btcusdt_1min_fun1000.0cap100.0atr60bw20up60lw60hmm3_cut0.975pnl3.0ext1.0stp5.csv"
+    df = pd.read_csv(f"{file_name}")
     out = kalman_trend_force_multi_obs(df, window=240)
-    out = kalman_close_3rd(out, window=240)
+    out = kalman_close_3rd(out, window=240, qL=1e-5, qS=1e-4, qA=1e-3, r0=1e-1)
     out_kf = LSA_BuySignal_kf(out)
     out_kfkc = LSA_BuySignal_kfkc(out)
     out_kf_trendprod = LSA_BuySignal_kf_trendprod(out)
@@ -593,45 +593,111 @@ if __name__ == "__main__":
     out.to_csv("temp.csv", index=False)
     print("temp.csv")
 
-    # 假設你已有多個策略的 profits
-    strategy_dict = {
-        "base": df.profit.dropna(),
-        "kf": out_kf[out_kf.BuySignal == 1].profit.dropna(),
-        "kc": out_kc[out_kc.BuySignal == 1].profit.dropna(),
-        "kf+kc": out_kfkc[out_kfkc.BuySignal == 1].profit.dropna(),
-        "kf+trendprod": out_kf_trendprod[
-            out_kf_trendprod.BuySignal == 1
-        ].profit.dropna(),
-        "kc+trendprod": out_kc_trendprod[
-            out_kc_trendprod.BuySignal == 1
-        ].profit.dropna(),
-        "kf+kc+trendprod": out_kfkc_trendprod[
-            out_kfkc_trendprod.BuySignal == 1
-        ].profit.dropna(),
-    }
+    # =========================
+    # 收集各策略的 profit 样本
+    # =========================
 
-    def print_checksample(strategy_name, profits):
-        print(f'{strategy_name}: {check_sample_size(profits)["status"]}')
+    strategy_dict = {}
 
-    # 樣本量檢查
-    print_checksample("BASE", df.profit.dropna())
-    print_checksample("KF", out_kf[out_kf.BuySignal == 1].profit.dropna())
-    print_checksample("KC", out_kc[out_kc.BuySignal == 1].profit.dropna())
-    print_checksample("KF+KC", out_kfkc[out_kfkc.BuySignal == 1].profit.dropna())
-    print_checksample(
-        "KF+Trendprod",
-        out_kf_trendprod[out_kf_trendprod.BuySignal == 1].profit.dropna(),
+    st_base = df.profit.dropna()
+
+    st_HMM = df[df.HMM_Signal == 1].profit.dropna()
+    st_EMA_Buy = df[(df.BuySignal == "True") | (df.BuySignal == "1.0")].profit.dropna()
+    st_HMM_EMA_Buy = df[
+        ((df.BuySignal == "True") | (df.BuySignal == "1.0")) & (df.HMM_Signal == 1)
+    ].profit.dropna()
+
+    st_kf = out_kf[out_kf.BuySignal == 1].profit.dropna()
+    st_kc = out_kc[out_kc.BuySignal == 1].profit.dropna()
+    st_kf_kc = out_kfkc[out_kfkc.BuySignal == 1].profit.dropna()
+
+    st_kf_trendprod = out_kf_trendprod[out_kf_trendprod.BuySignal == 1].profit.dropna()
+    st_kc_trendprod = out_kc_trendprod[out_kc_trendprod.BuySignal == 1].profit.dropna()
+    st_kf_kc_trendprod = out_kfkc_trendprod[
+        out_kfkc_trendprod.BuySignal == 1
+    ].profit.dropna()
+
+    # =========================
+    # 样本量检查函数
+    # =========================
+
+    def checksample(strategy_name, profits):
+        result = check_sample_size(profits)
+        print(f"{strategy_name}: {result['status']}")
+        return result["enough"]
+
+    # =========================
+    # 统一样本量（KDE + MC）
+    # 目标：与 BASE 交易次数一致
+    # =========================
+
+    base_n = st_base.count()
+
+    if checksample("BASE", st_base):
+        strategy_dict["base"] = st_base
+
+    if checksample("HMM", st_HMM):
+        strategy_dict["HMM"] = simulate_profit_by_kde(st_HMM, base_n)
+
+    if checksample("EMA", st_EMA_Buy):
+        strategy_dict["EMA_Buy"] = simulate_profit_by_kde(st_EMA_Buy, base_n)
+
+    if checksample("HMM+EMA", st_HMM_EMA_Buy):
+        strategy_dict["HMM+EMA_Buy"] = simulate_profit_by_kde(st_HMM_EMA_Buy, base_n)
+
+    if checksample("KF", st_kf):
+        strategy_dict["kf"] = simulate_profit_by_kde(st_kf, base_n)
+
+    if checksample("KC", st_kc):
+        strategy_dict["kc"] = simulate_profit_by_kde(st_kc, base_n)
+
+    if checksample("KF+KC", st_kf_kc):
+        strategy_dict["kf+kc"] = simulate_profit_by_kde(st_kf_kc, base_n)
+
+    if checksample("KF+Trendprod", st_kf_trendprod):
+        strategy_dict["kf+trendprod"] = simulate_profit_by_kde(st_kf_trendprod, base_n)
+
+    if checksample("KC+Trendprod", st_kc_trendprod):
+        strategy_dict["kc+trendprod"] = simulate_profit_by_kde(st_kc_trendprod, base_n)
+
+    if checksample("KF+KC+Trendprod", st_kf_kc_trendprod):
+        strategy_dict["kf+kc+trendprod"] = simulate_profit_by_kde(
+            st_kf_kc_trendprod, base_n
+        )
+
+    # =========================
+    # 输出中间结果（原始 dataframe）
+    # =========================
+
+    out_kf.to_csv(
+        f"{file_name}_KF.csv",
+        index=False,
     )
-    print_checksample(
-        "KC+Trendprod",
-        out_kc_trendprod[out_kc_trendprod.BuySignal == 1].profit.dropna(),
+    out_kc.to_csv(
+        f"{file_name}_KC.csv",
+        index=False,
     )
-    print_checksample(
-        "KF+KC+Trendprod",
-        out_kfkc_trendprod[out_kfkc_trendprod.BuySignal == 1].profit.dropna(),
+    out_kfkc.to_csv(
+        f"{file_name}_KF_KC.csv",
+        index=False,
+    )
+    out_kf_trendprod.to_csv(
+        f"{file_name}_KF_TrendProd.csv",
+        index=False,
+    )
+    out_kc_trendprod.to_csv(
+        f"{file_name}_KC_TrendProd.csv",
+        index=False,
+    )
+    out_kfkc_trendprod.to_csv(
+        f"{file_name}_KF_KC_TrendProd.csv",
+        index=False,
     )
 
-    # 各種比較圖
+    # =========================
+    # 各策略 KDE / 分布比较
+    # =========================
+
     plot_strategy_kde_comparison(strategy_dict)
     plot_strategy_cdf_comparison(strategy_dict)
     plot_kl_matrix(strategy_dict)
