@@ -255,7 +255,7 @@ from mosaic import mosaic_step  # 你现有的实现
 
 def main2():
     # === 1) 讀資料 ===
-    path = "/Users/zen/code/bayes_excersice/reports/1216_080801_xrpusdt_1min_fun1000.0cap100.0atr60bw20up60lw60hmm3_cut0.975pnl3.0ext1.0stp5.csv"
+    path = "/Users/zen/code/bayes_excersice/reports/1216_085945_pepeusdt_1min_fun1000.0cap100.0atr60bw20up60lw60hmm3_cut0.975pnl3.0ext1.0stp5.csv"
     df = pd.read_csv(path)
 
     # === 2) 確保 MOSAIC 欄位存在（不覆寫） ===

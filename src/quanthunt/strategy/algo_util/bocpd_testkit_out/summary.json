@@ -1,0 +1,47 @@
+{
+  "passed": false,
+  "worlds": [
+    {
+      "world": "Stable",
+      "seed": 1,
+      "T": 2000,
+      "csv": "bocpd_testkit_out/Stable_seed1_T2000.csv",
+      "passed": true,
+      "errors": [],
+      "break_t": null
+    },
+    {
+      "world": "Drift",
+      "seed": 2,
+      "T": 2000,
+      "csv": "bocpd_testkit_out/Drift_seed2_T2000.csv",
+      "passed": true,
+      "errors": [],
+      "break_t": null
+    },
+    {
+      "world": "Shock",
+      "seed": 3,
+      "T": 2000,
+      "csv": "bocpd_testkit_out/Shock_seed3_T2000.csv",
+      "passed": false,
+      "errors": [
+        "[Shock] p1_tail_prob q99 too low (no shock response): 0.1317 < 0.3"
+      ],
+      "break_t": null
+    },
+    {
+      "world": "Break",
+      "seed": 4,
+      "T": 2000,
+      "csv": "bocpd_testkit_out/Break_seed4_T2000.csv",
+      "passed": false,
+      "errors": [
+        "[Break] post g0_cp_prob q90 too low: 0.2436 < 0.4",
+        "[Break] post g0_run_length_mode median too high (no collapse): 1450.50 > 200.0",
+        "[Break] post g0_surprise_ewma median too low: 0.7873 < 1.0"
+      ],
+      "break_t": 900
+    }
+  ]
+}

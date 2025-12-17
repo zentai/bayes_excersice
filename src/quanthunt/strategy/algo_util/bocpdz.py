@@ -1,193 +1,511 @@
+from __future__ import annotations
+from dataclasses import dataclass
 import numpy as np
+from scipy.special import gammaln
 
-# =====================================================
-# BOCPD (same as your current Gaussian online version)
-# =====================================================
 
-class BOCPD:
+def logsumexp(a: np.ndarray) -> float:
+    a = np.asarray(a, dtype=float)
+    m = np.max(a)
+    if not np.isfinite(m):
+        return -np.inf
+    return float(m + np.log(np.sum(np.exp(a - m))))
+
+
+def clip01(x: float) -> float:
+    return float(np.clip(x, 0.0, 1.0))
+
+
+@dataclass(frozen=True)
+class BOCPDOutputs:
+    cp_prob: float
+    run_length_mean: float
+    run_length_mode: int
+    support: int
+
+    log_pred_mix: float
+    surprise: float
+    z_mix: float
+    z2_ewma: float
+    surprise_ewma: float
+
+    role: str
+
+    scale_mix: float
+    tail_prob_k: float
+    shock_score: float
+
+    regime_confidence: float
+    risk_level: float
+
+
+class BOCPDBase:
+    """
+    Deterministic BOCPD core:
+    - Keeps true runlength values in self.r_vals (IMPORTANT)
+    - Prunes deterministically by top-K probability (stable tie-break)
+    - Always keeps r=0 bucket
+    - Diagnostics use prior-predictive for r=0 (not hardcoded zeros)
+    """
+
     def __init__(
         self,
-        hazard=0.01,
-        r_max=300,
-        prune_threshold=1e-6,
-        cp_threshold=0.5,
-        cp_confirm_steps=3,
+        hazard: float = 0.01,
+        r_max: int = 300,
+        prune_threshold: float = 1e-8,  # kept for compatibility; not used as hard mask gate
+        ewma_alpha: float = 0.05,
+        z_clip: float = 50.0,
+        debug: bool = False,
     ):
-        self.hazard = hazard
-        self.r_max = r_max
-        self.prune_threshold = prune_threshold
-        self.cp_threshold = cp_threshold
-        self.cp_confirm_steps = cp_confirm_steps
+        self.hazard = float(hazard)
+        self.r_max = int(r_max)
+        self.prune_threshold = float(prune_threshold)
+        self.ewma_alpha = float(ewma_alpha)
+        self.z_clip = float(z_clip)
+        self.debug = bool(debug)
 
-        self.log_R = np.array([0.0])
-        self.means = np.array([0.0])
-        self.vars = np.array([1.0])
-        self.counts = np.array([1])
+        # Posterior over hypotheses (log-space)
+        self.log_R = np.array([0.0], dtype=float)
 
-        self.cp_counter = 0
-        self.regime_id = 0
+        # True runlength values aligned with log_R
+        self.r_vals = np.array([0], dtype=np.int64)
 
-    def update(self, x):
-        log_pred = self._log_likelihood(x)
-        self._update_runlength(log_pred)
+        self._t = 0
+        self._surprise_ewma = 0.0
+        self._z2_ewma = 0.0
+
+        # aux aligned with *current* hypotheses (same length as log_R)
+        self._last_log_pred = np.array([0.0], dtype=float)
+        self._last_z = np.array([0.0], dtype=float)
+        self._last_scale = np.array([1.0], dtype=float)
+
+    # ---- Public API ----
+    def update(self, x: float) -> BOCPDOutputs:
+        x = float(x)
+        log_pred, z, scale = self._log_likelihood_and_aux(x)  # over CURRENT hypotheses
+
+        self._update_runlength(x, log_pred, z, scale)
         self._expand_stats(x)
-        self._normalize_and_prune()
-        out = self._outputs()
-        self._update_regime(out["cp_prob"])
+        self._normalize_prune_truncate()
+
+        out = self._outputs(role=self._role_name())
+        self._t += 1
         return out
 
-    def _log_likelihood(self, x):
-        var = self.vars + 1e-8
-        return -0.5 * (np.log(2 * np.pi * var) + (x - self.means) ** 2 / var)
+    # ---- Core recursion ----
+    def _update_runlength(
+        self,
+        x: float,
+        log_pred: np.ndarray,
+        z: np.ndarray,
+        scale: np.ndarray,
+    ) -> None:
+        log_pred = np.asarray(log_pred, dtype=float)
 
-    def _update_runlength(self, log_pred):
-        log_R_new = np.full(len(self.log_R) + 1, -np.inf)
-        log_R_new[1:] = self.log_R + log_pred + np.log(1 - self.hazard)
-        log_R_new[0] = np.logaddexp.reduce(
-            self.log_R + log_pred + np.log(self.hazard)
-        )
+        # new hypotheses count = old + 1 (r=0 plus growth)
+        log_R_new = np.full(len(self.log_R) + 1, -np.inf, dtype=float)
+
+        log_h = np.log(self.hazard)
+        log_1mh = np.log(1.0 - self.hazard)
+
+        # growth: r -> r+1
+        log_R_new[1:] = self.log_R + log_pred + log_1mh
+
+        # changepoint: aggregate to r=0
+        log_R_new[0] = logsumexp(self.log_R + log_pred + log_h)
+
         self.log_R = log_R_new
 
-    def _expand_stats(self, x):
-        new_means = np.empty(len(self.log_R))
-        new_vars = np.empty(len(self.log_R))
-        new_counts = np.empty(len(self.log_R))
+        # true runlength values
+        r_new = np.empty(len(self.r_vals) + 1, dtype=np.int64)
+        r_new[0] = 0
+        r_new[1:] = self.r_vals + 1
+        self.r_vals = r_new
 
-        new_means[0] = x
-        new_vars[0] = 1.0
-        new_counts[0] = 1
+        # aux aligned with new hypotheses:
+        # index 0 is fresh segment prior-predictive at x
+        lp0, z0, s0 = self._fresh_aux_at_x(x)
+        self._last_log_pred = np.concatenate(([lp0], log_pred))
+        self._last_z = np.concatenate(([z0], z))
+        self._last_scale = np.concatenate(([s0], scale))
 
-        for i in range(len(self.means)):
-            n = self.counts[i]
-            mu = self.means[i]
-            var = self.vars[i]
-
-            n2 = n + 1
-            mu2 = mu + (x - mu) / n2
-            var2 = ((n - 1) * var + (x - mu) * (x - mu2)) / max(n, 1)
-
-            new_means[i + 1] = mu2
-            new_vars[i + 1] = max(var2, 1e-6)
-            new_counts[i + 1] = n2
-
-        self.means = new_means
-        self.vars = new_vars
-        self.counts = new_counts
-
-    def _normalize_and_prune(self):
-        self.log_R -= np.logaddexp.reduce(self.log_R)
+    def _normalize_prune_truncate(self) -> None:
+        # normalize
+        self.log_R = self.log_R - logsumexp(self.log_R)
         R = np.exp(self.log_R)
 
-        mask = R > self.prune_threshold
-        self.log_R = self.log_R[mask]
-        self.means = self.means[mask]
-        self.vars = self.vars[mask]
-        self.counts = self.counts[mask]
+        # --- deterministic prune/truncate by top-K probability ---
+        # Always keep r=0 bucket (index where r_vals == 0, should be 0)
+        idx0 = int(np.where(self.r_vals == 0)[0][0])
 
-        if len(self.log_R) > self.r_max:
-            self.log_R = self.log_R[: self.r_max]
-            self.means = self.means[: self.r_max]
-            self.vars = self.vars[: self.r_max]
-            self.counts = self.counts[: self.r_max]
+        # stable sorting by (-R, r_vals, index) to remove tie nondeterminism
+        idx = np.arange(len(R), dtype=np.int64)
+        order = np.lexsort((idx, self.r_vals, -R))  # primary: -R, tie: r_vals, tie: idx
 
-    def _outputs(self):
+        # choose top K (bounded by r_max)
+        k = min(self.r_max, len(R))
+        keep = order[:k]
+
+        # ensure idx0 kept
+        if idx0 not in keep:
+            # replace last with idx0 deterministically
+            keep = np.array(list(keep[:-1]) + [idx0], dtype=np.int64)
+
+        # Now: for nicer semantics (and stable prints), sort keep by r_vals ascending
+        keep = keep[np.argsort(self.r_vals[keep], kind="mergesort")]
+
+        if len(keep) < len(R):
+            self._apply_keep_indices(keep)
+            R = np.exp(self.log_R)
+
+        # renormalize again (exact)
+        self.log_R = self.log_R - logsumexp(self.log_R)
+
+    def _apply_keep_indices(self, keep: np.ndarray) -> None:
+        keep = np.asarray(keep, dtype=np.int64)
+
+        self.log_R = self.log_R[keep]
+        self.r_vals = self.r_vals[keep]
+
+        self._last_log_pred = self._last_log_pred[keep]
+        self._last_z = self._last_z[keep]
+        self._last_scale = self._last_scale[keep]
+
+        # stats: keep by mask to preserve your existing signature
+        mask = np.zeros(len(keep) + (0), dtype=bool)  # placeholder (not used)
+        # We must build mask over original length; easiest: pass keep to new hook.
+        self._keep_stats(keep)
+
+    # ---- Outputs ----
+    def _outputs(self, role: str) -> BOCPDOutputs:
         R = np.exp(self.log_R)
-        rl = np.arange(len(R))
-        return {
-            "cp_prob": R[0],
-            "run_length_mean": np.sum(rl * R),
-            "run_length_mode": int(rl[np.argmax(R)]),
-            "regime_id": self.regime_id,
-        }
 
-    def _update_regime(self, cp_prob):
-        if cp_prob > self.cp_threshold:
-            self.cp_counter += 1
-        else:
-            self.cp_counter = 0
+        cp_prob = float(R[self._idx_r0()])
+        support = int(len(R))
 
-        if self.cp_counter >= self.cp_confirm_steps:
-            self.regime_id += 1
-            self.cp_counter = 0
+        # runlength mean/mode computed on TRUE runlength values
+        run_length_mean = float(np.sum(self.r_vals.astype(float) * R))
+        mode_idx = int(np.argmax(R))
+        run_length_mode = int(self.r_vals[mode_idx])
+
+        log_pred_mix = float(np.sum(R * self._last_log_pred))
+        surprise = float(-log_pred_mix)
+
+        z_mix = float(np.sum(R * self._last_z))
+        z_mix = float(np.clip(z_mix, -self.z_clip, self.z_clip))
+
+        # ADD: robust magnitude (no cancel)
+        z_rms = float(np.sqrt(np.sum(R * (self._last_z**2))))
+        z_rms = float(np.clip(z_rms, 0.0, self.z_clip))
+
+        scale_mix = float(np.sum(R * self._last_scale))
+
+        a = self.ewma_alpha
+        self._surprise_ewma = (1 - a) * self._surprise_ewma + a * surprise
+        self._z2_ewma = (1 - a) * self._z2_ewma + a * (z_mix * z_mix)
+
+        # concentration proxy (entropy over hypotheses)
+        entropy = -float(np.sum(R * np.log(R + 1e-12)))
+        entropy_norm = entropy / np.log(max(support, 2))
+        confidence = clip01((1.0 - entropy_norm) * np.exp(-0.15 * self._surprise_ewma))
+
+        tail_prob_k, shock_score, risk_level = self._risk_semantics(R, z_rms, scale_mix)
+
+        if self.debug and (cp_prob > 0.05 or self._t % 200 == 0):
+            print(
+                f"[DBG {role}] t={self._t:4d} "
+                f"cp={cp_prob:.4f} mode_r={run_length_mode:4d} mean_r={run_length_mean:7.2f} "
+                f"surp={surprise:.3f} surpEWMA={self._surprise_ewma:.3f} z={z_mix:.2f} "
+                f"support={support}"
+            )
+
+        return BOCPDOutputs(
+            cp_prob=cp_prob,
+            run_length_mean=run_length_mean,
+            run_length_mode=run_length_mode,
+            support=support,
+            log_pred_mix=log_pred_mix,
+            surprise=surprise,
+            z_mix=z_mix,
+            z2_ewma=float(self._z2_ewma),
+            surprise_ewma=float(self._surprise_ewma),
+            role=role,
+            scale_mix=scale_mix,
+            tail_prob_k=tail_prob_k,
+            shock_score=shock_score,
+            regime_confidence=confidence,
+            risk_level=risk_level,
+        )
+
+    def _idx_r0(self) -> int:
+        # r=0 should exist and be unique
+        return int(np.where(self.r_vals == 0)[0][0])
+
+    # ---- Subclass hooks ----
+    def _role_name(self) -> str:
+        raise NotImplementedError
+
+    def _log_likelihood_and_aux(
+        self, x: float
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        raise NotImplementedError
+
+    def _expand_stats(self, x: float) -> None:
+        raise NotImplementedError
+
+    # NEW: keep stats by indices (deterministic prune uses indices, not mask)
+    def _keep_stats(self, keep: np.ndarray) -> None:
+        raise NotImplementedError
+
+    # prior predictive aux for fresh segment at x (diagnostics only)
+    def _fresh_aux_at_x(self, x: float) -> tuple[float, float, float]:
+        raise NotImplementedError
+
+    def _risk_semantics(
+        self, R: np.ndarray, z_mix: float, scale_mix: float
+    ) -> tuple[float, float, float]:
+        return (float("nan"), float("nan"), 0.0)
 
 
-# =====================================================
-# Synthetic data generators
-# =====================================================
+class BOCPDGaussianG0(BOCPDBase):
+    """
+    Gaussian G0:
+    x ~ Normal(m, sigma_obs^2 + v)
+    Posterior over mean: m, v (known sigma_obs^2)
+    """
 
-def case_A(T=500, cp=250):
-    return np.concatenate([
-        np.random.normal(0, 1.0, cp),
-        np.random.normal(0, 2.5, T - cp)
-    ]), cp
+    def __init__(
+        self,
+        sigma_obs: float = 1.0,
+        mu0: float = 0.0,
+        var0: float = 10.0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.sigma_obs2 = float(sigma_obs) ** 2
+        self.mu0 = float(mu0)
+        self.var0 = float(var0)
 
-def case_B(T=500):
-    x = np.random.normal(0, 1.0, T)
-    for i in range(T):
-        if np.random.rand() < 0.02:
-            x[i] += np.random.choice([-1, 1]) * 8
-    return x
+        self.m = np.array([self.mu0], dtype=float)
+        self.v = np.array([self.var0], dtype=float)
+        self.counts = np.array([1.0], dtype=float)
 
-def case_C(T=600):
-    x = []
-    for t in range(T):
-        sigma = 1.0 if t < 300 else 1.0 + 0.01 * (t - 300)
-        x.append(np.random.normal(0, sigma))
-    return np.array(x)
+        self.gate_on = 2.5  # surprise_ewma 進入門檻（你可調）
+        self.gate_off = 1.8  # surprise_ewma 退出門檻（滯後）
+        self.hold_ticks = 40  # 進入後至少維持 N 根
+        self._gate_hold = 0
+        self._gate_state = 0  # 0/1
+        self.hazard_mul_min = 0.05
+        self.hazard_mul_max = 8.0
+
+    def _role_name(self) -> str:
+        return "Gaussian_G0"
+
+    def _log_likelihood_and_aux(self, x: float):
+        pred_var = np.maximum(self.sigma_obs2 + self.v, 1e-12)
+        pred_sigma = np.sqrt(pred_var)
+
+        log_pred = -0.5 * (
+            np.log(2 * np.pi * pred_var) + ((x - self.m) ** 2) / pred_var
+        )
+
+        z = (x - self.m) / (pred_sigma + 1e-12)
+        z = np.clip(z, -self.z_clip, self.z_clip)
+
+        return log_pred, z, pred_sigma
+
+    def _expand_stats(self, x: float) -> None:
+        new_len = len(self.log_R)
+
+        new_m = np.empty(new_len, dtype=float)
+        new_v = np.empty(new_len, dtype=float)
+        new_counts = np.empty(new_len, dtype=float)
+
+        # fresh segment: prior -> posterior with one obs
+        v0 = self.var0
+        m0 = self.mu0
+        v_post = 1.0 / (1.0 / v0 + 1.0 / self.sigma_obs2)
+        m_post = v_post * (m0 / v0 + x / self.sigma_obs2)
+
+        new_m[0] = m_post
+        new_v[0] = v_post
+        new_counts[0] = 1.0
+
+        for i in range(len(self.m)):
+            m, v = self.m[i], self.v[i]
+            v_post = 1.0 / (1.0 / v + 1.0 / self.sigma_obs2)
+            m_post = v_post * (m / v + x / self.sigma_obs2)
+
+            new_m[i + 1] = m_post
+            new_v[i + 1] = v_post
+            new_counts[i + 1] = self.counts[i] + 1.0
+
+        self.m, self.v, self.counts = new_m, new_v, new_counts
+
+    def _keep_stats(self, keep: np.ndarray) -> None:
+        self.m = self.m[keep]
+        self.v = self.v[keep]
+        self.counts = self.counts[keep]
+
+    def _fresh_aux_at_x(self, x: float) -> tuple[float, float, float]:
+        # prior predictive: x ~ N(mu0, sigma_obs2 + var0)
+        pred_var = max(self.sigma_obs2 + self.var0, 1e-12)
+        pred_sigma = float(np.sqrt(pred_var))
+        lp = float(
+            -0.5 * (np.log(2 * np.pi * pred_var) + ((x - self.mu0) ** 2) / pred_var)
+        )
+        z = float((x - self.mu0) / (pred_sigma + 1e-12))
+        z = float(np.clip(z, -self.z_clip, self.z_clip))
+        return lp, z, pred_sigma
 
 
-# =====================================================
-# Validation logic (semantic-correct)
-# =====================================================
+class BOCPDStudentTP1(BOCPDBase):
+    """
+    Student-t P1 with NIG prior.
+    Predictive is Student-t with df=2*alpha, loc=mu, scale=sqrt(beta*(kappa+1)/(alpha*kappa))
+    """
 
-def run_case_A():
-    x, cp = case_A()
-    bocpd = BOCPD()
-    cp_probs = []
+    def __init__(
+        self,
+        mu0: float = 0.0,
+        kappa0: float = 1.0,
+        alpha0: float = 2.0,
+        beta0: float = 2.0,
+        k_tail: float = 3.0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.mu0 = float(mu0)
+        self.kappa0 = float(kappa0)
+        self.alpha0 = float(alpha0)
+        self.beta0 = float(beta0)
+        self.k_tail = float(k_tail)
 
-    for v in x:
-        cp_probs.append(bocpd.update(v)["cp_prob"])
+        self.mu = np.array([self.mu0], dtype=float)
+        self.kappa = np.array([self.kappa0], dtype=float)
+        self.alpha = np.array([self.alpha0], dtype=float)
+        self.beta = np.array([self.beta0], dtype=float)
+        self.counts = np.array([1.0], dtype=float)
 
-    window = cp_probs[cp: cp + 200]
-    assert max(window) > 0.4, "❌ Case A: CP never confirmed after change"
-    print("✔ Case A passed (confirmed structural change)")
+    def _role_name(self) -> str:
+        return "StudentT_P1"
 
-def run_case_B():
-    x = case_B()
-    bocpd = BOCPD()
-    cp_probs = []
+    def _predictive_params(self):
+        df = 2.0 * self.alpha
+        scale2 = (self.beta * (self.kappa + 1.0)) / (self.alpha * self.kappa + 1e-12)
+        scale2 = np.maximum(scale2, 1e-12)
+        return df, self.mu, np.sqrt(scale2)
 
-    for v in x:
-        cp_probs.append(bocpd.update(v)["cp_prob"])
+    def _log_likelihood_and_aux(self, x: float):
+        df, loc, scale = self._predictive_params()
+        z = (x - loc) / (scale + 1e-12)
+        z = np.clip(z, -self.z_clip, self.z_clip)
 
-    assert max(cp_probs) < 0.8, "❌ Case B: spike triggered false CP"
-    print("✔ Case B passed (robust to spikes)")
+        log_norm = (
+            gammaln((df + 1.0) / 2.0)
+            - gammaln(df / 2.0)
+            - 0.5 * (np.log(df) + np.log(np.pi))
+        )
+        log_kernel = -((df + 1.0) / 2.0) * np.log(1.0 + (z * z) / df)
+        log_pred = log_norm + log_kernel - np.log(scale + 1e-12)
 
-def run_case_C():
-    x = case_C()
-    bocpd = BOCPD()
-    cp_probs = []
+        return log_pred, z, scale
 
-    for v in x:
-        cp_probs.append(bocpd.update(v)["cp_prob"])
+    def _expand_stats(self, x: float) -> None:
+        new_len = len(self.log_R)
 
-    early = np.mean(cp_probs[200:300])
-    late = np.mean(cp_probs[400:500])
+        new_mu = np.empty(new_len, dtype=float)
+        new_kappa = np.empty(new_len, dtype=float)
+        new_alpha = np.empty(new_len, dtype=float)
+        new_beta = np.empty(new_len, dtype=float)
+        new_counts = np.empty(new_len, dtype=float)
 
-    assert late > early, "❌ Case C: no sensitivity to slow drift"
-    assert late < 0.9, "❌ Case C: drift misclassified as hard CP"
-    print("✔ Case C passed (slow drift handled correctly)")
+        # fresh
+        mu, kappa, alpha, beta = self.mu0, self.kappa0, self.alpha0, self.beta0
+        kappa2 = kappa + 1.0
+        mu2 = (kappa * mu + x) / kappa2
+        alpha2 = alpha + 0.5
+        beta2 = beta + 0.5 * (kappa * (x - mu) ** 2) / kappa2
+        new_mu[0], new_kappa[0], new_alpha[0], new_beta[0] = mu2, kappa2, alpha2, beta2
+        new_counts[0] = 1.0
+
+        for i in range(len(self.mu)):
+            mu, kappa, alpha, beta = (
+                self.mu[i],
+                self.kappa[i],
+                self.alpha[i],
+                self.beta[i],
+            )
+            kappa2 = kappa + 1.0
+            mu2 = (kappa * mu + x) / kappa2
+            alpha2 = alpha + 0.5
+            beta2 = beta + 0.5 * (kappa * (x - mu) ** 2) / kappa2
+            new_mu[i + 1], new_kappa[i + 1], new_alpha[i + 1], new_beta[i + 1] = (
+                mu2,
+                kappa2,
+                alpha2,
+                beta2,
+            )
+            new_counts[i + 1] = self.counts[i] + 1.0
+
+        self.mu, self.kappa, self.alpha, self.beta, self.counts = (
+            new_mu,
+            new_kappa,
+            new_alpha,
+            new_beta,
+            new_counts,
+        )
+
+    def _keep_stats(self, keep: np.ndarray) -> None:
+        self.mu = self.mu[keep]
+        self.kappa = self.kappa[keep]
+        self.alpha = self.alpha[keep]
+        self.beta = self.beta[keep]
+        self.counts = self.counts[keep]
+
+    def _fresh_aux_at_x(self, x: float) -> tuple[float, float, float]:
+        # prior predictive at x
+        df = 2.0 * self.alpha0
+        scale2 = (self.beta0 * (self.kappa0 + 1.0)) / (
+            self.alpha0 * self.kappa0 + 1e-12
+        )
+        scale = float(np.sqrt(max(scale2, 1e-12)))
+        z = float((x - self.mu0) / (scale + 1e-12))
+        z = float(np.clip(z, -self.z_clip, self.z_clip))
+
+        log_norm = float(
+            gammaln((df + 1.0) / 2.0)
+            - gammaln(df / 2.0)
+            - 0.5 * (np.log(df) + np.log(np.pi))
+        )
+        log_kernel = float(-((df + 1.0) / 2.0) * np.log(1.0 + (z * z) / df))
+        lp = float(log_norm + log_kernel - np.log(scale + 1e-12))
+        return lp, z, scale
+
+    def _risk_semantics(
+        self, R: np.ndarray, z_mix: float, scale_mix: float
+    ) -> tuple[float, float, float]:
+        shock = 1.0 - np.exp(-0.35 * abs(z_mix))
+        k = self.k_tail
+        tail = 1.0 / (1.0 + np.exp(-(abs(z_mix) - k)))
+        scale_term = 1.0 - np.exp(-0.25 * max(scale_mix, 1e-9))
+        risk = clip01(0.55 * tail + 0.35 * shock + 0.10 * scale_term)
+        return float(tail), float(shock), float(risk)
 
 
-# =====================================================
-# Entry point
-# =====================================================
+class DualBOCPD:
+    """
+    Runs:
+    - Gaussian G0 for regime death evidence
+    - Student-t P1 for risk evidence
+    Returns both outputs each tick.
+    """
 
-if __name__ == "__main__":
-    np.random.seed(42)
+    def __init__(self, g0: BOCPDGaussianG0, p1: BOCPDStudentTP1):
+        self.g0 = g0
+        self.p1 = p1
 
-    print("Running BOCPD semantic validation...\n")
-    run_case_A()
-    run_case_B()
-    run_case_C()
-    print("\n🎉 All semantic BOCPD tests passed.")
+    def update(self, x: float) -> tuple[BOCPDOutputs, BOCPDOutputs]:
+        out_g0 = self.g0.update(x)
+        out_p1 = self.p1.update(x)
+        return out_g0, out_p1
