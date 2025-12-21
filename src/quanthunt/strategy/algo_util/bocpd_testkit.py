@@ -29,7 +29,7 @@ import math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
+from bocpdz import BOCPDStudentTP1, BOCPDGaussianG0
 
 # ----------------------------
 # 0) 指標 row schema（統一）
@@ -101,7 +101,7 @@ class StableWorld(WorldGenerator):
     def generate(self) -> np.ndarray:
         cfg = self.cfg
         eps = self.rng.normal(0.0, cfg.sigma, size=cfg.T)
-        x = cfg.mu + eps
+        x = np.clip(cfg.mu + eps, cfg.mu - 3 * cfg.sigma, cfg.mu + 3 * cfg.sigma)
         return x
 
 
@@ -211,22 +211,16 @@ class BOCPDAdapter:
         p1_out = self.p1.update(x)
 
         row = {
-            "g0_cp_prob": float(g0_out["cp_prob"]),
-            "g0_run_length_mode": float(g0_out["run_length_mode"]),
-            "g0_surprise_ewma": float(g0_out["surprise_ewma"]),
-            "g0_z2_ewma": float(g0_out["z2_ewma"]),
-            "g0_confidence": float(g0_out["confidence"]),
-            "p1_risk_level": float(p1_out["risk_level"]),
-            "p1_shock_score": float(p1_out["shock_score"]),
-            "p1_tail_prob": float(p1_out["tail_prob"]),
-            "p1_z": float(p1_out["z"]),
+            "g0_cp_prob": float(g0_out.cp_prob),
+            "g0_run_length_mode": float(g0_out.run_length_mode),
+            "g0_surprise_ewma": float(g0_out.surprise_ewma),
+            "g0_z2_ewma": float(g0_out.z2_ewma),
+            "g0_confidence": float(g0_out.regime_confidence),
+            "p1_shock_score": float(p1_out.shock_score),
+            "p1_risk_level": float(p1_out.risk_level),
+            "p1_tail_prob": float(p1_out.tail_prob_k),
+            "p1_z": float(p1_out.z_mix),
         }
-
-        # optional events
-        if "event" in g0_out:
-            row["g0_event"] = str(g0_out["event"])
-        if "event" in p1_out:
-            row["p1_event"] = str(p1_out["event"])
 
         return row
 
@@ -751,9 +745,9 @@ def run_testkit(
 
 def default_worlds() -> List[WorldConfig]:
     return [
-        WorldConfig(name="Stable", T=2000, seed=1, mu=0.0, sigma=1.0),
+        WorldConfig(name="Stable", T=2000, seed=1, mu=0.0, sigma=0.15),
         WorldConfig(
-            name="Drift", T=2000, seed=2, mu=0.0, sigma=1.0, drift_per_tick=0.001
+            name="Drift", T=2000, seed=2, mu=0.0, sigma=1.0, drift_per_tick=0.1
         ),
         WorldConfig(
             name="Shock",
@@ -765,15 +759,22 @@ def default_worlds() -> List[WorldConfig]:
             shock_scale=8.0,
         ),
         WorldConfig(
-            name="Break", T=2000, seed=4, mu=0.0, sigma=1.0, break_t=900, mu2=3.0
+            name="Break",
+            T=2000,
+            seed=4,
+            mu=0.0,
+            sigma=3.0,
+            break_t=900,
+            mu2=12.0,
+            drift_per_tick=0.9,
         ),
     ]
 
 
 def main():
     # TODO: 換成你的真實模型
-    g0 = DummyG0(ewma_alpha=0.02)
-    p1 = DummyP1(ewma_alpha=0.05)
+    g0 = BOCPDGaussianG0()
+    p1 = BOCPDStudentTP1()
     adapter = BOCPDAdapter(g0=g0, p1=p1)
 
     worlds = default_worlds()
@@ -812,8 +813,9 @@ def test_level1_smoke():
     這是 smoke test：確保 pipeline 能跑、輸出完整、且 dummy 模型不會崩。
     換成真實模型後，你就改成你的 adapter/g0/p1 初始化。
     """
-    g0 = DummyG0()
-    p1 = DummyP1()
+    g0 = BOCPDGaussianG0()
+    p1 = BOCPDStudentTP1()
+    print("Updated g0 p1")
     adapter = BOCPDAdapter(g0=g0, p1=p1)
     worlds = default_worlds()
     rc = RunConfig(out_dir="bocpd_testkit_pytest_out", make_plots=False, overwrite=True)

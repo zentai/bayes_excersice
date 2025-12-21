@@ -509,3 +509,184 @@ class DualBOCPD:
         out_g0 = self.g0.update(x)
         out_p1 = self.p1.update(x)
         return out_g0, out_p1
+
+
+class DualBOCPDWrapper:
+    def __init__(self, dual_bocpd, phase_fsm: BOCPDPhaseFSM, x_col="m_z_mix"):
+        self.dual = dual_bocpd
+        self.fsm = phase_fsm
+        self.x_col = x_col
+
+        self._last_out_g0 = None
+        self._last_out_p1 = None
+
+    def update_df_row(self, df, idx):
+        x = float(df.at[idx, self.x_col])
+
+        # If Phase4 freeze, do NOT update engines anymore
+        if (
+            self.fsm.phase == 4
+            and self.fsm.cfg.on_phase4 == "freeze"
+            and self._last_out_g0 is not None
+        ):
+            out_g0, out_p1 = self._last_out_g0, self._last_out_p1
+            phase = 4
+        else:
+            out_g0, out_p1 = self.dual.update(x)
+            phase = self.fsm.update(out_g0, out_p1, hazard_g0=self.dual.g0.hazard)
+            self._last_out_g0, self._last_out_p1 = out_g0, out_p1
+
+        # write snapshot
+        df.at[idx, "bocpd_phase"] = phase
+
+        df.at[idx, "bocpd_cp_prob"] = out_g0.cp_prob
+        df.at[idx, "bocpd_runlen_mean"] = out_g0.run_length_mean
+        df.at[idx, "bocpd_runlen_mode"] = out_g0.run_length_mode
+
+        df.at[idx, "bocpd_risk"] = out_p1.risk_level
+        df.at[idx, "bocpd_tail"] = out_p1.tail_prob_k
+        df.at[idx, "bocpd_shock"] = out_p1.shock_score
+
+        df.at[idx, "bocpd_surpEWMA"] = out_g0.surprise_ewma
+        df.at[idx, "bocpd_cp_excess"] = float(out_g0.cp_prob) / max(
+            self.dual.g0.hazard, 1e-12
+        )
+
+        df.at[idx, "bocpd_model"] = "G0+P1"
+
+    def run_online(self, df):
+        """
+        Convenience: run from first to last row once.
+        Assumes df grows over time; safe for backfill.
+        """
+        for idx in df.index:
+            self.update_df_row(df, idx)
+
+
+@dataclass
+class PhaseFSMConfig:
+    # --- warmup ---
+    warmup_ticks: int = 60  # 1D 建議 30~90；1m 建議 200~800
+
+    # --- P1 risk thresholds (early warning) ---
+    r1_watch: float = 0.60  # phase0->1
+    r2_caution: float = 0.75  # phase1/0->2
+    sustain_p1: int = 5  # 連續幾根才升級到 phase2
+    cooldown_p1: int = 10  # 風險下降後，phase1/2 不會降，但可清計數用
+
+    # --- G0 cp thresholds (regime death evidence) ---
+    cp_excess_pre: float = 2.5  # cp_prob / hazard > 2.5 -> phase3 (Pre-CP)
+    cp_excess_confirm: float = 5.0  # cp_prob / hazard > 5.0 sustained -> phase4
+    sustain_g0: int = 3
+
+    # --- optional: confirm needs additional stress evidence ---
+    require_surprise: bool = True
+    surprise_ewma_pre: float = 1.2
+    surprise_ewma_confirm: float = 1.6
+
+    # --- Phase4 behavior ---
+    on_phase4: str = "freeze"  # "freeze" | "reset"
+    reset_cooldown: int = (
+        30  # if on_phase4=="reset": wait N ticks before allowing phase>0 again
+    )
+
+
+class BOCPDPhaseFSM:
+    """
+    Phase:
+      0 Stable
+      1 Watch   (P1 early warning)
+      2 Caution (P1 sustained high risk)
+      3 Pre-CP  (G0 evidence rising vs hazard baseline)
+      4 CP Confirmed (G0 sustained strong evidence) - absorbing unless reset mode
+
+    Key fixes:
+    - warmup gate: no phase escalation during early ticks
+    - cp_prob is judged relative to hazard baseline (cp_excess)
+    - phase4 has real policy effect (freeze or reset)
+    """
+
+    def __init__(self, cfg: PhaseFSMConfig):
+        self.cfg = cfg
+        self.phase = 0
+
+        self._t = 0
+        self._p1_hi_cnt = 0
+        self._g0_hi_cnt = 0
+
+        # reset mode state
+        self._in_reset_cooldown = 0
+
+    def _cp_excess(self, cp_prob: float, hazard: float) -> float:
+        hazard = max(float(hazard), 1e-12)
+        return float(cp_prob) / hazard
+
+    def update(self, out_g0, out_p1, hazard_g0: float) -> int:
+        """
+        out_g0/out_p1 are BOCPDOutputs from your system.
+        hazard_g0 should be the constant hazard used in G0 instance.
+        """
+
+        self._t += 1
+
+        # ---- reset cooldown mode ----
+        if self._in_reset_cooldown > 0:
+            self._in_reset_cooldown -= 1
+            self.phase = 0
+            return self.phase
+
+        # ---- absorbing behavior ----
+        if self.phase == 4 and self.cfg.on_phase4 == "freeze":
+            return 4
+
+        # ---- warmup gate ----
+        if self._t <= self.cfg.warmup_ticks:
+            self.phase = 0
+            # still update counters lightly (optional), but do not escalate
+            self._p1_hi_cnt = 0
+            self._g0_hi_cnt = 0
+            return self.phase
+
+        # ---- P1 drives early warning phases ----
+        # phase0->1: immediate watch if risk crosses r1
+        if self.phase < 1 and out_p1.risk_level > self.cfg.r1_watch:
+            self.phase = 1
+
+        # sustain for phase2
+        if out_p1.risk_level > self.cfg.r2_caution:
+            self._p1_hi_cnt += 1
+        else:
+            # risk fell; don't downgrade phase, just clear counter slowly
+            self._p1_hi_cnt = max(0, self._p1_hi_cnt - 1)
+
+        if self.phase < 2 and self._p1_hi_cnt >= self.cfg.sustain_p1:
+            self.phase = 2
+
+        # ---- G0 drives Pre-CP / Confirmed CP ----
+        cp_excess = self._cp_excess(out_g0.cp_prob, hazard_g0)
+
+        # Optional: require "stress" evidence besides cp_excess
+        stress_pre = True
+        stress_confirm = True
+        if self.cfg.require_surprise:
+            stress_pre = out_g0.surprise_ewma >= self.cfg.surprise_ewma_pre
+            stress_confirm = out_g0.surprise_ewma >= self.cfg.surprise_ewma_confirm
+
+        # phase3 (Pre-CP): cp_excess crosses pre threshold (and stress)
+        if self.phase < 3 and (cp_excess >= self.cfg.cp_excess_pre) and stress_pre:
+            self.phase = 3
+
+        # phase4 (Confirmed): sustained high cp_excess (and stress)
+        if (cp_excess >= self.cfg.cp_excess_confirm) and stress_confirm:
+            self._g0_hi_cnt += 1
+        else:
+            self._g0_hi_cnt = max(0, self._g0_hi_cnt - 1)
+
+        if self._g0_hi_cnt >= self.cfg.sustain_g0:
+            self.phase = 4
+            if self.cfg.on_phase4 == "reset":
+                # Enter cooldown; caller can also reset BOCPD engines if desired
+                self._in_reset_cooldown = self.cfg.reset_cooldown
+                self.phase = 0  # immediately back to 0 after reset trigger
+
+        return self.phase

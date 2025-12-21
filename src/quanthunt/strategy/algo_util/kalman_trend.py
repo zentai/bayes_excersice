@@ -561,7 +561,7 @@ def add_addon_signal(df, atr_window=14, atr_factor=1.2):
 
 # 實際跑一次
 if __name__ == "__main__":
-    file_name = "/Users/zen/code/bayes_excersice/reports/1216_044620_btcusdt_1min_fun1000.0cap100.0atr60bw20up60lw60hmm3_cut0.975pnl3.0ext1.0stp5.csv"
+    file_name = "/Users/zen/Documents/code/bayes/reports/1219_014203_xrpusdt_60min_fun15.0cap10.1atr60bw20up60lw60hmm3_cut0.95pnl3.0ext1.5stp5.csv"
     df = pd.read_csv(f"{file_name}")
     out = kalman_trend_force_multi_obs(df, window=240)
     out = kalman_close_3rd(out, window=240, qL=1e-5, qS=1e-4, qA=1e-3, r0=1e-1)

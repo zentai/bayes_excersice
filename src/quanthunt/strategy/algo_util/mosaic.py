@@ -15,6 +15,56 @@ Design principles:
 """
 
 
+def prepare_mosaic_input(df):
+    """
+    df 需至少包含: Open, High, Low, Close, Vol
+    """
+    df = df.copy()
+
+    # === Force proxy（範例，用你現有的邏輯即可）===
+    rng = (df["High"] - df["Low"]).replace(0, np.nan)
+    hl_ret = (df["Close"] - df["Open"]) / (rng + 1e-9)
+    pseudo_delta = hl_ret * df["Vol"]
+
+    # ⚠️ 建議：online 標準化（這裡用簡化 rolling）
+    m = pseudo_delta.rolling(200).mean()
+    s = pseudo_delta.rolling(200).std().replace(0, 1)
+    df["force_proxy"] = ((pseudo_delta - m) / s).fillna(0.0)
+    return df
+
+
+def build_mosaic_params():
+    params = {
+        "price": {
+            "Q_price_base": np.diag([1e-3, 1e-4, 1e-5]),
+            "R_price_base": 1e-1,
+            "q_scale": 0.3,
+            "r_scale": 0.3,
+            "q_force_scale": 0.15,
+            "force_scale_clip": 5.0,
+            "accel_inject": 0.0,  # 保持 honest
+        },
+        "force": {
+            "Q_force_base": np.diag([3e-5, 1e-5, 1e-5]),
+            "R_force_base": 1e-1,
+            "q_scale": 0.3,
+            "r_scale": 0.3,
+            "force_trend_rho": 0.97,
+        },
+    }
+
+    regime_params = {
+        "w_price": 0.6,
+        "w_force": 0.4,
+        "base": 1.0,
+        "gain": 0.8,
+        "regime_smooth": 0.05,
+        "clip": (0.2, 5.0),
+    }
+
+    return params, regime_params
+
+
 def init_mosaic_state(init_pc=0.0):
     state = {
         # Price subspace
@@ -30,8 +80,8 @@ def init_mosaic_state(init_pc=0.0):
     }
 
     cov = {
-        "P_price": np.eye(3) * 1.0,
-        "P_force": np.eye(3) * 1.0,
+        "P_price": np.eye(3) * 10.0,
+        "P_force": np.eye(3) * 5.0,
     }
     return state, cov
 

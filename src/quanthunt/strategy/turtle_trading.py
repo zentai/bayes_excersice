@@ -8,7 +8,21 @@ from sklearn.preprocessing import StandardScaler
 from hmmlearn.hmm import GaussianHMM
 from quanthunt.strategy.algo_util.hmm_selector import HMMTrendSelector
 from quanthunt.strategy.algo_util.bocpd import apply_bocpd_to_df
-
+from quanthunt.strategy.algo_util.mosaic import (
+    init_mosaic_state,
+    mosaic_step,
+    update_regime_noise_level_from_z,
+    build_mosaic_params,
+    prepare_mosaic_input,
+)
+from quanthunt.strategy.algo_util.bocpdz import (
+    BOCPDGaussianG0,
+    BOCPDStudentTP1,
+    DualBOCPD,
+    PhaseFSMConfig,
+    BOCPDPhaseFSM,
+    DualBOCPDWrapper,
+)
 from quanthunt.hunterverse.interface import IStrategyScout, ZERO
 from quanthunt.utils import pandas_util
 
@@ -24,8 +38,6 @@ TURTLE_COLUMNS = [
     "exit_price",
     "OBV_UP",
     "VWMA",
-    "Slope",
-    "Slope_Diff",
     "buy",
     "sell",
     "profit",
@@ -65,11 +77,25 @@ TURTLE_COLUMNS = [
     "trend_norm",
     "TR_norm",
     "bias_off_norm",
-    "pred_mean",
-    "pred_var",
-    "cp_prob",
-    "cp_signal",
-    "run_length",
+    # MOSAIC model
+    "m_pc",
+    "m_pt_speed",
+    "m_pt_accel",
+    "m_force",
+    "m_force_trend",
+    "m_force_bias",
+    "m_z_price",
+    "m_z_force",
+    "m_z_mix",
+    "m_regime_noise_level",
+    # BOCPD G0+P1
+    "bocpd_phase",
+    "bocpd_cp_prob",
+    "bocpd_runlen_mean",
+    "bocpd_runlen_mode",
+    "bocpd_risk",
+    "bocpd_tail",
+    "bocpd_shock",
 ]
 
 
@@ -92,14 +118,71 @@ class TurtleScout(IStrategyScout):
             n_iter=4000,
             random_state=42,
         )
+        self.MOSAIC_State, self.MOSAIC_Cov = None, None
+        self.bocpd_wrapper = None
 
     def train(self, df):
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
         emv_cross_strategy(df, self.params)
         df = self._calc_ATR(df)
         df = self._calc_OBV(df)
+        df = self.calc_mosaic(df)
         df = self.train_hmm(df)
         df = self._calc_profit(df)
+        return df
+
+    def calc_mosaic(self, df):
+        # Initiallize Mosaic
+        start_idx = df.index[df["m_pc"].isna()][0]
+        if not (self.MOSAIC_State and self.MOSAIC_Cov):
+            self.MOSAIC_State, self.MOSAIC_Cov = init_mosaic_state(
+                init_pc=df.loc[start_idx, "Close"]
+            )
+            self.m_params, self.m_regime_params = build_mosaic_params()
+
+        df = prepare_mosaic_input(df)
+
+        # === 5) 主迴圈：只補 NaN 的 row ===
+        for i in range(start_idx, len(df)):
+            if not pd.isna(df.loc[i, "m_pc"]):
+                continue  # 已算過就跳過
+
+            obs_close = float(df.loc[i, "Close"])
+            obs_force = float(df.loc[i, "force_proxy"])
+            MOSAIC_State, MOSAIC_Cov, diag = mosaic_step(
+                self.MOSAIC_State,
+                self.MOSAIC_Cov,
+                obs_close=obs_close,
+                obs_force_proxy=obs_force,
+                params=self.m_params,
+            )
+            if diag["safe_skip"]:
+                continue
+
+            # update regime
+            MOSAIC_State["regime_noise_level"], _ = update_regime_noise_level_from_z(
+                prev_regime_noise_level=MOSAIC_State["regime_noise_level"],
+                z_price=diag["z_price"],
+                z_force=diag["z_force"],
+                params=self.m_regime_params,
+            )
+
+            # === 6) 寫回 df（只寫 MOSAIC 欄位） ===
+            w_price = self.m_params.get("w_price", 0.6)
+            w_force = self.m_params.get("w_force", 0.4)
+            df.loc[i, "Kalman"] = MOSAIC_State["pc"]
+            df.loc[i, "m_pc"] = MOSAIC_State["pc"]
+            df.loc[i, "m_pt_speed"] = MOSAIC_State["pt_speed"]
+            df.loc[i, "m_pt_accel"] = MOSAIC_State["pt_accel"]
+            df.loc[i, "m_force"] = MOSAIC_State["force_imbalance"]
+            df.loc[i, "m_force_trend"] = MOSAIC_State["force_imbalance_trend"]
+            df.loc[i, "m_force_bias"] = MOSAIC_State["force_proxy_bias"]
+            df.loc[i, "m_z_price"] = diag["z_price"]
+            df.loc[i, "m_z_force"] = diag["z_force"]
+            df.loc[i, "m_z_mix"] = (w_price * diag["z_price"]) + (
+                w_force * diag["z_force"]
+            )
+            df.loc[i, "m_regime_noise_level"] = MOSAIC_State["regime_noise_level"]
         return df
 
     def define_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -115,60 +198,6 @@ class TurtleScout(IStrategyScout):
 
         return df
 
-    # def define_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
-    #     trend_score = hmm_performance(df)
-    #     print(trend_score)
-    #     up_state = trend_score.loc[trend_score["weighted_score"].idxmax(), "HMM_State"]
-
-    #     s = df["UP_State"].isna()
-    #     df.loc[s, "UP_State"] = up_state
-
-    #     s = df["HMM_Signal"].isna()
-    #     df.loc[s, "HMM_Signal"] = (
-    #         df.loc[s, "HMM_State"] == df.loc[s, "UP_State"]
-    #     ).astype(int)
-
-    #     return df
-
-    # def define_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
-    #     """
-    #     自动定义UP_State，只补充未定义的部分，不覆盖已有UP_State。
-    #     """
-    #     df["log_return"] = np.log(df.Close / df.Close.shift(1))
-    #     grp = df.groupby("HMM_State")["log_return"]
-    #     med = grp.median()
-    #     std = grp.std().replace(0, ZERO)  # 避免除 0
-    #     std_clipped = std.clip(lower=std.median())
-    #     # print(f"std.median: {std.median()}")
-    #     cnt = grp.count()
-
-    #     # Using Z-score confidence interval adjustment to penalize high-median low-sample groups;
-    #     # keywords: confidence interval, z-score, sample size correction, robust ranking
-    #     z = 2.58
-    #     score = med - z * (std / np.sqrt(cnt))
-
-    #     from collections import Counter
-
-    #     # print(f"Counter: {Counter(df.HMM_State.values)}")
-    #     # print(f"n_components: {self.hmm_model.n_components}")
-    #     # print(f"score: {score}")
-    #     # print(score.idxmax())
-
-    #     up_state = score.idxmax()
-    #     s = df["UP_State"].isna()
-    #     df.loc[s, "UP_State"] = up_state
-
-    #     s = df["HMM_Signal"].isna()
-    #     df.loc[s, "HMM_Signal"] = (
-    #         df.loc[s, "HMM_State"] == df.loc[s, "UP_State"]
-    #     ).astype(int)
-
-    #     # Old code
-    #     # HMM_0 = df[df.HMM_State == 0].Slope.median()
-    #     # HMM_1 = df[df.HMM_State == 1].Slope.median()
-    #     # df["UP_State"] = int(HMM_1 > HMM_0)
-    #     return df
-
     def train_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
         X = self._prepare_hmm_features(df)
         self.hmm_model.fit(X)
@@ -183,173 +212,6 @@ class TurtleScout(IStrategyScout):
         #     debug_hmm(self.hmm_model, hidden_states, df, X)
 
         return df
-
-    # def _prepare_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
-    #     windows = self.params.bayes_windows
-    #     df = calc_Kalman_Price(df, windows=windows)
-    #     mask = df["KReturn"].isna()
-
-    #     df.loc[mask, "KReturn"] = np.log(
-    #         df.loc[mask, "Kalman"]
-    #         / (
-    #             df["Kalman"].shift(1).rolling(window=60, min_periods=5).mean()[mask]
-    #             + ZERO
-    #         )
-    #     )
-
-    #     df.loc[mask, "KReturnVol"] = (
-    #         df["KReturn"].rolling(window=windows, min_periods=5).mean()
-    #     )
-
-    #     rolling_mean = (
-    #         df.loc[mask, "Vol"].rolling(window=windows, min_periods=5).mean() + ZERO
-    #     )
-    #     df.loc[mask, "RVolume"] = np.log((df.loc[mask, "Vol"] + ZERO) / rolling_mean)
-
-    #     log_return = np.log(df.Close / df.Close.shift(1))
-    #     df.loc[mask, "log_return"] = log_return[mask]
-    #     close_log, close_ma, close_relative_strength, close_zscore = hmm_standardize(
-    #         df.Close, windows
-    #     )
-    #     df.loc[mask, "close_log"] = close_log[mask]
-    #     df.loc[mask, "close_ma"] = close_ma[mask]
-    #     df.loc[mask, "close_relative_strength"] = close_relative_strength[mask]
-    #     df.loc[mask, "close_zscore"] = close_zscore[mask]
-
-    #     vol_log, vol_ma, vol_relative_strength, vol_zscore = hmm_standardize(
-    #         df.Vol, windows
-    #     )
-    #     df.loc[mask, "vol_log"] = vol_log[mask]
-    #     df.loc[mask, "vol_ma"] = vol_ma[mask]
-    #     df.loc[mask, "vol_relative_strength"] = vol_relative_strength[mask]
-    #     df.loc[mask, "vol_zscore"] = vol_zscore[mask]
-
-    #     df["trend"] = df.Kalman - df.ema_long
-    #     features = ["trend", "cv_sum", "Slope", "TR"]
-    #     df[features] = df[features].fillna(method="bfill")
-
-    #     return self.scaler.fit_transform(df[features].values)
-    '''
-    def _prepare_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
-        """
-        HMM 特征工程（V3 行为 + 结构混合版）
-
-        原理说明：
-        ------------------------
-        HMM 最难的部分不是模型，而是 **feature 的物理意义**。
-
-        这版 V3 明确区分两种维度：
-
-        1）结构类（结构是价格分布、惯性、波动）
-            - trend_norm：趋势强弱（Kalman - EMA）标准化
-            - TR_norm：波动强弱（ATR / ATR均值）标准化
-            - bias_off_norm：价格偏离中心的程度（|Kalman - Close| / ATR）
-
-        2）行为类（行为是“市场参与者到底有没有共识”）
-            - RCS：Resonance Consensus Strength
-            由动能、成交量与稳定性构成，是“趋势是否被集体认同”的强度指标。
-
-        新增特徵（對應 Trend μ 思想，但完全不碰 profit，不洩漏績效）：
-        ----------------------------------------------------------------
-        - up_streak_norm   : 連續上漲天數 / ATR_sample（趨勢持續性）
-        - down_streak_norm : 連續下跌天數 / ATR_sample（反向持續性）
-        - skew_ret         : 報酬偏態（正尾巴 / 假突破區分）
-        - dd_proxy         : 由價格本身推得的「局部回撤」指標
-
-        目的：
-            让 HMM 自动学出：
-            - state0：共识弱、趋势弱（震荡）
-            - state1：共识强、趋势健康（你要吃核心仓位的“金状态”）
-            - state2：共识过热或极端波动（高风险区）
-
-        最终 features：
-            ["RCS", "trend_norm", "TR_norm", "bias_off_norm"]
-
-        ------------------------
-        """
-
-        windows = self.params.bayes_windows
-        ATR_sample = self.params.ATR_sample
-        ZERO = 1e-9
-
-        # --- Kalman 價格 ---
-        df = calc_Kalman_Price(df, windows=windows)
-        # ========== 行為因子（RCS） ==========
-        df["momentum_factor"] = (df.High - df.Close) / (df.TR + ZERO)
-        df["res_strength"] = df.TR * df.Vol * df.momentum_factor
-
-        df["consensus_strength"] = (df.Kalman / df.Close).clip(0.1, 10) * df.Vol
-        df["consensus_norm"] = (
-            df.consensus_strength
-            / df.consensus_strength.rolling(window=ATR_sample).mean()
-        )
-
-        df["RCS"] = df.res_strength * df.consensus_norm
-
-        # ========== 結構因子 ==========
-        # 趨勢強弱（Kalman - EMA_long）
-        df["trend"] = df.Kalman - df["ema_long"]
-        df["trend_norm"] = df.trend / (df.ATR + ZERO)
-
-        # 波動強弱（ATR 相對於自身歷史均值）
-        df["TR_norm"] = np.log(df.ATR + ZERO) / np.log(
-            df.ATR.rolling(window=ATR_sample).mean() + ZERO
-        )
-
-        # 價格偏離中心（離 Kalman 多遠）
-        df["bias_off_norm"] = (df.Kalman - df.Close).abs() / (df.ATR + ZERO)
-
-        # ========== 新增：趨勢持續性 / 偏態 / 回撤 Proxy ==========
-
-        # 報酬（用 log return，避免比值爆炸）
-        df["ret"] = np.log(df.Close / df.Close.shift(1)).replace(
-            [np.inf, -np.inf], np.nan
-        )
-
-        # 1) 上漲 / 下跌連續天數（對應 Trend μ 裡的 L）
-        up_streak = []
-        down_streak = []
-        cur_up = 0
-        cur_dn = 0
-        for r in df["ret"].fillna(0).to_numpy():
-            if r > 0:
-                cur_up += 1
-                cur_dn = 0
-            elif r < 0:
-                cur_dn += 1
-                cur_up = 0
-            else:
-                cur_up = 0
-                cur_dn = 0
-            up_streak.append(cur_up)
-            down_streak.append(cur_dn)
-
-        df["up_streak_norm"] = np.array(up_streak) / max(ATR_sample, 1)
-        df["down_streak_norm"] = np.array(down_streak) / max(ATR_sample, 1)
-
-        # 2) 報酬偏態（正尾巴明顯 → 爆發趨勢傾向）
-        df["skew_ret"] = df["ret"].rolling(window=ATR_sample, min_periods=10).skew()
-
-        # 3) 局部 Drawdown proxy（用價格本身推，避免碰 profit）
-        roll_max = df["Close"].cummax()
-        df["dd_proxy"] = (roll_max - df["Close"]) / (roll_max + ZERO)
-
-        # --- Final features ---
-        features = [
-            "RCS",
-            "trend_norm",
-            "TR_norm",
-            "bias_off_norm",
-            "up_streak_norm",
-            "down_streak_norm",
-            "skew_ret",
-            "dd_proxy",
-        ]
-
-        df[features] = df[features].fillna(method="bfill").fillna(method="ffill")
-
-        return self.scaler.fit_transform(df[features].values)
-    '''
 
     def _prepare_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
         """
@@ -372,9 +234,6 @@ class TurtleScout(IStrategyScout):
         windows = self.params.bayes_windows
         ATR_sample = self.params.ATR_sample
         ZERO = 1e-9
-
-        # --- Kalman 價格 ---
-        df = calc_Kalman_Price(df, windows=windows)
 
         # ========== 行為因子（RCS） ==========
         df["momentum_factor"] = (df.High - df.Close) / (df.TR + ZERO)
@@ -402,8 +261,7 @@ class TurtleScout(IStrategyScout):
         df["bias_off_norm"] = (df.Kalman - df.Close).abs() / (df.ATR + ZERO)
 
         # **新增：趨勢方向（Kalman 斜率）**
-        df["kalman_slope"] = df.Kalman.diff()
-        df["slope_norm"] = df["kalman_slope"] / (df.ATR + ZERO)
+        df["slope_norm"] = df.m_pt_speed.diff() / (df.ATR + ZERO)
 
         # ========== 新增：趨勢持續性 / 偏態 / 回撤 Proxy ==========
 
@@ -525,7 +383,7 @@ class TurtleScout(IStrategyScout):
 
         # ===【参数载入】===
         hmm_signal = df.iloc[-1].HMM_Signal  # 关键字：HMM、上升趋势状态
-        slope_col = "Slope"
+        slope_col = "m_pt_speed"
         atr_margin_max = self.params.atr_loss_margin
         atr_margin_min = getattr(self.params, "atr_margin_min", 0.1)
 
@@ -720,21 +578,36 @@ class TurtleScout(IStrategyScout):
         base_df["lower_bound"] = df["lower_bound"]
         return base_df
 
+    def calc_bocpd(self, df):
+        if not self.bocpd_wrapper:
+            # --- init once ---
+            g0 = BOCPDGaussianG0(hazard=0.01, r_max=300)
+            p1 = BOCPDStudentTP1(hazard=0.01, r_max=300)
+
+            dual = DualBOCPD(g0, p1)
+            cfg = PhaseFSMConfig()
+            phase_fsm = BOCPDPhaseFSM(cfg)
+            phase_fsm.warmup_ticks = 400
+
+            self.bocpd_wrapper = DualBOCPDWrapper(
+                dual_bocpd=dual,
+                phase_fsm=phase_fsm,
+                x_col="m_z_mix",
+            )
+            self.bocpd_wrapper.run_online(df)
+        else:
+            self.bocpd_wrapper.update_df_row(df, df.index[-1])
+        return df
+
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         emv_cross_strategy(base_df, self.params)
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_OBV(base_df)
         base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
+        base_df = self.calc_mosaic(base_df)
+        base_df = self.calc_bocpd(base_df)
         base_df = self.predict_hmm(base_df)
-
-        hazard_lambda = 200.0
-        base_df = apply_bocpd_to_df(
-            base_df, price_col="Kalman", hazard_lambda=hazard_lambda, max_run_length=100
-        )
-        H = 1.0 / hazard_lambda  # 和 hazard_lambda 一樣
-        base_df["cp_signal"] = (base_df["cp_prob"] > 3 * H).astype(int)
-
         base_df = self._calc_profit(base_df)
         return base_df
 
@@ -774,174 +647,6 @@ def calc_ADX(df, params, p=14):
     df["ADX"] = df.DX.ewm(alpha=1 / p, adjust=False).mean()
     df["ADX_Signed"] = df["ADX"] * np.sign(df["+DI"] - df["-DI"])
     return df
-
-
-def calc_Kalman_Price(df, windows=60, Q=1e-3, R=1e-3, alpha=0.6, gamma=0.2, beta=0.2):
-    mask_lr = df["log_returns"].isna()
-    df.loc[mask_lr, "log_returns"] = np.log(df["cv"] / df["cv"].shift(1))[mask_lr]
-
-    # 计算 rolling window 的 drift（均值）和 volatility（标准差）
-    drift = df["log_returns"].rolling(windows, min_periods=1).mean()
-    volatility = df["log_returns"].rolling(windows, min_periods=1).std()
-
-    mask_new = df["pred_price"].isna()
-    df.loc[mask_new, "drift"] = drift[mask_new]
-    df.loc[mask_new, "volatility"] = volatility[mask_new]
-    df.loc[mask_new, "pred_price"] = df.loc[mask_new, "Close"] * np.exp(drift[mask_new])
-
-    # 使用已有数据计算全局对数指标（旧数据保持不变, 新数据填充）
-    df.loc[mask_new, "global_log_vol"] = (
-        np.log(df["Vol"].dropna()).rolling(windows, min_periods=1).mean()
-    )
-    df.loc[mask_new, "global_log_volatility"] = (
-        np.log(df["volatility"].dropna()).rolling(windows, min_periods=1).mean()
-    )
-
-    # 针对新数据进行 Kalman 更新（逐行计算）
-    df.loc[mask_new, "Kalman"] = df.loc[mask_new].apply(
-        lambda r: rolling_kalman_update(
-            df,
-            r.name,
-            windows,
-            Q,
-            R,
-            alpha,
-            gamma,
-            beta,
-        ),
-        axis=1,
-    )
-    df.loc[mask_new, "local_low"] = (
-        df.Kalman.rolling(windows * 2, min_periods=1, closed="left").min().shift(1)
-    )
-    slope = (df.Kalman - df.local_low + ZERO) / (windows * 2)
-    df.loc[mask_new, "Slope"] = slope[mask_new]
-    return df
-
-
-def rolling_kalman_update(df, idx, window, Q, R, alpha, gamma, beta):
-    """
-    从 DataFrame 中取出从 idx-window+1 到 idx 的数据构造特征矩阵,
-    并调用 kalman_update 进行 Kalman 更新。
-    """
-    start = max(0, idx - window + 1)
-    sub_df = df.loc[start:idx, ["pred_price", "Close", "volatility", "Vol"]].dropna()
-
-    # 如果窗口内数据为空, 则返回当前行的 Close 值
-    if sub_df.empty:
-        return df.loc[idx, "Close"]
-
-    # 提取窗口内的数据, 要求列顺序为：[pred_price, Close, volatility, Vol]
-    features = sub_df.values
-    global_log_vol = df.loc[idx, "global_log_vol"]
-    global_log_volatility = df.loc[idx, "global_log_volatility"]
-    return kalman_update(
-        features, Q, R, alpha, gamma, beta, global_log_vol, global_log_volatility
-    )
-
-
-# def kalman_update(
-#     features,
-#     Q,
-#     R_base,
-#     alpha,
-#     gamma,
-#     global_log_vol,
-#     global_log_volatility,
-# ):
-#     # features 的列顺序：[pred_price, Close, volatility, Vol]
-#     features = features.reshape(-1, 4)
-#     x = features[0, 0]
-#     P = 1.0
-#     for i in range(1, features.shape[0]):
-#         current_vol = features[i, 3]
-#         current_volatility = features[i, 2]
-#         current_log_vol = np.log(current_vol)
-#         current_log_volatility = (
-#             np.log(current_volatility) if current_volatility > 0 else 0
-#         )
-#         vol_factor = np.exp(-alpha * (current_log_vol - global_log_vol))
-#         volat_factor = np.exp(gamma * (current_log_volatility - global_log_volatility))
-#         R_t = R_base * vol_factor * volat_factor
-
-#         P_pred = P + Q
-#         K = P_pred / (P_pred + R_t)
-#         z = features[i, 1]
-#         x = x + K * (z - x)
-#         P = (1 - K) * P_pred
-#     return x
-
-
-def kalman_update(
-    features,
-    Q,
-    R_base,
-    alpha,
-    gamma,
-    beta,
-    global_log_vol,
-    global_log_volatility,
-    min_vol=1e-6,
-    vol_clip_min=0.1,
-    vol_clip_max=2.0,
-):
-    """
-    緊湊版卡爾曼濾波更新函數：
-    結合成交量、波動率與價格變化，動態調整觀測噪聲 R_t。
-
-    參數：
-    - features: np.ndarray, 形狀 (N, 4), 欄位：[pred_price, Close, volatility, Vol]
-    - Q: float, 狀態噪聲協方差
-    - R_base: float, 基礎觀測噪聲協方差
-    - alpha: float, 成交量調整係數
-    - gamma: float, 波動率調整係數
-    - beta: float, 價格變動調整係數
-    - global_log_vol: float, 全球平均成交量的對數
-    - global_log_volatility: float, 全球平均波動率的對數
-    - min_vol: float, 成交量下限（預設 1e-6)
-    - vol_clip_min: float, 成交量調整因子最小值（預設 0.1)
-    - vol_clip_max: float, 成交量調整因子最大值（預設 2.0)
-
-    回傳：
-    - x: float, 濾波後的價格估計值
-    """
-    features = features.reshape(-1, 4)
-    x = features[0, 0]  # 初始預測價格
-    P = 1.0  # 初始誤差協方差
-    previous_close = features[0, 1]
-
-    for i in range(1, features.shape[0]):
-        # 同時計算成交量下限與其對數
-        current_log_vol = np.log(max(features[i, 3], min_vol))
-        current_volatility = features[i, 2]
-        current_log_volatility = (
-            np.log(current_volatility) if current_volatility > 0 else 0
-        )
-
-        # 成交量調整因子（限制範圍），波動率調整因子
-        vol_factor = np.clip(
-            np.exp(-alpha * (current_log_vol - global_log_vol)),
-            vol_clip_min,
-            vol_clip_max,
-        )
-        volat_factor = np.exp(gamma * (current_log_volatility - global_log_volatility))
-
-        # 價格變動因子：價格劇烈變動時，信任度降低
-        current_close = features[i, 1]
-        price_factor = np.exp(beta * abs(current_close - previous_close))
-
-        # 綜合調整後的觀測噪聲
-        R_t = R_base * vol_factor * volat_factor * price_factor
-
-        # 卡爾曼濾波標準更新步驟
-        P_pred = P + Q
-        K = P_pred / (P_pred + R_t)
-        x = x + K * (current_close - x)
-        P = (1 - K) * P_pred
-
-        previous_close = current_close
-
-    return x
 
 
 import numpy as np

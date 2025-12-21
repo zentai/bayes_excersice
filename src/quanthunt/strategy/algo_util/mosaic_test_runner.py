@@ -3,7 +3,13 @@ import pandas as pd
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.tsa.stattools import acf
 from whitenoise_market import build_synthetic_market_ohlcv
-from mosaic import init_mosaic_state, mosaic_step, update_regime_noise_level_from_z
+from mosaic import (
+    init_mosaic_state,
+    mosaic_step,
+    update_regime_noise_level_from_z,
+    build_mosaic_params,
+    prepare_mosaic_input,
+)
 
 
 def whiteness_report(z, lags=20):
@@ -117,67 +123,16 @@ def run_mosaic_runner(df, mosaic_init_fn, mosaic_step_fn, params, regime_params)
     }
 
 
-def prepare_input_df(df):
-    """
-    df 需至少包含: Open, High, Low, Close, Vol
-    """
-    df = df.copy()
-
-    # === Force proxy（範例，用你現有的邏輯即可）===
-    rng = (df["High"] - df["Low"]).replace(0, np.nan)
-    hl_ret = (df["Close"] - df["Open"]) / (rng + 1e-9)
-    pseudo_delta = hl_ret * df["Vol"]
-
-    # ⚠️ 建議：online 標準化（這裡用簡化 rolling）
-    m = pseudo_delta.rolling(200).mean()
-    s = pseudo_delta.rolling(200).std().replace(0, 1)
-    df["force_proxy"] = ((pseudo_delta - m) / s).fillna(0.0)
-    return df
-
-
-def build_params():
-    params = {
-        "force": {
-            "Q_force_base": np.diag([3e-5, 1e-5, 1e-5]),
-            "R_force_base": 1e-1,
-            "force_proxy_phi": 0.97,
-            "q_scale": 0.3,
-            "r_scale": 0.3,
-            "force_trend_rho": 0.97,
-        },
-        "price": {
-            "Q_price_base": np.diag([1e-6, 1e-7, 1e-8]),
-            "R_price_base": (0.001) ** 2,
-            "q_scale": 0.3,
-            "r_scale": 0.3,
-            "q_force_scale": 0.15,
-            "force_scale_clip": 5.0,
-            "accel_inject": 0.0,  # 默认关：避免 bias
-        },
-    }
-
-    regime_params = {
-        "w_price": 0.6,
-        "w_force": 0.4,
-        "base": 1.0,
-        "gain": 0.8,
-        "regime_smooth": 0.05,
-        "clip": (0.2, 5.0),
-    }
-
-    return params, regime_params
-
-
 def main():
     # === 1) 讀資料 ===
     df = pd.read_csv(
-        "/Users/zen/code/bayes_excersice/reports/1216_071632_pepeusdt_1min_fun1000.0cap100.0atr60bw20up60lw60hmm3_cut0.975pnl3.0ext1.0stp5.csv"
+        "/Users/zen/Documents/code/bayes/reports/1219_014203_xrpusdt_60min_fun15.0cap10.1atr60bw20up60lw60hmm3_cut0.95pnl3.0ext1.5stp5.csv"
     )
     # df = build_synthetic_market_ohlcv(T=2000)
-    df = prepare_input_df(df)
+    df = prepare_mosaic_input(df)
 
     # === 2) 參數 ===
-    params, regime_params = build_params()
+    params, regime_params = build_mosaic_params()
 
     # === 3) 跑 MOSAIC Runner ===
     result = run_mosaic_runner(
@@ -255,7 +210,7 @@ from mosaic import mosaic_step  # 你现有的实现
 
 def main2():
     # === 1) 讀資料 ===
-    path = "/Users/zen/code/bayes_excersice/reports/1216_085945_pepeusdt_1min_fun1000.0cap100.0atr60bw20up60lw60hmm3_cut0.975pnl3.0ext1.0stp5.csv"
+    path = "/Users/zen/Documents/code/bayes/reports/1219_073712_xrpusdt_1day_fun15.0cap10.1atr60bw20up60lw60hmm3_cut0.95pnl3.0ext1.5stp5.csv"
     df = pd.read_csv(path)
 
     # === 2) 確保 MOSAIC 欄位存在（不覆寫） ===
@@ -268,58 +223,31 @@ def main2():
         "m_force_bias",
         "m_z_price",
         "m_z_force",
-        "pseudo_delta",
+        "m_regime_noise_level",
     ]
     for c in mosaic_cols:
         if c not in df.columns:
             df[c] = np.nan
 
+    return mosaic(df)
+
+
+def mosaic(df):
+
     # === 3) 初始化 MOSAIC State / Cov ===
     # 找第一筆還沒算過的 row
-    df = prepare_input_df(df)
     start_idx = df.index[df["m_pc"].isna()][0]
-
-    MOSAIC_State = {
-        "pc": float(df.loc[start_idx, "Close"]),
-        "pt_speed": 0.0,
-        "pt_accel": 0.0,
-        "force_imbalance": 0.0,
-        "force_imbalance_trend": 0.0,
-        "force_proxy_bias": 0.0,
-        "regime_noise_level": 1.0,
-    }
-    MOSAIC_Cov = {
-        "P_price": np.eye(3) * 10,
-        "P_force": np.eye(3) * 5,
-    }
+    MOSAIC_State, MOSAIC_Cov = init_mosaic_state(init_pc=df["Close"].iloc[0])
 
     # === 4) MOSAIC 參數（用你已驗證那組） ===
-    params = {
-        "price": {
-            "Q_price_base": np.diag([1e-3, 1e-4, 1e-5]),
-            "R_price_base": 1e-1,
-            "q_scale": 0.3,
-            "r_scale": 0.3,
-            "q_force_scale": 0.15,
-            "force_scale_clip": 5.0,
-            "accel_inject": 0.0,  # 保持 honest
-        },
-        "force": {
-            "Q_force_base": np.diag([3e-5, 1e-5, 1e-5]),
-            "R_force_base": 1e-1,
-            "q_scale": 0.3,
-            "r_scale": 0.3,
-            "force_trend_rho": 0.97,
-        },
-    }
+    params, regime_params = build_mosaic_params()
+
     # === 5) 主迴圈：只補 NaN 的 row ===
     for i in range(start_idx, len(df)):
         if not pd.isna(df.loc[i, "m_pc"]):
             continue  # 已算過就跳過
 
         obs_close = float(df.loc[i, "Close"])
-
-        # 你原本用的 force proxy（例：pseudo_delta）
         obs_force = float(df.loc[i, "force_proxy"])
         MOSAIC_State, MOSAIC_Cov, diag = mosaic_step(
             MOSAIC_State,
@@ -330,6 +258,18 @@ def main2():
         )
         if diag["safe_skip"]:
             continue
+
+        # update regime
+        MOSAIC_State["regime_noise_level"], _ = update_regime_noise_level_from_z(
+            prev_regime_noise_level=MOSAIC_State["regime_noise_level"],
+            z_price=diag["z_price"],
+            z_force=diag["z_force"],
+            params=regime_params,
+        )
+
+        w_price = params.get("w_price", 0.6)
+        w_force = params.get("w_force", 0.4)
+        print(f'{w_price} * {diag["z_price"]} + {w_force} * {diag["z_force"]}')
         # === 6) 寫回 df（只寫 MOSAIC 欄位） ===
         df.loc[i, "m_pc"] = MOSAIC_State["pc"]
         df.loc[i, "m_pt_speed"] = MOSAIC_State["pt_speed"]
@@ -339,9 +279,9 @@ def main2():
         df.loc[i, "m_force_bias"] = MOSAIC_State["force_proxy_bias"]
         df.loc[i, "m_z_price"] = diag["z_price"]
         df.loc[i, "m_z_force"] = diag["z_force"]
+        df.loc[i, "m_z_mix"] = w_price * diag["z_price"] + w_force * diag["z_force"]
+        df.loc[i, "m_regime_noise_level"] = MOSAIC_State["regime_noise_level"]
 
-    # === 7) 存回（或回傳給上游） ===
-    # df.to_csv(path, index=False)
     return df
 
 
