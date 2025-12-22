@@ -142,158 +142,139 @@ df["cycle_state_price"] = out_x
 df["cycle_K"] = out_K
 df["cycle_Rt"] = out_R
 
-from dataclasses import dataclass
 import numpy as np
-import pandas as pd
+from dataclasses import dataclass
 
-
+# -------------------------
+# Config
+# -------------------------
 @dataclass
 class CycleKalmanConfig:
-    # base noise
     Q_base: float = 1e-4
     R_base: float = 1e-3
 
-    # MOSAIC -> (Q,R) scaling strengths
-    # force_err / price_err 建議用「去尺度」量（例如 z、或已正規化後的 err）
-    kR_force: float = 0.35   # force_err 大 -> 更不信 Close -> R 放大
-    kR_price: float = 0.25   # price_err 大 -> 更不信 Close -> R 放大
-    kQ_force: float = 0.10   # force_err 大 -> state 演化更不確定 -> Q 放大（通常小一點）
-    kQ_price: float = 0.08   # price_err 大 -> Q 放大（通常小一點）
+    # R reacts FAST to instantaneous MOSAIC error
+    kR: float = 0.45          # strength for R scaling by |err|
+    err_clip: float = 3.0     # clip mosaic_err (z-like) to avoid explosions
+    R_min_scale: float = 0.2
+    R_max_scale: float = 12.0
 
-    # MOSAIC error squashing (避免爆炸)
-    err_clip: float = 3.0    # 例如 z-score 裁到 [-3,3]
-    scale_clip_min: float = 0.2
-    scale_clip_max: float = 8.0
+    # Q reacts SLOW to sustained error (EWMA / accumulator)
+    q_mode: str = "ewma"      # "ewma" or "accum"
+    kQ: float = 0.30          # strength for Q scaling by sustained error
+    q_floor: float = 0.0      # baseline sustained error floor
+    Q_min_scale: float = 0.5
+    Q_max_scale: float = 6.0
 
-    # optional fallback (原本 global vol / jump)
-    use_fallback_vol: bool = True
-    w_fallback: float = 0.15   # fallback 權重，建議小（0~0.2）
-    alpha_vol: float = 0.6     # volume factor strength
-    gamma_volat: float = 0.2   # volatility factor strength
-    beta_jump: float = 0.2     # jump factor strength
+    # sustained-error dynamics
+    ewma_alpha: float = 0.06  # smaller = slower
+    accum_beta: float = 0.02  # leak rate for accumulator
+    accum_gain: float = 0.10  # how fast it accumulates on big error
+    q_trigger: float = 1.2    # only start increasing Q if sustained err > trigger
 
-    # init
+    # optional drift (cycle stack)
     P0: float = 1.0
     x0: float | None = None
 
 
+# -------------------------
+# Online Cycle Kalman
+# -------------------------
 class CycleKalmanOnline:
     """
-    1D Cycle Kalman (phase anchor) with MOSAIC-adaptive Q/R.
-    State: x_t (cycle structural price)
-    Obs:   y_t = close_t
-    Pred:  x_pred = x_{t-1} * exp(drift_t)   (optional drift)
+    1D Cycle Kalman:
+      state x_t: cycle structural price (phase anchor)
+      obs   y_t: close_t
+
+    Key design:
+      - R_t reacts quickly to instantaneous MOSAIC error -> "don't trust close now"
+      - Q_t reacts slowly to sustained MOSAIC error      -> "world model may be less reliable"
     """
 
     def __init__(self, cfg: CycleKalmanConfig):
         self.cfg = cfg
         self.x = cfg.x0
         self.P = cfg.P0
-        self.prev_close = None
+
+        # sustained error trackers
+        self.err_ewma = 0.0
+        self.err_accum = 0.0
 
     @staticmethod
     def _clip(x: float, lo: float, hi: float) -> float:
         return float(np.minimum(np.maximum(x, lo), hi))
 
-    def _mosaic_scale(self, force_err: float, price_err: float) -> tuple[float, float]:
+    def _instant_err(self, mosaic_err: float) -> float:
+        c = self.cfg
+        e = self._clip(mosaic_err, -c.err_clip, c.err_clip)
+        return abs(e)
+
+    def _update_sustained(self, e_abs: float) -> float:
         """
-        Convert MOSAIC errors into multiplicative scales for (Q, R).
-        errors should be roughly standardized (e.g., z-like); we squash & clip.
+        Returns sustained error signal (>=0) used to drive Q slowly.
         """
         c = self.cfg
 
-        fe = self._clip(force_err, -c.err_clip, c.err_clip)
-        pe = self._clip(price_err, -c.err_clip, c.err_clip)
+        if c.q_mode == "ewma":
+            self.err_ewma = (1.0 - c.ewma_alpha) * self.err_ewma + c.ewma_alpha * e_abs
+            return float(self.err_ewma)
 
-        # use magnitude only (避免 direction 把 HMM/KF 定義成極端值方向)
-        fe = abs(fe)
-        pe = abs(pe)
+        if c.q_mode == "accum":
+            # leaky accumulator: grows when error large, leaks otherwise
+            self.err_accum = (1.0 - c.accum_beta) * self.err_accum + c.accum_gain * max(0.0, e_abs - c.q_floor)
+            return float(self.err_accum)
 
-        # scale = exp(sum(k * err))
-        R_scale = np.exp(c.kR_force * fe + c.kR_price * pe)
-        Q_scale = np.exp(c.kQ_force * fe + c.kQ_price * pe)
+        raise ValueError("q_mode must be 'ewma' or 'accum'")
 
-        R_scale = self._clip(R_scale, c.scale_clip_min, c.scale_clip_max)
-        Q_scale = self._clip(Q_scale, c.scale_clip_min, c.scale_clip_max)
-        return float(Q_scale), float(R_scale)
-
-    def _fallback_scale(self, close: float, log_vol: float, log_vol_global: float,
-                        log_volat: float, log_volat_global: float) -> float:
-        """
-        Your old-style adaptive R factor (volume/volatility/jump), compressed.
-        Return a multiplicative factor >= 0.
-        """
+    def _scale_R(self, e_abs: float) -> float:
         c = self.cfg
-        if self.prev_close is None:
-            jump = 0.0
-        else:
-            jump = abs(close - self.prev_close)
+        # fast, strong response
+        scale = np.exp(c.kR * e_abs)
+        return self._clip(float(scale), c.R_min_scale, c.R_max_scale)
 
-        # Similar spirit as your prior code (but bounded softly)
-        vol_factor = np.exp(-c.alpha_vol * (log_vol - log_vol_global))
-        volat_factor = np.exp(c.gamma_volat * (log_volat - log_volat_global))
-        jump_factor = np.exp(c.beta_jump * jump)
+    def _scale_Q(self, e_sust: float) -> float:
+        c = self.cfg
+        # slow + gated response: only increase Q when sustained error is high enough
+        if e_sust <= c.q_trigger:
+            return 1.0
 
-        raw = vol_factor * volat_factor * jump_factor
-        # clip to avoid insane scaling
-        return self._clip(float(raw), 0.2, 8.0)
+        scale = np.exp(c.kQ * (e_sust - c.q_trigger))
+        return self._clip(float(scale), c.Q_min_scale, c.Q_max_scale)
 
-    def update(self,
-               close: float,
-               drift: float = 0.0,
-               mosaic_force_err: float = 0.0,
-               mosaic_price_err: float = 0.0,
-               # fallback inputs (optional)
-               log_vol: float | None = None,
-               log_vol_global: float | None = None,
-               log_volat: float | None = None,
-               log_volat_global: float | None = None) -> dict:
+    def update(self, close: float, drift: float = 0.0, mosaic_err: float = 0.0) -> dict:
         """
-        One-step online update.
-        drift: e.g. rolling mean log-return (can be 0 if you want pure RW)
-        mosaic_force_err / mosaic_price_err: standardized errors (z-like)
+        One online step.
+        drift: e.g. rolling mean log-return (can be 0.0)
+        mosaic_err: a single MOSAIC "structure error" scalar (z-like preferred),
+                    e.g. abs(z_mix) or combined force/price error.
         """
         c = self.cfg
 
-        # init x
+        # init
         if self.x is None:
-            self.x = close
-            self.prev_close = close
-            return {
-                "x": self.x, "P": self.P,
-                "K": 0.0, "Q_t": c.Q_base, "R_t": c.R_base,
-                "x_pred": self.x, "resid": 0.0
-            }
+            self.x = float(close)
+            return {"x": self.x, "P": self.P, "K": 0.0, "Q_t": c.Q_base, "R_t": c.R_base,
+                    "x_pred": self.x, "resid": 0.0, "e_abs": 0.0, "e_sust": 0.0}
 
-        # ---- Prediction (cycle anchor with drift) ----
+        # ---- prediction (cycle stack) ----
         x_pred = float(self.x * np.exp(drift))
-        P_pred = float(self.P + c.Q_base)  # base; will scale with Q_t
 
-        # ---- Adaptive Q/R from MOSAIC ----
-        Q_scale, R_scale = self._mosaic_scale(mosaic_force_err, mosaic_price_err)
+        # ---- MOSAIC error -> instantaneous & sustained ----
+        e_abs = self._instant_err(mosaic_err)
+        e_sust = self._update_sustained(e_abs)
 
-        Q_t = float(c.Q_base * Q_scale)
-        R_t = float(c.R_base * R_scale)
+        # ---- adaptive R (fast) & Q (slow) ----
+        R_t = float(c.R_base * self._scale_R(e_abs))
+        Q_t = float(c.Q_base * self._scale_Q(e_sust))
 
-        # apply Q_t into P_pred
+        # ---- Kalman update ----
         P_pred = float(self.P + Q_t)
-
-        # ---- Optional fallback: keep tiny influence of old vol logic ----
-        if c.use_fallback_vol and (log_vol is not None) and (log_vol_global is not None) \
-           and (log_volat is not None) and (log_volat_global is not None):
-            fb = self._fallback_scale(close, log_vol, log_vol_global, log_volat, log_volat_global)
-            # blend multiplicatively (light touch)
-            R_t *= float((1.0 - c.w_fallback) + c.w_fallback * fb)
-
-        # ---- Update ----
         resid = float(close - x_pred)
-        S = float(P_pred + R_t)            # innovation variance
-        K = float(P_pred / S)              # Kalman gain
+        S = float(P_pred + R_t)
+        K = float(P_pred / S)
 
         self.x = float(x_pred + K * resid)
         self.P = float((1.0 - K) * P_pred)
-
-        self.prev_close = close
 
         return {
             "x": self.x,
@@ -304,8 +285,42 @@ class CycleKalmanOnline:
             "x_pred": x_pred,
             "resid": resid,
             "S": S,
+            "e_abs": e_abs,
+            "e_sust": e_sust,
         }
 
+
+# -------------------------
+# Example usage (minimal)
+# -------------------------
+if __name__ == "__main__":
+    import pandas as pd
+
+    # Suppose df has: close, drift, mosaic_err
+    df = pd.DataFrame({
+        "close": [100, 101, 105, 104, 103, 120, 119, 118],
+        "drift": [0, 0.001, 0.001, 0, 0, 0.0, 0.0, 0.0],
+        # mosaic_err (z-like): spikes when structure looks wrong
+        "mosaic_err": [0.2, 0.3, 2.0, 1.5, 0.8, 3.5, 2.8, 1.0],
+    })
+
+    cfg = CycleKalmanConfig(q_mode="ewma")
+    ckf = CycleKalmanOnline(cfg)
+
+    xs, Ks, Qs, Rs = [], [], [], []
+    for _, r in df.iterrows():
+        out = ckf.update(float(r["close"]), float(r["drift"]), float(r["mosaic_err"]))
+        xs.append(out["x"])
+        Ks.append(out["K"])
+        Qs.append(out["Q_t"])
+        Rs.append(out["R_t"])
+
+    df["cycle_state"] = xs
+    df["K"] = Ks
+    df["Q_t"] = Qs
+    df["R_t"] = Rs
+
+    print(df)
 
 def rolling_logret_mean(close: pd.Series, window: int = 20) -> pd.Series:
     lr = np.log(close).diff()
