@@ -8,12 +8,14 @@ from sklearn.preprocessing import StandardScaler
 from hmmlearn.hmm import GaussianHMM
 from quanthunt.strategy.algo_util.hmm_selector import HMMTrendSelector
 from quanthunt.strategy.algo_util.bocpd import apply_bocpd_to_df
-from quanthunt.strategy.algo_util.mosaic import (
+from quanthunt.strategy.algo_util.kalman import (
     init_mosaic_state,
     mosaic_step,
-    update_regime_noise_level_from_z,
-    build_mosaic_params,
+    build_kalman_params,
     prepare_mosaic_input,
+    MosaicForceAdapter,
+    MosaicPriceAdapter,
+    CycleStateAdapter,
 )
 from quanthunt.strategy.algo_util.bocpdz import (
     BOCPDGaussianG0,
@@ -78,6 +80,7 @@ TURTLE_COLUMNS = [
     "TR_norm",
     "bias_off_norm",
     # MOSAIC model
+    "force_proxy",
     "m_pc",
     "m_pt_speed",
     "m_pt_accel",
@@ -88,6 +91,8 @@ TURTLE_COLUMNS = [
     "m_z_force",
     "m_z_mix",
     "m_regime_noise_level",
+    "c_center",
+    "c_z_center",
     # BOCPD G0+P1
     "bocpd_phase",
     "bocpd_cp_prob",
@@ -108,81 +113,93 @@ class TurtleScout(IStrategyScout):
         self.window = max(ATR_sample, upper_sample, lower_sample) * 2
         # Set the buy_signal_func, default to the simple_turtle_strategy if none is provided
         self.buy_signal_func = buy_signal_func or self._simple_turtle_strategy
-        self.scaler = None
-        self.hmm_model = None
-        self.scaler = StandardScaler()
-        # print(f"\n🤖 初始化 HMM 模型: {self.params.hmm_split} 个状态")
-        self.hmm_model = GaussianHMM(
+
+        self.trend_scaler = StandardScaler()
+        self.trend_hmm_model = GaussianHMM(
             n_components=self.params.hmm_split,
             covariance_type="full",
             n_iter=4000,
             random_state=42,
         )
-        self.MOSAIC_State, self.MOSAIC_Cov = None, None
+
+        self.cycle_scaler = StandardScaler()
+        self.cycle_hmm_model = GaussianHMM(
+            n_components=self.params.hmm_split,
+            covariance_type="full",
+            n_iter=4000,
+            random_state=42,
+        )
+
         self.bocpd_wrapper = None
+        self.kalman_state = None
+        self.kalman_Cov = None
+        self.m_params = None
+        self.m_regime_params = None
+
+        self.m_force_model = None
+        self.m_price_model = None
+        self.m_cycle_model = None
 
     def train(self, df):
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
         emv_cross_strategy(df, self.params)
         df = self._calc_ATR(df)
         df = self._calc_OBV(df)
-        df = self.calc_mosaic(df)
+        df = self.calc_kalman(df)
         df = self.train_hmm(df)
         df = self._calc_profit(df)
         return df
 
-    def calc_mosaic(self, df):
-        # Initiallize Mosaic
-        start_idx = df.index[df["m_pc"].isna()][0]
-        if not (self.MOSAIC_State and self.MOSAIC_Cov):
-            self.MOSAIC_State, self.MOSAIC_Cov = init_mosaic_state(
-                init_pc=df.loc[start_idx, "Close"]
-            )
-            self.m_params, self.m_regime_params = build_mosaic_params()
-
+    def calc_kalman(self, df):
         df = prepare_mosaic_input(df)
 
-        # === 5) 主迴圈：只補 NaN 的 row ===
+        # Initiallize Mosaic/Cycle Kalman filter
+        start_idx = df.index[df["m_pc"].isna()][0]
+        if not (self.kalman_state and self.kalman_Cov):
+            self.kalman_state, self.kalman_Cov = init_mosaic_state(
+                init_pc=df.loc[start_idx, "Close"]
+            )
+            self.m_params, self.m_regime_params = build_kalman_params()
+            self.m_force_model = MosaicForceAdapter(self.m_params["force"])
+            self.m_price_model = MosaicPriceAdapter(self.m_params["price"])
+            self.m_cycle_model = CycleStateAdapter(self.m_params["cycle"])
+
         for i in range(start_idx, len(df)):
             if not pd.isna(df.loc[i, "m_pc"]):
-                continue  # 已算過就跳過
+                continue
 
             obs_close = float(df.loc[i, "Close"])
             obs_force = float(df.loc[i, "force_proxy"])
-            MOSAIC_State, MOSAIC_Cov, diag = mosaic_step(
-                self.MOSAIC_State,
-                self.MOSAIC_Cov,
+
+            self.kalman_state, self.kalman_Cov, diag = mosaic_step(
+                state=self.kalman_state,
+                cov=self.kalman_Cov,
                 obs_close=obs_close,
-                obs_force_proxy=obs_force,
-                params=self.m_params,
-            )
-            if diag["safe_skip"]:
-                continue
-
-            # update regime
-            MOSAIC_State["regime_noise_level"], _ = update_regime_noise_level_from_z(
-                prev_regime_noise_level=MOSAIC_State["regime_noise_level"],
-                z_price=diag["z_price"],
-                z_force=diag["z_force"],
-                params=self.m_regime_params,
+                obs_force=obs_force,
+                force_model=self.m_force_model,
+                price_model=self.m_price_model,
+                cycle_model=self.m_cycle_model,
+                regime_params=self.m_regime_params,
             )
 
-            # === 6) 寫回 df（只寫 MOSAIC 欄位） ===
-            w_price = self.m_params.get("w_price", 0.6)
-            w_force = self.m_params.get("w_force", 0.4)
-            df.loc[i, "Kalman"] = MOSAIC_State["pc"]
-            df.loc[i, "m_pc"] = MOSAIC_State["pc"]
-            df.loc[i, "m_pt_speed"] = MOSAIC_State["pt_speed"]
-            df.loc[i, "m_pt_accel"] = MOSAIC_State["pt_accel"]
-            df.loc[i, "m_force"] = MOSAIC_State["force_imbalance"]
-            df.loc[i, "m_force_trend"] = MOSAIC_State["force_imbalance_trend"]
-            df.loc[i, "m_force_bias"] = MOSAIC_State["force_proxy_bias"]
+            # === write back ===
+            df.loc[i, "Kalman"] = np.exp(self.kalman_state["pc"])
+            df.loc[i, "m_pc"] = np.exp(self.kalman_state["pc"])
+            df.loc[i, "m_pt_speed"] = self.kalman_state["pt_speed"]
+            df.loc[i, "m_pt_accel"] = self.kalman_state["pt_accel"]
+
+            df.loc[i, "m_force"] = self.kalman_state["force_imbalance"]
+            df.loc[i, "m_force_trend"] = self.kalman_state["force_imbalance_trend"]
+            df.loc[i, "m_force_bias"] = self.kalman_state["force_proxy_bias"]
+
             df.loc[i, "m_z_price"] = diag["z_price"]
             df.loc[i, "m_z_force"] = diag["z_force"]
-            df.loc[i, "m_z_mix"] = (w_price * diag["z_price"]) + (
-                w_force * diag["z_force"]
-            )
-            df.loc[i, "m_regime_noise_level"] = MOSAIC_State["regime_noise_level"]
+            df.loc[i, "m_z_mix"] = diag["z_mix"]
+            df.loc[i, "m_regime_noise_level"] = self.kalman_state["regime_noise_level"]
+
+            df.loc[i, "c_center"] = self.kalman_state["cycle_center"]
+            df.loc[i, "c_z_center"] = diag["z_cycle"]
+
         return df
 
     def define_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -199,53 +216,85 @@ class TurtleScout(IStrategyScout):
         return df
 
     def train_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
-        X = self._prepare_hmm_features(df)
-        self.hmm_model.fit(X)
-        hidden_states = self.hmm_model.predict(X)
+        X = self._prepare_trend_hmm_features(df)
+        self.trend_scaler.fit(X)
+        X = self.trend_scaler.transform(X)
+        self.trend_hmm_model.fit(X)
+        trend_hidden_states = self.trend_hmm_model.predict(X)
+
+        Y = self._prepare_cycle_hmm_features(df)
+        self.cycle_scaler.fit(Y)
+        Y = self.cycle_scaler.transform(Y)
+        self.cycle_hmm_model.fit(Y)
+        cycle_hidden_states = self.cycle_hmm_model.predict(Y)
+
+        # mask = df["HMM_State"].isna()
+        # df.loc[mask, "HMM_State"] = trend_hidden_states[mask]
+
         mask = df["HMM_State"].isna()
-        df.loc[mask, "HMM_State"] = hidden_states[mask]
+        df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
         # df = self.define_market_states(df)
         df = self.predict_market_states(df)
-
-        # # 选配 debug
-        # if getattr(self, "debug_mode", False):
-        #     debug_hmm(self.hmm_model, hidden_states, df, X)
-
         return df
 
-    def _prepare_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
+    def _prepare_cycle_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        CycleHMM feature set
+        - 專注於偏離、回歸動力、結構穩定度
+        """
+
+        # --- 偏離程度 ---
+        df["gap"] = df["Close"] - df["c_center"]
+        df["gap_norm"] = df["gap"] / df["c_z_center"].abs()
+
+        # --- 偏離動力學 ---
+        df["gap_speed"] = df["m_pc"]
+        df["gap_accel"] = df["m_pt_accel"]
+
+        # --- 結構 / regime ---
+        df["z_center"] = df["c_z_center"]
+        df["regime_noise"] = df["m_regime_noise_level"]
+        df["z_mix"] = df["m_z_mix"]
+
+        features = [
+            "gap_norm",
+            "gap_speed",
+            "gap_accel",
+            "z_center",
+            "regime_noise",
+            "z_mix",
+        ]
+
+        df[features] = df[features].fillna(method="bfill").fillna(method="ffill")
+        return df[features].values
+
+    def _prepare_trend_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
         """
         HMM 特徵工程（V4 行為 + 結構 + 趨勢方向版）
 
         結構類：
             - trend_norm      : 趨勢強弱（Kalman - EMA_long）/ ATR
             - TR_norm         : 波動強弱（ATR / ATR均值）的 log 比
-            - bias_off_norm   : 價格偏離中心（|Kalman - Close| / ATR）
             - slope_norm      : Kalman 斜率 / ATR（真正的趨勢方向）
 
         行為類：
             - RCS             : Resonance Consensus Strength（共識強度）
-            - up_streak_norm  : 連續上漲天數 / ATR_sample
-            - down_streak_norm: 連續下跌天數 / ATR_sample
-            - skew_ret        : 報酬偏態（正尾巴 / 假突破）
             - dd_proxy        : 價格自身推得的局部回撤比例
         """
 
-        windows = self.params.bayes_windows
         ATR_sample = self.params.ATR_sample
         ZERO = 1e-9
 
         # ========== 行為因子（RCS） ==========
-        df["momentum_factor"] = (df.High - df.Close) / (df.TR + ZERO)
-        df["res_strength"] = df.TR * df.Vol * df.momentum_factor
+        _momentum_factor = (df.High - df.Close) / (df.TR + ZERO)
+        _res_strength = df.TR * df.Vol * _momentum_factor
 
-        df["consensus_strength"] = (df.Kalman / df.Close).clip(0.1, 10) * df.Vol
-        df["consensus_norm"] = (
-            df.consensus_strength
-            / df.consensus_strength.rolling(window=ATR_sample).mean()
+        _consensus_strength = (df.Kalman / df.Close).clip(0.1, 10) * df.Vol
+        _consensus_norm = (
+            _consensus_strength / _consensus_strength.rolling(window=ATR_sample).mean()
         )
 
-        df["RCS"] = df.res_strength * df.consensus_norm
+        df["RCS"] = _res_strength * _consensus_norm
 
         # ========== 結構因子 ==========
         # 趨勢強弱（Kalman - EMA_long）
@@ -253,67 +302,29 @@ class TurtleScout(IStrategyScout):
         df["trend_norm"] = df.trend / (df.ATR + ZERO)
 
         # 波動強弱（ATR 相對於自身歷史均值）
-        df["TR_norm"] = np.log(df.ATR + ZERO) / np.log(
-            df.ATR.rolling(window=ATR_sample).mean() + ZERO
+        df["TR_norm"] = np.log(
+            df.ATR + ZERO / (df.ATR.rolling(window=ATR_sample).mean() + ZERO)
         )
-
-        # 價格偏離中心（離 Kalman 多遠）
-        df["bias_off_norm"] = (df.Kalman - df.Close).abs() / (df.ATR + ZERO)
 
         # **新增：趨勢方向（Kalman 斜率）**
         df["slope_norm"] = df.m_pt_speed.diff() / (df.ATR + ZERO)
 
         # ========== 新增：趨勢持續性 / 偏態 / 回撤 Proxy ==========
-
-        # 報酬（log return）
-        df["ret"] = np.log(df.Close / df.Close.shift(1)).replace(
-            [np.inf, -np.inf], np.nan
-        )
-
-        # 1) 上漲 / 下跌連續天數
-        up_streak = []
-        down_streak = []
-        cur_up = 0
-        cur_dn = 0
-        for r in df["ret"].fillna(0).to_numpy():
-            if r > 0:
-                cur_up += 1
-                cur_dn = 0
-            elif r < 0:
-                cur_dn += 1
-                cur_up = 0
-            else:
-                cur_up = 0
-                cur_dn = 0
-            up_streak.append(cur_up)
-            down_streak.append(cur_dn)
-
-        df["up_streak_norm"] = np.array(up_streak) / max(ATR_sample, 1)
-        df["down_streak_norm"] = np.array(down_streak) / max(ATR_sample, 1)
-
-        # 2) 報酬偏態
-        df["skew_ret"] = df["ret"].rolling(window=ATR_sample, min_periods=10).skew()
-
         # 3) 局部 Drawdown proxy
         roll_max = df["Close"].cummax()
         df["dd_proxy"] = (roll_max - df["Close"]) / (roll_max + ZERO)
 
         # --- Final features ---
         features = [
-            "RCS",
             "trend_norm",
-            "TR_norm",
-            "bias_off_norm",
             "slope_norm",
-            "up_streak_norm",
-            "down_streak_norm",
-            "skew_ret",
+            "RCS",
+            "TR_norm",
             "dd_proxy",
         ]
 
         df[features] = df[features].fillna(method="bfill").fillna(method="ffill")
-
-        return self.scaler.fit_transform(df[features].values)
+        return df[features].values
 
     def predict_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -361,10 +372,20 @@ class TurtleScout(IStrategyScout):
         return df
 
     def predict_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
-        X = self._prepare_hmm_features(df)
-        hidden_states = self.hmm_model.predict(X)
+        X = self._prepare_trend_hmm_features(df)
+        X = self.trend_scaler.transform(X)
+        trend_hidden_states = self.trend_hmm_model.predict(X)
+
+        Y = self._prepare_cycle_hmm_features(df)
+        Y = self.cycle_scaler.transform(Y)
+        cycle_hidden_states = self.cycle_hmm_model.predict(Y)
+
+        # mask = df["HMM_State"].isna()
+        # df.loc[mask, "HMM_State"] = trend_hidden_states[mask]
+
         mask = df["HMM_State"].isna()
-        df.loc[mask, "HMM_State"] = hidden_states[mask]
+        df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
+
         # df = self.define_market_states(df)
         df = self.predict_market_states(df)
         return df
@@ -605,7 +626,7 @@ class TurtleScout(IStrategyScout):
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_OBV(base_df)
         base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
-        base_df = self.calc_mosaic(base_df)
+        base_df = self.calc_kalman(base_df)
         base_df = self.calc_bocpd(base_df)
         base_df = self.predict_hmm(base_df)
         base_df = self._calc_profit(base_df)
