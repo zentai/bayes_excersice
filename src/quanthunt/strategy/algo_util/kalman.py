@@ -92,11 +92,11 @@ class BaseStateSpaceEngine:
 
 
 # ============================================================
-# MOSAIC state initialization
+# kalman state initialization
 # ============================================================
 
 
-def init_mosaic_state(init_pc: float = 1.0):
+def init_kalman_state(init_pc: float = 1.0):
     if init_pc <= 0 or not np.isfinite(init_pc):
         raise ValueError("init_pc must be positive")
 

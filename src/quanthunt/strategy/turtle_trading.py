@@ -12,7 +12,7 @@ from quanthunt.strategy.algo_util.performance import (
     analyze_hmm_states,
 )
 from quanthunt.strategy.algo_util.kalman import (
-    init_mosaic_state,
+    init_kalman_state,
     mosaic_step,
     build_kalman_params,
     prepare_mosaic_input,
@@ -50,9 +50,6 @@ TURTLE_COLUMNS = [
     "P/L",
     "ema_short",
     "ema_long",
-    "drift",
-    "volatility",
-    "pred_price",
     "Kalman",
     "HMM_State",
     "HMM_Signal",
@@ -124,7 +121,6 @@ class TurtleScout(IStrategyScout):
 
     def train(self, df):
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
-        buy_signal_from_mosaic_strategy(df, self.params)
         df = self._calc_ATR(df)
         df = self.calc_kalman(df)
         df = self.train_hmm(df)
@@ -137,7 +133,7 @@ class TurtleScout(IStrategyScout):
         # Initiallize Mosaic/Cycle Kalman filter
         start_idx = df.index[df["m_pc"].isna()][0]
         if not (self.kalman_state and self.kalman_Cov):
-            self.kalman_state, self.kalman_Cov = init_mosaic_state(
+            self.kalman_state, self.kalman_Cov = init_kalman_state(
                 init_pc=df.loc[start_idx, "Close"]
             )
             self.m_params, self.m_regime_params = build_kalman_params()
@@ -183,19 +179,6 @@ class TurtleScout(IStrategyScout):
 
         return df
 
-    def define_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
-        up_state = hmm_performance(df)
-
-        s = df["UP_State"].isna()
-        df.loc[s, "UP_State"] = up_state
-
-        s = df["HMM_Signal"].isna()
-        df.loc[s, "HMM_Signal"] = (
-            df.loc[s, "HMM_State"] == df.loc[s, "UP_State"]
-        ).astype(int)
-
-        return df
-
     def train_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
         X = self._prepare_trend_hmm_features(df)
         self.trend_scaler.fit(X)
@@ -214,7 +197,6 @@ class TurtleScout(IStrategyScout):
 
         mask = df["HMM_State"].isna()
         df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
-        # df = self.define_market_states(df)
         df = self.predict_market_states(df)
         return df
 
@@ -277,6 +259,11 @@ class TurtleScout(IStrategyScout):
 
         df["RCS"] = _res_strength * _consensus_norm
 
+        # === EMA（保留，雖然目前沒直接用在 score）===
+        idx = df.ema_short.isna()
+        df.loc[idx, "ema_short"] = df.Close.ewm(span=5, adjust=False).mean()
+        df.loc[idx, "ema_long"] = df.Close.ewm(span=60, adjust=False).mean()
+
         # ========== 結構因子 ==========
         # 趨勢強弱（Kalman - EMA_long）
         df["trend"] = df.Kalman - df["ema_long"]
@@ -331,24 +318,15 @@ class TurtleScout(IStrategyScout):
         best_states = selector.best_states(top_n=1)
         best_combo = selector.best_combos(top_n=1)
         combo_states = set(best_combo.iloc[0]["combo"])
+
         print(selector.best_combos(top_n=1))
+
         if best_states.empty or best_states["trend_mu"].iloc[0] <= 0:
             # 找不到有正期望的 state，就不要亂打 HMM_Signal
             return df
 
-        up_state = int(best_states["state"].iloc[0])
-
-        # 2) 只填尚未設定的 UP_State
-        s = df["UP_State"].isna()
-        df.loc[s, "UP_State"] = up_state
-
-        # 3) HMM_Signal：當前 HMM_State == UP_State 時標記 1
-        s = df["HMM_Signal"].isna()
-        # Single HMM State
-        # df.loc[s, "HMM_Signal"] = (
-        #     df.loc[s, "HMM_State"] == df.loc[s, "UP_State"]
-        # ).astype(int)
         # Combo HMM State
+        s = df["HMM_Signal"].isna()
         df.loc[s, "HMM_Signal"] = df.loc[s, "HMM_State"].isin(combo_states).astype(int)
         return df
 
@@ -367,7 +345,6 @@ class TurtleScout(IStrategyScout):
         mask = df["HMM_State"].isna()
         df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
 
-        # df = self.define_market_states(df)
         df = self.predict_market_states(df)
         return df
 
@@ -529,7 +506,6 @@ class TurtleScout(IStrategyScout):
 
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
-        buy_signal_from_mosaic_strategy(base_df, self.params)
         base_df = self._calc_ATR(base_df)
         base_df = self.calc_kalman(base_df)
         base_df = self.calc_bocpd(base_df)
@@ -552,21 +528,13 @@ def emv_cross_strategy(df, params, short_windows=5, long_windws=60):
     df.loc[idx, "ema_short"] = df.Close.ewm(span=short_windows, adjust=False).mean()
     df.loc[idx, "ema_long"] = df.Close.ewm(span=long_windws, adjust=False).mean()
     return (df.Kalman > df.ema_short) & (df.ema_short > df.ema_long)
-    # return (df.iloc[-1].ema_short > df.iloc[-1].ema_long) & (
-    #     df.iloc[-1].Kalman > df.iloc[-1].ema_short
-    # )
 
 
-def buy_signal_from_mosaic_strategy(df, params, short_windows=5, long_windws=60):
+def buy_signal_from_mosaic_strategy(df, params):
     """
     BuySignal = 結構位置 + 力學轉折（threshold 隨 regime 調整）
     假設 HMM 已在外層 gate 過
     """
-
-    # === EMA（保留，雖然目前沒直接用在 score）===
-    idx = df.ema_short.isna()
-    df.loc[idx, "ema_short"] = df.Close.ewm(span=short_windows, adjust=False).mean()
-    df.loc[idx, "ema_long"] = df.Close.ewm(span=long_windws, adjust=False).mean()
 
     # === 結構條件 ===
     cond_structure = df.c_z_center < -1.0
@@ -612,43 +580,6 @@ def sortino_ratio(series, rf=0.0):
     if np.isnan(downside_std):
         downside_std = ZERO
     return (series.mean() - rf) / downside_std
-
-
-def hmm_performance(df: pd.DataFrame, min_count: int = 300) -> int:
-    """
-    原理（直覺版）：
-    1) HMM 每個 state 代表一種「市場狀態」；我們不想被樣本太少的 state 騙。
-    2) 先用 state 的出現次數過濾掉「冷門/不可靠」狀態（count >= min_count）。
-    3) 對每個可靠 state 取特徵均值，跟「理想的核心趨勢狀態」做距離比較：
-       - consensus_norm 越高越好（+1）
-       - trend_norm 越高越好（+1）
-       - TR_norm 越接近 0 越好（0，代表不過熱不過冷）
-       - bias_off_norm 越低越好（-1）
-    4) 距離越小越像核心趨勢狀態；回傳該 state id。
-    """
-    df = df.copy()
-
-    counts = df["HMM_State"].value_counts()
-    valid_states = counts[counts >= min_count].index
-
-    prof = (
-        df.groupby("HMM_State")[["RCS", "trend_norm", "TR_norm", "bias_off_norm"]]
-        .mean()
-        .loc[valid_states]
-    )
-
-    ideal = pd.Series(
-        {
-            "RCS": +1.0,
-            "trend_norm": +1.0,
-            "TR_norm": 0.0,
-            "bias_off_norm": -1.0,
-        }
-    )
-
-    prof["score"] = (prof.sub(ideal) ** 2).sum(axis=1)
-    print(prof)
-    return int(prof["score"].idxmin())
 
 
 from quanthunt.utils import pandas_util
@@ -709,11 +640,6 @@ if __name__ == "__main__":
 
         base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}_hmm_test.csv", index=False)
         print(f"created: {REPORTS_DIR}/{sp}_hmm_test.csv")
-        hmm_table = hmm_performance(base_df)
-        # print(hmm_table)
-        print(
-            f"BEST HMM_STATE: {hmm_table.loc[hmm_table['weighted_score'].idxmax(), 'HMM_State']}"
-        )
         return base_df[report_cols]
 
     main()
