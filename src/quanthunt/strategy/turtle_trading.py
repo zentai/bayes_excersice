@@ -7,7 +7,6 @@ import statistics
 from sklearn.preprocessing import StandardScaler
 from hmmlearn.hmm import GaussianHMM
 from quanthunt.strategy.algo_util.hmm_selector import HMMTrendSelector
-from quanthunt.strategy.algo_util.bocpd import apply_bocpd_to_df
 from quanthunt.strategy.algo_util.performance import (
     compare_signal_filters,
     analyze_hmm_states,
@@ -42,8 +41,6 @@ TURTLE_COLUMNS = [
     "turtle_l",
     "Stop_profit",
     "exit_price",
-    "OBV_UP",
-    "VWMA",
     "buy",
     "sell",
     "profit",
@@ -51,34 +48,15 @@ TURTLE_COLUMNS = [
     "Matured",
     "BuySignal",
     "P/L",
-    "PRICE_VOL_reduce",
-    "Rolling_Std",
     "ema_short",
     "ema_long",
-    "+DM",
-    "-DM",
-    "ADX",
-    "ADX_Signed",
     "drift",
     "volatility",
     "pred_price",
     "Kalman",
-    "log_returns",
-    "global_log_volatility",
-    "global_log_vol",
-    "KReturn",
-    "KReturnVol",
-    "RVolume",
     "HMM_State",
-    "UP_State",
     "HMM_Signal",
     "adjusted_margin",
-    "Count_Hz",
-    "close_sortino",
-    "vol_sortino",
-    "trend",
-    "cv",
-    "cv_sum",
     "RCS",
     "trend_norm",
     "TR_norm",
@@ -148,7 +126,6 @@ class TurtleScout(IStrategyScout):
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
         buy_signal_from_mosaic_strategy(df, self.params)
         df = self._calc_ATR(df)
-        df = self._calc_OBV(df)
         df = self.calc_kalman(df)
         df = self.train_hmm(df)
         df = self._calc_profit(df)
@@ -518,7 +495,6 @@ class TurtleScout(IStrategyScout):
 
         df = base_df.iloc[start_idx:].copy()
         idx = df.ATR.isna()
-        df.loc[idx, "Count_Hz"] = pandas_util.to_hz(self.params.interval, df.Count)
         df.loc[idx, "turtle_h"] = df.High.shift(1).rolling(upper_sample).max()
         df.loc[idx, "turtle_l"] = df.Low.shift(1).rolling(lower_sample).min()
         df.loc[idx, "h_l"] = df.High - df.Low
@@ -526,81 +502,8 @@ class TurtleScout(IStrategyScout):
         df.loc[idx, "c_l"] = (df.Close.shift(1) - df.Low).abs()
         df.loc[idx, "TR"] = df[["h_l", "c_h", "c_l"]].max(axis=1)
         df.loc[idx, "ATR"] = df["TR"].rolling(ATR_sample).mean()
-        df.loc[idx, "ATR_STDV"] = df["TR"].rolling(ATR_sample).std()
-
-        df.loc[idx, "cv"] = np.log(df.TR * df.Vol)
-        df.loc[idx, "cv_sum"] = df.cv.rolling(window=ATR_sample).sum()
 
         base_df.update(df)
-        return base_df
-
-    def _calc_OBV(self, base_df, multiplier=3.4):
-        window = self.params.upper_sample
-        df = base_df.copy()
-
-        # Calculate price difference and direction
-        df["price_diff"] = df["Close"].diff()
-        df["direction"] = df["price_diff"].apply(
-            lambda x: 1 if x > 0 else -1 if x < 0 else 0
-        )
-        df["Vol"] *= df["direction"]
-
-        # Calculate OBV
-        df["OBV"] = df["Vol"].cumsum()
-
-        # Calculate moving average and standard deviation for OBV
-        df["OBV_MA"] = df["OBV"].rolling(window=window).mean()
-        df["OBV_std"] = df["OBV"].rolling(window=window).std()
-
-        # Calculate upper and lower bounds
-        df["upper_bound"] = df["OBV_MA"] + (multiplier * df["OBV_std"])
-        df["lower_bound"] = df["OBV_MA"] - (multiplier * df["OBV_std"])
-
-        # Calculate relative difference between bounds
-        df["bound_diff"] = (df["upper_bound"] - df["lower_bound"]) / df["OBV_MA"]
-
-        df["PRICE_UP"] = df["High"] >= (
-            df["Close"].rolling(window=self.params.upper_sample).mean()
-            + multiplier * df["Close"].rolling(window=self.params.upper_sample).std()
-        )
-        df["PRICE_LOW"] = df["Low"] <= (
-            df["Close"].rolling(window=self.params.lower_sample).mean()
-            + multiplier * df["Close"].rolling(window=self.params.lower_sample).std()
-        )
-
-        # 计算滚动窗口内的标准差
-        df["Rolling_Std"] = df["Close"].rolling(window=self.params.upper_sample).std()
-        df["Rolling_Std_Percent"] = (
-            df["Rolling_Std"]
-            / df["Close"].rolling(window=self.params.upper_sample).mean()
-        ) * 100
-
-        # Identify significant points where OBV crosses the upper bound
-        df["OBV_UP"] = (
-            (df["OBV"] > df["upper_bound"])
-            & (df["OBV"].shift(1) <= df["upper_bound"])
-            # & (df["bound_diff"] > 0.07)
-        )
-        # print(df["bound_diff"])
-
-        # Combine the new 'OBV_UP' column back to the original dataframe
-        base_df["OBV"] = df["OBV"]
-        base_df["OBV_MA"] = df["OBV_MA"]
-        # base_df["OBV_UP"] = df["OBV_UP"] & (df["Slope"] >= 0)
-        # base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_UP"]
-        base_df["OBV_UP"] = df["OBV_UP"] & df["PRICE_LOW"]
-        # base_df["OBV_UP"] = df["OBV_UP"]
-        # base_df.at[df.index[-1], "OBV_UP"] = (
-        #     df["Rolling_Std_Percent"].iloc[-1]
-        #     <= df["Rolling_Std_Percent"]
-        #     .rolling(window=self.params.bayes_windows)
-        #     .min()
-        #     .iloc[-1]
-        # )
-
-        base_df["Rolling_Std"] = df["Rolling_Std_Percent"]
-        base_df["upper_bound"] = df["upper_bound"]
-        base_df["lower_bound"] = df["lower_bound"]
         return base_df
 
     def calc_bocpd(self, df):
@@ -628,8 +531,6 @@ class TurtleScout(IStrategyScout):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
         buy_signal_from_mosaic_strategy(base_df, self.params)
         base_df = self._calc_ATR(base_df)
-        base_df = self._calc_OBV(base_df)
-        base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
         base_df = self.calc_kalman(base_df)
         base_df = self.calc_bocpd(base_df)
         base_df = self.predict_hmm(base_df)
@@ -699,136 +600,10 @@ def buy_signal_from_mosaic_strategy(df, params, short_windows=5, long_windws=60)
     return buy_score >= threshold
 
 
-def calc_ADX(df, params, p=14):
-    df = df.assign(
-        **{
-            "+DM": (df.High.diff().where(lambda x: x > -df.Low.diff()))
-            .clip(0)
-            .fillna(0),
-            "-DM": (-df.Low.diff().where(lambda x: x > df.High.diff()))
-            .clip(0)
-            .fillna(0),
-        }
-    )
-    df["+DM"] = df["+DM"].ewm(alpha=1 / p, adjust=False).mean()
-    df["-DM"] = df["-DM"].ewm(alpha=1 / p, adjust=False).mean()
-    df["+DI"] = (df["+DM"] / df.ATR).fillna(0)
-    df["-DI"] = (df["-DM"] / df.ATR).fillna(0)
-    df["DX"] = (abs(df["+DI"] - df["-DI"]) / (df["+DI"] + df["-DI"])).replace(np.inf, 0)
-    df["ADX"] = df.DX.ewm(alpha=1 / p, adjust=False).mean()
-    df["ADX_Signed"] = df["ADX"] * np.sign(df["+DI"] - df["-DI"])
-    return df
-
-
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from hmmlearn.hmm import GaussianHMM
-
-
-def debug_hmm(hmm_model, hidden_states, df, X):
-    """
-    視覺化 Hidden Markov Model (HMM) 的學習結果, 包含：
-    1. 隱藏狀態時序圖
-    2. 隱藏狀態高斯分佈
-    3. 狀態轉移矩陣
-    4. 模型對數似然值
-    5. 未來狀態模擬
-
-    參數：
-    - hmm_model: 訓練好的 GaussianHMM 模型
-    - df: 包含觀測數據的 DataFrame
-    - feature_col: 觀測數據的欄位名稱 (預設為 "returns")
-    - future_days: 模擬未來狀態的天數 (預設為 10)
-    """
-
-    ## 1️⃣ 隱藏狀態時序圖
-    plt.figure(figsize=(12, 5))
-    ax1 = plt.gca()
-    ax2 = ax1.twinx()
-    ax2.plot(df.index, df.Close, label="BTC Price", color="black", linewidth=1.5)
-    ax2.plot(df.index, df.Kalman, label="Kalman Filter", color="blue", linewidth=1.5)
-    ax2.legend(loc="upper right")
-    ax1.set_ylabel("Features")
-    ax2.set_ylabel("BTC Price")
-    for i in range(hmm_model.n_components):
-        ax1.fill_between(
-            df.index,
-            X[:, 0],
-            where=(hidden_states == i),
-            alpha=0.3,
-            label=f"State {i} - KReturnVol",
-        )
-    for i in range(hmm_model.n_components):
-        ax1.fill_between(
-            df.index,
-            X[:, 1],
-            where=(hidden_states == i),
-            alpha=0.3,
-            label=f"State {i} - RVolume",
-        )
-    for i in range(hmm_model.n_components):
-        ax1.fill_between(
-            df.index,
-            X[:, 2],
-            where=(hidden_states == i),
-            alpha=0.3,
-            label=f"State {i} - Slope",
-        )
-    ax1.legend()
-    plt.title("Hidden States Over Time")
-    plt.xlabel("Date")
-    plt.ylabel("feature_col")
-    plt.show()
-    ## 2️⃣ 隱藏狀態的高斯分佈
-    means = hmm_model.means_.flatten()
-    covars = np.sqrt(hmm_model.covars_.flatten())
-
-    plt.figure(figsize=(8, 5))
-    for i in range(hmm_model.n_components):
-        sns.kdeplot(X[hidden_states == i].ravel(), label=f"State {i}", shade=True)
-    plt.axvline(
-        means[0], color="blue", linestyle="--", label=f"Mean State 0: {means[0]:.2f}"
-    )
-    plt.axvline(
-        means[1], color="red", linestyle="--", label=f"Mean State 1: {means[1]:.2f}"
-    )
-    plt.legend()
-    plt.title("Gaussian Distributions of Hidden States")
-    plt.xlabel("feature_col")
-    plt.show()
-
-    ## 3️⃣ 狀態轉移矩陣（熱力圖）
-    trans_mat = hmm_model.transmat_
-
-    plt.figure(figsize=(6, 5))
-    sns.heatmap(
-        trans_mat,
-        annot=True,
-        cmap="coolwarm",
-        fmt=".2f",
-        xticklabels=[f"State {i}" for i in range(hmm_model.n_components)],
-        yticklabels=[f"State {i}" for i in range(hmm_model.n_components)],
-    )
-    plt.title("HMM State Transition Matrix")
-    plt.xlabel("Next State")
-    plt.ylabel("Current State")
-    plt.show()
-
-    ## 4️⃣ 打印模型對數似然值
-    log_likelihood = hmm_model.score(X)
-    print(f"\n🔍 Log-Likelihood of the trained HMM: {log_likelihood:.2f}")
-
-    print("\n✅ HMM Debug 完成！請檢查上面的圖表來分析 HMM 是否合理地劃分了市場狀態。")
-
-
-def hmm_standardize(series: pd.Series, window: int = 20) -> pd.DataFrame:
-    _log = np.log(series + ZERO)
-    _ma = series.rolling(window).mean()
-    _relative_strength = series / _ma
-    _zscore = (series - _ma) / series.rolling(window).std()
-    # _sortino = sortino_ratio(series)
-    return _log, _ma, _relative_strength, _zscore
 
 
 def sortino_ratio(series, rf=0.0):
@@ -874,80 +649,6 @@ def hmm_performance(df: pd.DataFrame, min_count: int = 300) -> int:
     prof["score"] = (prof.sub(ideal) ** 2).sum(axis=1)
     print(prof)
     return int(prof["score"].idxmin())
-
-
-# def hmm_performance(df: pd.DataFrame):
-#     df = df.copy()
-#     df["log_return"] = np.log(df.Close / df.Close.shift(1))
-#     df.dropna(subset=["log_return", "HMM_State"], inplace=True)
-#     result = (
-#         df.groupby("HMM_State")
-#         .agg(
-#             avg_return=("log_return", "mean"),
-#             std_return=("log_return", "std"),
-#             count=("log_return", "count"),
-#             sortino_ratio=("log_return", sortino_ratio),
-#         )
-#         .reset_index()
-#     )
-
-#     return result.sortino_ratio.idxmax()
-
-
-# def hmm_performance(df: pd.DataFrame):
-#     df = df.copy()
-
-#     # 計算 log return
-#     df["log_return"] = np.log(df.Close / df.Close.shift(1))
-
-#     # 移除 NaN
-#     df.dropna(subset=["log_return", "HMM_State"], inplace=True)
-
-#     # 建立輸出表格
-#     result = (
-#         df.groupby("HMM_State")
-#         .agg(
-#             avg_return=("log_return", "mean"),
-#             std_return=("log_return", "std"),
-#             count=("log_return", "count"),
-#             sortino_ratio=("log_return", sortino_ratio),
-#         )
-#         .reset_index()
-#     )
-
-#     # 計算平均持續時間（每段連續出現狀態的長度）
-#     durations = []
-#     prev_state = None
-#     count_duration = 0
-#     for state in df["HMM_State"]:
-#         if state == prev_state:
-#             count_duration += 1
-#         else:
-#             if prev_state is not None:
-#                 durations.append((prev_state, count_duration))
-#             prev_state = state
-#             count_duration = 1
-#     if prev_state is not None:
-#         durations.append((prev_state, count_duration))
-
-#     duration_df = pd.DataFrame(durations, columns=["state", "duration"])
-#     avg_durations = (
-#         duration_df.groupby("state")["duration"]
-#         .mean()
-#         .reset_index()
-#         .rename(columns={"state": "HMM_State", "duration": "avg_duration"})
-#     )
-
-#     # 合併兩張表
-#     result = result.merge(avg_durations, on="HMM_State", how="left")
-
-#     # 加入 weighted score 計算（正規化方式）
-#     result["weight_count_std"] = (result["count"] / result["std_return"]).rank(pct=True)
-#     result["weight_duration"] = np.sqrt(result["avg_duration"]).rank(pct=True)
-#     result["weighted_score"] = result["sortino_ratio"] * (
-#         0.6 * result["weight_count_std"] + 0.4 * result["weight_duration"]
-#     )
-#     return result
 
 
 from quanthunt.utils import pandas_util
