@@ -14,7 +14,10 @@ import copy
 # Internal modules
 from quanthunt.sensor.market_sensor import LocalMarketSensor, HuobiMarketSensor
 from quanthunt.hunterverse.storage import HuntingCamp
-from quanthunt.strategy.turtle_trading import TurtleScout, emv_cross_strategy
+from quanthunt.strategy.turtle_trading import (
+    TurtleScout,
+    buy_signal_from_mosaic_strategy,
+)
 from quanthunt.engine.probabilistic_engine import BayesianEngine
 from quanthunt.utils import pandas_util
 from quanthunt.hunterverse.interface import (
@@ -193,7 +196,7 @@ def start_journey(sp):
     )
     camp = HuntingCamp(sp, sensor)
     base_df = camp.update()
-    scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
+    scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
     engine = BayesianEngine(params=sp)
 
     bsp = copy.deepcopy(sp)

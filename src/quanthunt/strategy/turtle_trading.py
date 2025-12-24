@@ -8,6 +8,10 @@ from sklearn.preprocessing import StandardScaler
 from hmmlearn.hmm import GaussianHMM
 from quanthunt.strategy.algo_util.hmm_selector import HMMTrendSelector
 from quanthunt.strategy.algo_util.bocpd import apply_bocpd_to_df
+from quanthunt.strategy.algo_util.performance import (
+    compare_signal_filters,
+    analyze_hmm_states,
+)
 from quanthunt.strategy.algo_util.kalman import (
     init_mosaic_state,
     mosaic_step,
@@ -142,7 +146,7 @@ class TurtleScout(IStrategyScout):
 
     def train(self, df):
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
-        emv_cross_strategy(df, self.params)
+        buy_signal_from_mosaic_strategy(df, self.params)
         df = self._calc_ATR(df)
         df = self._calc_OBV(df)
         df = self.calc_kalman(df)
@@ -622,7 +626,7 @@ class TurtleScout(IStrategyScout):
 
     def market_recon(self, base_df):
         base_df = pandas_util.equip_fields(base_df, TURTLE_COLUMNS)
-        emv_cross_strategy(base_df, self.params)
+        buy_signal_from_mosaic_strategy(base_df, self.params)
         base_df = self._calc_ATR(base_df)
         base_df = self._calc_OBV(base_df)
         base_df = calc_ADX(base_df, self.params, p=5)  # p=self.params.ATR_sample)
@@ -630,6 +634,9 @@ class TurtleScout(IStrategyScout):
         base_df = self.calc_bocpd(base_df)
         base_df = self.predict_hmm(base_df)
         base_df = self._calc_profit(base_df)
+        # HACK remove me
+        print(compare_signal_filters(base_df))
+        print(analyze_hmm_states(base_df))
         return base_df
 
     def _simple_turtle_strategy(self, df, params):
@@ -647,6 +654,48 @@ def emv_cross_strategy(df, params, short_windows=5, long_windws=60):
     # return (df.iloc[-1].ema_short > df.iloc[-1].ema_long) & (
     #     df.iloc[-1].Kalman > df.iloc[-1].ema_short
     # )
+
+
+def buy_signal_from_mosaic_strategy(df, params, short_windows=5, long_windws=60):
+    """
+    BuySignal = 結構位置 + 力學轉折（threshold 隨 regime 調整）
+    假設 HMM 已在外層 gate 過
+    """
+
+    # === EMA（保留，雖然目前沒直接用在 score）===
+    idx = df.ema_short.isna()
+    df.loc[idx, "ema_short"] = df.Close.ewm(span=short_windows, adjust=False).mean()
+    df.loc[idx, "ema_long"] = df.Close.ewm(span=long_windws, adjust=False).mean()
+
+    # === 結構條件 ===
+    cond_structure = df.c_z_center < -1.0
+
+    # === 力學條件 ===
+    cond_force_pos = df.m_force_trend > 0
+    cond_force_stable = df.m_force_trend.rolling(20).quantile(0.3) > 0
+
+    # === 世界狀態（regime noise）===
+    regime_noise = df.m_regime_noise_level
+    regime_mean = regime_noise.rolling(20).mean()
+
+    # === regime 分段（低 / 中 / 高噪音）===
+    low_noise = regime_noise < regime_mean * 0.9
+    mid_noise = (regime_noise >= regime_mean * 0.9) & (
+        regime_noise <= regime_mean * 1.1
+    )
+    high_noise = regime_noise > regime_mean * 1.1
+
+    # === Buy score（你原本的設計，保留）===
+    buy_score = 1.0 * cond_structure + 0.5 * cond_force_pos + 0.5 * cond_force_stable
+
+    # === Regime-adaptive threshold ===
+    threshold = (
+        1.0 * low_noise  # 世界乾淨：一個強理由就可以
+        + 1.5 * mid_noise  # 世界普通：至少 1.5 分
+        + 2.0 * high_noise  # 世界混亂：幾乎要全對
+    )
+
+    return buy_score >= threshold
 
 
 def calc_ADX(df, params, p=14):
@@ -950,7 +999,7 @@ if __name__ == "__main__":
         # cut = pd.Timestamp("2025-06-04 15:00:00")
         # base_df = base_df[base_df["Date"] >= cut].reset_index()
 
-        scout = TurtleScout(params=sp, buy_signal_func=emv_cross_strategy)
+        scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
         scout = TurtleScout(sp)
         base_df = scout.train(base_df)
         base_df = scout.market_recon(base_df)
