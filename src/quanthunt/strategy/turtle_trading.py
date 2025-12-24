@@ -686,7 +686,8 @@ def buy_signal_from_mosaic_strategy(df, params, short_windows=5, long_windws=60)
     high_noise = regime_noise > regime_mean * 1.1
 
     # === Buy score（你原本的設計，保留）===
-    buy_score = 1.0 * cond_structure + 0.5 * cond_force_pos + 0.5 * cond_force_stable
+    buy_score = 1.25 * cond_force_pos + 1.25 * cond_force_stable
+    # buy_score = 1.0 * cond_structure + 0.5 * cond_force_pos + 0.5 * cond_force_stable
 
     # === Regime-adaptive threshold ===
     threshold = (
