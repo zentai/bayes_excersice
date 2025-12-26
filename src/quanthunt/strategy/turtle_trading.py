@@ -489,8 +489,8 @@ class TurtleScout(IStrategyScout):
     def calc_bocpd(self, df):
         if not self.bocpd_wrapper:
             # --- init once ---
-            g0 = BOCPDGaussianG0(hazard=0.01, r_max=300)
-            p1 = BOCPDStudentTP1(hazard=0.01, r_max=300)
+            g0 = BOCPDGaussianG0(hazard=0.015, r_max=300)
+            p1 = BOCPDStudentTP1(hazard=0.05, r_max=300)
 
             dual = DualBOCPD(g0, p1)
             cfg = PhaseFSMConfig()

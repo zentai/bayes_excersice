@@ -552,8 +552,6 @@ class DualBOCPDWrapper:
             self.dual.g0.hazard, 1e-12
         )
 
-        df.at[idx, "bocpd_model"] = "G0+P1"
-
     def run_online(self, df):
         """
         Convenience: run from first to last row once.
