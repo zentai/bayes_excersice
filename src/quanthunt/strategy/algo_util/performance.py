@@ -158,16 +158,16 @@ def train_test_split_by_time(df):
     return train_df, test_df
 
 
-def evaluate_hmm_signal(train_df, test_df):
+def evaluate_hmm_signal(df):
     # 1️⃣ 訓練期：找最佳 state
-    selector = HMMTrendSelector(train_df, state_col="HMM_State", profit_col="profit")
+    selector = HMMTrendSelector(df, state_col="HMM_State", profit_col="profit")
     best_combo = selector.best_combos(top_n=1).iloc[0]["combo"]
     best_states = set(best_combo)
 
     # 2️⃣ 回測期：生成 HMM_Signal（固定訓練結果）
-    test_df["HMM_Signal"] = test_df["HMM_State"].isin(best_states).astype(int)
+    df["HMM_Signal"] = df["HMM_State"].isin(best_states).astype(int)
 
-    return train_df, test_df, best_states
+    return df, best_states
 
 
 def compare_performance(train_df, test_df):

@@ -210,7 +210,8 @@ def start_journey(sp):
     hunter["x"].load_memories(base_df)
     target_key = "s" if sp.backtest else "x"
     # target_key = "s"
-    debug_cols = DEBUG_COL + hunter[target_key].columns
+    # debug_cols = DEBUG_COL + hunter[target_key].columns
+    debug_cols = DEBUG_COL
     report_cols = DUMP_COL + sum([h.columns for h in hunter.values()], [])
 
     story = HuntingStory(
