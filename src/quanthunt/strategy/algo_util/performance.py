@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from quanthunt.strategy.algo_util.hmm_selector import HMMTrendSelector
 
 
 def sortino_ratio(series, rf=0.0):
@@ -148,3 +149,28 @@ def analyze_hmm_states(base_df: pd.DataFrame) -> pd.DataFrame:
         results.append(metrics)
 
     return pd.DataFrame(results).set_index("HMM_State")
+
+
+def train_test_split_by_time(df):
+    mid = len(df) // 2
+    train_df = df.iloc[:mid].copy()
+    test_df = df.iloc[mid:].copy()
+    return train_df, test_df
+
+
+def evaluate_hmm_signal(train_df, test_df):
+    # 1️⃣ 訓練期：找最佳 state
+    selector = HMMTrendSelector(train_df, state_col="HMM_State", profit_col="profit")
+    best_combo = selector.best_combos(top_n=1).iloc[0]["combo"]
+    best_states = set(best_combo)
+
+    # 2️⃣ 回測期：生成 HMM_Signal（固定訓練結果）
+    test_df["HMM_Signal"] = test_df["HMM_State"].isin(best_states).astype(int)
+
+    return train_df, test_df, best_states
+
+
+def compare_performance(train_df, test_df):
+    train_stats = compare_signal_filters(train_df)
+    test_stats = compare_signal_filters(test_df)
+    return train_stats, test_stats

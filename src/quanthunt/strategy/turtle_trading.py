@@ -8,8 +8,11 @@ from sklearn.preprocessing import StandardScaler
 from hmmlearn.hmm import GaussianHMM
 from quanthunt.strategy.algo_util.hmm_selector import HMMTrendSelector
 from quanthunt.strategy.algo_util.performance import (
+    compare_performance,
     compare_signal_filters,
     analyze_hmm_states,
+    evaluate_hmm_signal,
+    train_test_split_by_time,
 )
 from quanthunt.strategy.algo_util.kalman import (
     init_kalman_state,
@@ -512,8 +515,9 @@ class TurtleScout(IStrategyScout):
         base_df = self.predict_hmm(base_df)
         base_df = self._calc_profit(base_df)
         # HACK remove me
-        print(compare_signal_filters(base_df))
-        print(analyze_hmm_states(base_df))
+        # print(compare_signal_filters(base_df))
+        # print(analyze_hmm_states(base_df))
+
         return base_df
 
     def _simple_turtle_strategy(self, df, params):
@@ -597,49 +601,165 @@ from quanthunt.config.core_config import config
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
-if __name__ == "__main__":
-    import click
+# if __name__ == "__main__":
+#     import click
 
-    @click.command()
-    @click.option("--symbol", default="moveusdt", help="Trading symbol (e.g. trxusdt)")
-    @click.option("--interval", default="1min", help="Trading interval")
-    @click.option("--count", default=2000, help="load datas")
-    @click.option("--hmm_split", default=5, type=int, help="hmm status split")
-    def main(symbol: str, interval: str, count: int, hmm_split: int):
-        params = {
-            "ATR_sample": 60,
-            "bayes_windows": 20,
-            "lower_sample": 60,
-            "upper_sample": 60,
-            "hard_cutoff": 0.9,
-            "profit_loss_ratio": 3,
-            "atr_loss_margin": 1.5,
-            "surfing_level": 5,
-            "interval": interval,
-            "funds": 50,
-            "stake_cap": 10,
-            "symbol": Symbol(symbol),
-            "hmm_split": hmm_split,
-            "backtest": True,
-            "debug_mode": ["statement"],
-            "api_key": os.getenv("API_KEY"),
-            "secret_key": os.getenv("SECRET_KEY"),
-        }
-        sp = StrategyParam(**params)
+#     @click.command()
+#     @click.option("--symbol", default="moveusdt", help="Trading symbol (e.g. trxusdt)")
+#     @click.option("--interval", default="1min", help="Trading interval")
+#     @click.option("--count", default=2000, help="load datas")
+#     @click.option("--hmm_split", default=5, type=int, help="hmm status split")
+#     def main(symbol: str, interval: str, count: int, hmm_split: int):
+#         params = {
+#             "ATR_sample": 60,
+#             "bayes_windows": 20,
+#             "lower_sample": 60,
+#             "upper_sample": 60,
+#             "hard_cutoff": 0.9,
+#             "profit_loss_ratio": 3,
+#             "atr_loss_margin": 1.5,
+#             "surfing_level": 5,
+#             "interval": interval,
+#             "funds": 50,
+#             "stake_cap": 10,
+#             "symbol": Symbol(symbol),
+#             "hmm_split": hmm_split,
+#             "backtest": True,
+#             "debug_mode": ["statement"],
+#             "api_key": os.getenv("API_KEY"),
+#             "secret_key": os.getenv("SECRET_KEY"),
+#         }
+#         sp = StrategyParam(**params)
 
-        sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
-        base_df = sensor.scan(count)
-        # cut = pd.Timestamp("2025-06-04 15:00:00")
-        # base_df = base_df[base_df["Date"] >= cut].reset_index()
+#         sensor = HuobiMarketSensor(symbol=sp.symbol, interval=sp.interval)
+#         base_df = sensor.scan(count)
+#         # cut = pd.Timestamp("2025-06-04 15:00:00")
+#         # base_df = base_df[base_df["Date"] >= cut].reset_index()
 
-        scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
-        scout = TurtleScout(sp)
-        base_df = scout.train(base_df)
+#         scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
+#         scout = TurtleScout(sp)
+#         base_df = scout.train(base_df)
+#         base_df = scout.market_recon(base_df)
+#         report_cols = DUMP_COL
+
+#         base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}_hmm_test.csv", index=False)
+#         print(f"created: {REPORTS_DIR}/{sp}_hmm_test.csv")
+#         return base_df[report_cols]
+
+#     main()
+
+
+# def main():
+#     # ===== Futures Candidate List =====
+#     # 第一批
+#     # "GC=F", "CL=F", "HG=F", "ZN=F"
+
+#     # 第二批（部分 OUT）
+#     # "SI=F", "NG=F", "ZW=F", "ZS=F", "ZC=F"
+
+#     # 第三批
+#     # "ES=F", "6E=F", "6J=F"
+
+#     symbols = [
+#         "GC=F",
+#         "CL=F",
+#         "HG=F",
+#         "ZN=F",
+#         "SI=F",
+#         "NG=F",
+#         "ZW=F",
+#         "ZS=F",
+#         "ZC=F",
+#         "ES=F",
+#         "6E=F",
+#         "6J=F",
+#         "SOLX",  # 你原本有加入的案例
+#     ]
+
+#     # === Future optional tests (保留你的註解) ===
+#     # FX:
+#     # "NEAR-USD", "PG", "JNJ", "PLTR", "TSLA", "BAC", "VOO", "G13.SI", "TON-USD", "ADBE"
+
+#     # Worst test cases:
+#     # "FX"
+#     # "ARKK"
+#     # "NVDA", "GM"
+#     # "BABA"
+#     # "QQQ"
+#     # "VOO"
+#     # "MCD"
+#     # "KO"
+
+#     for symbol in symbols:
+#         print(f"\n===== {symbol} =====")
+#         result_df = run(symbol)
+#         print(result_df)
+
+
+if __file__ == "__main__":
+    params = {
+        "ATR_sample": 60,
+        "bayes_windows": 20,
+        "lower_sample": 60,
+        "upper_sample": 60,
+        "hard_cutoff": 0.975,
+        "profit_loss_ratio": 3,
+        "atr_loss_margin": 1,
+        "surfing_level": 5,
+        "interval": "1min",
+        "funds": 50,
+        "stake_cap": 10,
+        "hmm_split": 3,
+        "backtest": True,
+        "debug_mode": ["statement"],
+        "api_key": "",
+        "secret_key": "",
+    }
+
+    sp = StrategyParam(**params)
+
+    # ===== Data Loading =====
+    base_df = pd.read_csv(f"/Users/zen/Documents/code/bayes/data/btcusdt_cached.csv")
+    base_df["Date"] = pd.to_datetime(base_df["Date"])
+    base_df = base_df.reset_index(drop=True)
+
+    # ===== Split train & test =====
+    top_10pct = int(len(base_df) * 0.55)
+    train_df = base_df.iloc[:top_10pct].copy()
+    test_df = base_df.iloc[top_10pct:].copy()
+    test_df["Date"] = pd.to_datetime(test_df["Date"])
+    test_df["Matured"] = pd.NaT
+
+    print(f"PROCESS table size: {len(base_df)}")
+
+    # ===== Training Phase =====
+    scout = TurtleScout(param=sp, buy_signal_func=emv_cross_strategy)
+    base_df = scout.train(train_df)
+    base_df = scout.market_recon(base_df)
+    _train = base_df.copy()
+    if not os.path.exists(REPORTS_DIR):
+        os.mkdir(REPORTS_DIR)
+
+    update_idx = 0
+
+    # ===== Step-by-step Online Backtest =====
+    for _ in range(len(test_df)):
+        new_row = test_df.iloc[update_idx].copy()
+        new_row["Matured"] = pd.NaT
+        new_row["Date"] = pd.to_datetime(new_row["Date"])
+
+        new_df = pd.DataFrame([new_row], columns=base_df.columns)
+        base_df = pd.concat([base_df, new_df], ignore_index=True)
+
+        # 市場重建
         base_df = scout.market_recon(base_df)
-        report_cols = DUMP_COL
 
-        base_df[report_cols].to_csv(f"{REPORTS_DIR}/{sp}_hmm_test.csv", index=False)
-        print(f"created: {REPORTS_DIR}/{sp}_hmm_test.csv")
-        return base_df[report_cols]
+        # Output in debug
+        print(base_df[DUMP_COL])
 
-    main()
+        update_idx += 1
+
+    _test = base_df.iloc[top_10pct:].copy()
+    _train_stats, _test_stats = compare_performance(_train, _test)
+    print(_train_stats)
+    print(_test_stats)
