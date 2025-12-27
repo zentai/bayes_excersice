@@ -95,7 +95,9 @@ if __name__ == "__main__":
     sp = StrategyParam(**params)
 
     # ===== Data Loading =====
-    base_df = pd.read_csv(f"/Users/Zen/Documents/code/bayes_excersice/data/btcusdt.csv")
+    base_df = pd.read_csv(
+        f"/Users/zen/Documents/code/bayes/reports/1227_060309_btcusdt_1day_fun15.0cap10.1atr60bw20up60lw60hmm4_cut0.975pnl3.0ext1.2stp5.csv"
+    )
     base_df = base_df[["Date", "Open", "High", "Low", "Close", "Vol"]]
     base_df["Date"] = pd.to_datetime(base_df["Date"])
     base_df = base_df.reset_index(drop=True)
@@ -111,11 +113,17 @@ if __name__ == "__main__":
 
     # ===== Training Phase =====
     scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
+    print("Train Data")
     train_df = scout.train(train_df)
+    train_df, _best = evaluate_hmm_signal(train_df)
+
     # train_df = scout.market_recon(train_df)
     train_stats = compare_signal_filters(train_df)
+
     print(train_stats)
     print(analyze_hmm_states(train_df))
+    print(f"_best for Train: {_best}")
+    print()
 
     if not os.path.exists(config.reports_dir):
         os.mkdir(config.reports_dir)
@@ -139,9 +147,19 @@ if __name__ == "__main__":
 
         update_idx += 1
 
+    print(f"Test data without HMM signal reset")
     _test_df = train_df.iloc[top_10pct:].copy()
+    _test_stats = compare_signal_filters(_test_df)
+    print(_test_stats)
+    print(analyze_hmm_states(_test_df))
+    print(f"_best for Test: {_best}")
+    print()
+
+    print(f"Test data With HMM signal reset")
     _test_df, _best = evaluate_hmm_signal(_test_df)
     _test_stats = compare_signal_filters(_test_df)
     print(_test_stats)
-
     print(analyze_hmm_states(_test_df))
+    print(f"_best for Test: {_best}")
+    print()
+    print(train_df[["Date", "bocpd_runlen_mode"]][train_df.bocpd_runlen_mode == 0])
