@@ -102,6 +102,8 @@ class TurtleScout(IStrategyScout):
             covariance_type="full",
             n_iter=4000,
             random_state=42,
+            init_params="",  # ❗不要覆蓋你的手動初始化
+            params="mcst",  # 訓練時仍可更新 mean/cov/start/trans
         )
 
         self.cycle_scaler = StandardScaler()
@@ -110,6 +112,8 @@ class TurtleScout(IStrategyScout):
             covariance_type="full",
             n_iter=4000,
             random_state=42,
+            init_params="",  # ❗不要覆蓋你的手動初始化
+            params="mcst",  # 訓練時仍可更新 mean/cov/start/trans
         )
 
         self.bocpd_wrapper = None
@@ -512,7 +516,11 @@ class TurtleScout(IStrategyScout):
         base_df = self._calc_ATR(base_df)
         base_df = self.calc_kalman(base_df)
         base_df = self.calc_bocpd(base_df)
-        base_df = self.predict_hmm(base_df)
+        if base_df.iloc[-1].bocpd_runlen_mode == 0:
+            print("HMM RESET !!! " + "*" * 20)
+            base_df = self.train_hmm(base_df)
+        else:
+            base_df = self.predict_hmm(base_df)
         base_df = self._calc_profit(base_df)
         # HACK remove me
         # print(compare_signal_filters(base_df))
