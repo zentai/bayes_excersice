@@ -95,9 +95,8 @@ if __name__ == "__main__":
     sp = StrategyParam(**params)
 
     # ===== Data Loading =====
-    base_df = pd.read_csv(
-        f"/Users/zen/Documents/code/bayes/reports/1227_060309_btcusdt_1day_fun15.0cap10.1atr60bw20up60lw60hmm4_cut0.975pnl3.0ext1.2stp5.csv"
-    )
+    symbol = "SPY_cached.csv"
+    base_df = pd.read_csv(f"{config.data_dir}/{symbol}")
     base_df = base_df[["Date", "Open", "High", "Low", "Close", "Vol"]]
     base_df["Date"] = pd.to_datetime(base_df["Date"])
     base_df = base_df.reset_index(drop=True)
@@ -152,7 +151,7 @@ if __name__ == "__main__":
     _test_stats = compare_signal_filters(_test_df)
     print(_test_stats)
     print(analyze_hmm_states(_test_df))
-    print(f"_best for Test: {_best}")
+    _test_df[DUMP_COL].to_csv(f"{config.reports_dir}/{symbol}", index=False)
     print()
 
     print(f"Test data With HMM signal reset")

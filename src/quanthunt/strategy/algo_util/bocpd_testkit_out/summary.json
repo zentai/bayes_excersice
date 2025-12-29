@@ -6,8 +6,11 @@
       "seed": 1,
       "T": 2000,
       "csv": "bocpd_testkit_out/Stable_seed1_T2000.csv",
-      "passed": true,
-      "errors": [],
+      "passed": false,
+      "errors": [
+        "[Stable] p1_tail_prob q95 too high: 0.2303 > 0.2",
+        "[Stable] p1_risk_level q95 too high: 0.2942 > 0.25"
+      ],
       "break_t": null
     },
     {
@@ -15,8 +18,10 @@
       "seed": 2,
       "T": 2000,
       "csv": "bocpd_testkit_out/Drift_seed2_T2000.csv",
-      "passed": true,
-      "errors": [],
+      "passed": false,
+      "errors": [
+        "[Drift] p1_tail_prob q95 too high (treating drift as outlier): 0.8943 > 0.6"
+      ],
       "break_t": null
     },
     {
@@ -24,10 +29,8 @@
       "seed": 3,
       "T": 2000,
       "csv": "bocpd_testkit_out/Shock_seed3_T2000.csv",
-      "passed": false,
-      "errors": [
-        "[Shock] p1_tail_prob q99 too low (no shock response): 0.1317 < 0.3"
-      ],
+      "passed": true,
+      "errors": [],
       "break_t": null
     },
     {
@@ -37,9 +40,8 @@
       "csv": "bocpd_testkit_out/Break_seed4_T2000.csv",
       "passed": false,
       "errors": [
-        "[Break] post g0_cp_prob q90 too low: 0.2436 < 0.4",
-        "[Break] post g0_run_length_mode median too high (no collapse): 1450.50 > 200.0",
-        "[Break] post g0_surprise_ewma median too low: 0.7873 < 1.0"
+        "[Break] post g0_cp_prob q90 too low: 0.0100 < 0.4",
+        "[Break] post cp_prob mostly low (model ignores break): 100.00% low-cp ratio"
       ],
       "break_t": 900
     }

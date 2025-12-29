@@ -257,6 +257,7 @@ class Huobi:
 
     def place_order(self, order):
         def place(client_id, amount, price, trigger_price, order):
+            return  # fixme
             huobi_api.place_order(
                 symbol=self.params.symbol,
                 amount=amount,

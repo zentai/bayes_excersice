@@ -58,6 +58,7 @@ def cli_main(symbol, interval, funds, cap, deals, start_deal, hmm_split, task_id
         "api_key": api_key,
         "secret_key": secret_key,
         "task_id": task_id,
+        "atr_loss_margin": 1.2,
     }
 
     sp = pandas_util.build_strategy_param(overrides)

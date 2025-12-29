@@ -18,25 +18,66 @@ class YahooMarketSensor(IMarketSensor):
         self.test_df = None
         self.interval_sec = 0.01
 
-    def scan(self, limits):
+    def scan(self, limits=None):
         path = config.data_dir / f"{self.symbol}_cached.csv"
+        today = datetime.date.today()
+
         if path.exists():
-            print(f"Loading cached file: {path}")
-            df = pd.read_csv(path)
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-            df = df.dropna(subset=["Date"])
-            df = df.sort_values("Date")
-            df = df[-limits:]
+            print(f"Loading cached: {path}")
+            df_cached = pd.read_csv(path, parse_dates=["Date"])
+            df_cached = df_cached.sort_values("Date")
+
+            last_date = df_cached["Date"].iloc[-1].date()
+            print(f"Cached latest date: {last_date}")
+
+            # 判斷是否需要更新
+            if last_date < today:
+                start_date = last_date + datetime.timedelta(days=1)
+                print(f"Downloading incremental: {start_date} → {today}")
+
+                df_new = yf.download(
+                    self.symbol.name,
+                    start=start_date,
+                    end=today,
+                    multi_level_index=False,
+                )
+
+                if not df_new.empty:
+                    df_new = df_new.rename(columns={"Volume": "Vol"})
+                    df_new = df_new.reset_index()
+                    df_new["Date"] = pd.to_datetime(df_new["Date"])
+
+                    # 合併舊+新
+                    df = pd.concat([df_cached, df_new], ignore_index=True)
+                    df = df.drop_duplicates(subset=["Date"]).sort_values("Date")
+                    # 立即寫回 cache
+                    df.to_csv(path, index=False)
+                else:
+                    print("No new data from Yahoo, using cached data.")
+                    df = df_cached
+            else:
+                print("Cached already up-to-date.")
+                df = df_cached
+
         else:
-            today = datetime.date.today()
-            start_date = today - timedelta(days=limits)
-            print(f"Downloading from Yahoo: {start_date} to {today}")
-            df = yf.download(self.symbol.name, start=start_date, end=today)
-            df = df.rename(columns={"Volume": "Vol"})
-            df = df.reset_index()
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-            df = df.dropna(subset=["Date"])
+            # 完全沒有 cache → Full download
+            start_date = today - datetime.timedelta(days=2000)
+            print(f"Downloading first time: {start_date} → {today}")
+
+            df = yf.download(
+                self.symbol.name, start=start_date, end=today, multi_level_index=False
+            )
+            df = df.rename(columns={"Volume": "Vol"}).reset_index()
+            df["Date"] = pd.to_datetime(df["Date"])
             df = df.sort_values("Date")
+
+            # 寫入 cache
+            df.to_csv(path, index=False)
+
+        # 若需要，保留最近 limits 行
+        if limits:
+            df = df[-limits:]
+
         self.test_df = df.copy()
         return df
 
@@ -52,7 +93,7 @@ class YahooMarketSensor(IMarketSensor):
         new_data = self.fetch_one()
         if not new_data.empty:
             base_df = pd.concat([base_df, new_data], ignore_index=True)
-        return base_df
+        return base_df.sort_values("Date")
 
     def left(self):
         if self.test_df is not None:

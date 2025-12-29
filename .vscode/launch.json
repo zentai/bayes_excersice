@@ -9,6 +9,13 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/run.py",
+            "args": [
+                "--funds", "15",
+                "--cap", "10.1",
+                "--interval", "1day",
+                "--symbol", "btcusdt",
+                "--hmm_split", "4"
+            ],
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": {

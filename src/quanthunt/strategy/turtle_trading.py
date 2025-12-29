@@ -187,7 +187,7 @@ class TurtleScout(IStrategyScout):
 
         return df
 
-    def train_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
+    def train_hmm(self, df: pd.DataFrame, reset=False) -> pd.DataFrame:
         """
         完整 HMM retrain（通常在 regime reset 後觸發）
         重啟「世界語意」，但不回頭覆蓋歷史 row
@@ -207,14 +207,34 @@ class TurtleScout(IStrategyScout):
         # === 0) HMM_Epoch 遞增策略 ===
         if df["HMM_Epoch"].isna().all():
             df["HMM_Epoch"] = 0
-        else:
+
+        # === 1) Trend HMM retrain ===
+        if reset:
+            self.trend_hmm_model = GaussianHMM(
+                n_components=self.params.hmm_split,
+                covariance_type="full",
+                n_iter=4000,
+                random_state=42,
+                init_params="",  # ❗不要覆蓋你的手動初始化
+                params="mcst",  # 訓練時仍可更新 mean/cov/start/trans
+            )
+
+            self.cycle_hmm_model = GaussianHMM(
+                n_components=self.params.hmm_split,
+                covariance_type="full",
+                n_iter=4000,
+                random_state=42,
+                init_params="",  # ❗不要覆蓋你的手動初始化
+                params="mcst",  # 訓練時仍可更新 mean/cov/start/trans
+            )
+
             mask = df["HMM_State"].isna()  # 僅限當前要補的 row（新資料）
             df.loc[mask, "HMM_Epoch"] = df["HMM_Epoch"].max() + 1
 
-        # === 1) Trend HMM retrain ===
         X = self._prepare_trend_hmm_features(df)
         self.trend_scaler.fit(X)
         X = self.trend_scaler.transform(X)
+
         self.trend_hmm_model.fit(X)
         trend_hidden_states = self.trend_hmm_model.predict(X)
 
@@ -244,7 +264,6 @@ class TurtleScout(IStrategyScout):
             )
         else:
             df.loc[s, "HMM_Signal"] = 0
-
         return df
 
     def _prepare_cycle_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
@@ -366,6 +385,7 @@ class TurtleScout(IStrategyScout):
         best_combo = selector.best_combos(top_n=1)
         combo_states = set(best_combo.iloc[0]["combo"])
 
+        # print(selector.best_combos(top_n=1))
         if best_states.empty or best_states["trend_mu"].iloc[0] <= 0:
             # 找不到有正期望的 state，就不要亂打 HMM_Signal
             return set()
@@ -402,7 +422,10 @@ class TurtleScout(IStrategyScout):
         # === 3) 僅在 HMM_State 為 NaN 時補寫預測結果 ===
         #    讓回測的歷史 state 不會被重算覆寫
         mask = df["HMM_State"].isna()
-        df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
+        df.loc[mask, "HMM_State"] = trend_hidden_states[mask]
+
+        # mask = df["HMM_State"].isna()
+        # df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
 
         # === 4) Shadow DF：完整新預測，不覆蓋主 df ===
         #    用於「當下最佳 HMM combo」選擇，不污染歷史語意
@@ -590,7 +613,7 @@ class TurtleScout(IStrategyScout):
         base_df = self.calc_bocpd(base_df)
         if base_df.iloc[-1].bocpd_runlen_mode == 0:
             print("HMM RESET !!! " + "*" * 20)
-            base_df = self.train_hmm(base_df)
+            base_df = self.train_hmm(base_df, reset=True)
         else:
             base_df = self.predict_hmm(base_df)
         base_df = self._calc_profit(base_df)

@@ -12,17 +12,42 @@ from huobi.client.market import MarketClient
 from huobi.client.generic import GenericClient
 from huobi.utils import *
 from huobi.constant import *
-from .utils import pandas_util
-from .hunterverse.interface import Symbol
+from quanthunt.utils import pandas_util
+from quanthunt.hunterverse.interface import Symbol
 from config import config
-from .story import DEBUG_COL, params
-from .sensor.market_sensor import HuobiMarketSensor, YahooMarketSensor
-from .strategy.turtle_trading import TurtleScout
-from .hunterverse.interface import StrategyParam
+from quanthunt.sensor.market_sensor import HuobiMarketSensor, YahooMarketSensor
+from quanthunt.strategy.turtle_trading import TurtleScout
+from quanthunt.hunterverse.interface import StrategyParam
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
-from .story import entry
+# from .story import entry
+params = {
+    "ATR_sample": 60,
+    "bayes_windows": 20,
+    "lower_sample": 60,
+    "upper_sample": 60,
+    "hard_cutoff": 0.975,
+    "profit_loss_ratio": 3.0,
+    "atr_loss_margin": 1.0,
+    "surfing_level": 5,
+    "interval": "5min",
+    "funds": 15,
+    "stake_cap": 15,
+    "symbol": Symbol("btcusdt"),
+    "hmm_split": 4,
+    "backtest": False,
+    "debug_mode": [
+        "statement",
+        "statement_to_csv",
+        "mission_review",
+        "final_statement_to_csv",
+    ],
+    "load_deals": [],
+    "start_deal": "",
+    "api_key": None,
+    "secret_key": None,
+}
 
 stocks_singapore = {
     "VNM.SI": "",
@@ -1702,6 +1727,75 @@ stocks_malaysia = {
     "9997.KL": "Pensonic Holdings Berhad",
 }
 
+# ===== Futures =====
+futures = {
+    "GC=F": "Gold Future",
+    "CL=F": "Crude Oil Future",
+    "HG=F": "Copper Future",
+    "ZN=F": "10Y US Treasury Note",
+    "SI=F": "Silver Future",
+    "NG=F": "Natural Gas Future",
+    "ZW=F": "Wheat Future",
+    "ZS=F": "Soybean Future",
+    "ZC=F": "Corn Future",
+    "ES=F": "S&P 500 Future",
+    "6E=F": "Euro FX Future",
+    "6J=F": "JPY FX Future",
+}
+
+# ===== US Stocks =====
+stocks_us = {
+    "MSFT": "Microsoft",
+    "AAPL": "Apple",
+    "GOOGL": "Alphabet (Google)",
+    "META": "Meta Platforms",
+    "AMZN": "Amazon",
+    "NVDA": "NVIDIA",
+    "TSLA": "Tesla",
+    "JPM": "JPMorgan Chase",
+    "BAC": "Bank of America",
+    "JNJ": "Johnson & Johnson",
+    "PG": "Procter & Gamble",
+    "ADBE": "Adobe",
+}
+
+# ===== Index ETFs =====
+index_etfs = {
+    "SPY": "SPDR S&P 500 ETF",
+    "VOO": "Vanguard S&P 500 ETF",
+    "QQQ": "Invesco Nasdaq-100 ETF",
+}
+
+# ===== High Risk / Leveraged =====
+high_risk = {
+    "SOXL": "Direxion Daily Semiconductor Bull 3X",
+    "ARKK": "ARK Innovation ETF",
+}
+
+# ===== HK / China ====
+china_hk = {
+    "BABA": "Alibaba Group",
+    "0700.HK": "Tencent Holdings",
+}
+
+# ===== FX / Crypto / SG =====
+fx_crypto_sg = {
+    "USD-SGD": "USD / SGD FX",
+    "G13.SI": "SGX Listed Stock (需確認名稱)",
+    "TON-USD": "Toncoin (Binance/HTX Symbol)",
+    "NEAR-USD": "NEAR Protocol",
+}
+
+symbols_map = {}
+symbols_map.update(futures)
+symbols_map.update(stocks_us)
+symbols_map.update(index_etfs)
+symbols_map.update(high_risk)
+symbols_map.update(china_hk)
+symbols_map.update(fx_crypto_sg)
+
+watching_list = list(symbols_map.keys())
+
 
 def fast_scanning():
     market_client = MarketClient(init_log=True)
@@ -1741,18 +1835,22 @@ def count_obv_cross(IMarketSensorImp, ccy, interval, sample, show=False):
         print(f"{ccy} no data")
         return 0
     df = sensor.fetch(df)
-
-    df.to_csv(f"{DATA_DIR}/{ccy}_cached.csv", index=True)
+    df = df.drop_duplicates().sort_values("Date")
+    print(df.tail())
+    df.to_csv(f"{DATA_DIR}/{ccy}_cached.csv", index=False)
     print(f"{DATA_DIR}/{ccy}_cached.csv")
-    sp = StrategyParam(**params)
-    scout = TurtleScout(params=sp)
-    df = scout._calc_OBV(df, multiplier=3)
-    if df.iloc[-1].OBV_UP:
-        print("============= OBV UP ============")
-    print(f"{ccy=}: {len(df[df.OBV_UP])}")
-    if show and df[-90:].OBV_UP.any():
-        chart(df[-90:], ccy)
-    return len(df[df.OBV_UP])
+    # sp = StrategyParam(**params)
+    # scout = TurtleScout(params=sp)
+    # df = scout.train(df)
+    # df = scout.fetch(df)
+    # df = scout.market_recon(df)
+    # if df.iloc[-1].OBV_UP:
+    #     print("============= OBV UP ============")
+    # print(f"{ccy=}: {len(df[df.OBV_UP])}")
+    # if show and df[-90:].OBV_UP.any():
+    #     chart(df[-90:], ccy)
+    # return len(df[df.OBV_UP])
+    return 1
 
 
 def chart(df, code):
@@ -1801,7 +1899,7 @@ def chart(df, code):
 @click.command()
 @click.option(
     "--market",
-    type=click.Choice(["my", "sg", "crypto"]),
+    type=click.Choice(["my", "sg", "crypto", "watching"]),
     required=True,
     help="选择市场类型",
 )
@@ -1814,14 +1912,19 @@ def chart(df, code):
 @click.option("--show", is_flag=False, help="是否显示图表")
 @click.option("--backtest", is_flag=False, help="是否进行回测")
 def main(market, symbol, interval, show, backtest):
-    if market in ("my", "sg"):
+    if market in ("my", "sg", "watching"):
         sensor_cls = YahooMarketSensor
         if symbol:
             symbols = [symbol]
         else:
-            symbols = (
-                stocks_malaysia.keys() if market == "my" else stocks_singapore.keys()
-            )
+            if market == "watching":
+                symbols = watching_list
+            else:
+                symbols = (
+                    stocks_malaysia.keys()
+                    if market == "my"
+                    else stocks_singapore.keys()
+                )
         sample = 365 * 20  # 20 years
     elif market == "crypto":
         sensor_cls = HuobiMarketSensor
@@ -1834,7 +1937,8 @@ def main(market, symbol, interval, show, backtest):
 
     if backtest:
         # 进行回测逻辑
-        perform_backtest(symbols_count)
+        # perform_backtest(symbols_count)
+        pass
 
     c = Counter(symbols_count)
     from pprint import pprint
@@ -1855,7 +1959,7 @@ def perform_backtest(symbols_count):
 def performance_review(backtest_results):
     # 将数据转换为 DataFrame
     df = pd.DataFrame(list(backtest_results.items()), columns=["Stock", "Return"])
-    df.to_csv(f"{REPORTS_DIR}/backtest.csv")
+    df.to_csv(f"{REPORTS_DIR}/backtest.csv", index=False)
     df = df[df.Return != 0]
     print(df[:60])
 
@@ -1903,45 +2007,9 @@ def performance_review(backtest_results):
     plt.show()
 
 
-from .sensor.market_sensor import MongoDBHandler
-
-
-def x():
-    params.update(
-        {
-            "funds": 100,
-            "stake_cap": 50,
-            "symbol": Symbol("btcusdt"),
-        }
-    )
-    sensor = HuobiMarketSensor(symbol=params["symbol"], interval="1min")
-    df = sensor.scan(2000)
-    mongo = MongoDBHandler(collection_name=f"{params['symbol'].name}_raw")
-    mongo.save(df)
-    print(df)
-    # df = sensor.fetch(df)
-    # df.to_csv(f"{DATA_DIR}/{ccy}_cached.csv", index=True)
-
-
-def y():
-    params.update(
-        {
-            "funds": 100,
-            "stake_cap": 50,
-            "symbol": Symbol("btcusdt"),
-        }
-    )
-    mongo = MongoDBHandler(collection_name=f"{params['symbol'].name}_raw")
-    df = mongo.load()
-    print(df)
-    # df = sensor.fetch(df)
-    # df.to_csv(f"{DATA_DIR}/{ccy}_cached.csv", index=True)
-
-
 if __name__ == "__main__":
     # result = {code: entry(code, "1day", 100, 50) for code in stocks_malaysia.keys()}
     # from pprint import pprint
 
     # pprint(result)
     main()
-    # y()
