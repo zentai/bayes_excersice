@@ -55,6 +55,7 @@ TURTLE_COLUMNS = [
     "ema_long",
     "Kalman",
     "HMM_State",
+    "HMM_Epoch",
     "HMM_Signal",
     "adjusted_margin",
     "RCS",
@@ -187,24 +188,63 @@ class TurtleScout(IStrategyScout):
         return df
 
     def train_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        完整 HMM retrain（通常在 regime reset 後觸發）
+        重啟「世界語意」，但不回頭覆蓋歷史 row
+
+        設計理念：
+            - reset 代表世界觀更新
+            - 產生新的 HMM_Epoch
+            - 但歷史的 profit / signal / state 都不覆寫（避免前視偏差）
+
+        運作流程：
+            1) 對全資料 fit scaler + fit HMM（Trend & Cycle）
+            2) 只更新 HMM_State 為 NaN 的 row（之前未觀測過）
+            3) Shadow DF 全量評估 → 產生新的 best combo
+            4) 記錄新的 HMM_Epoch
+        """
+
+        # === 0) HMM_Epoch 遞增策略 ===
+        if df["HMM_Epoch"].isna().all():
+            df["HMM_Epoch"] = 0
+        else:
+            mask = df["HMM_State"].isna()  # 僅限當前要補的 row（新資料）
+            df.loc[mask, "HMM_Epoch"] = df["HMM_Epoch"].max() + 1
+
+        # === 1) Trend HMM retrain ===
         X = self._prepare_trend_hmm_features(df)
         self.trend_scaler.fit(X)
         X = self.trend_scaler.transform(X)
         self.trend_hmm_model.fit(X)
         trend_hidden_states = self.trend_hmm_model.predict(X)
 
+        # === 2) Cycle HMM retrain (本次實際使用) ===
         Y = self._prepare_cycle_hmm_features(df)
         self.cycle_scaler.fit(Y)
         Y = self.cycle_scaler.transform(Y)
         self.cycle_hmm_model.fit(Y)
         cycle_hidden_states = self.cycle_hmm_model.predict(Y)
 
-        # mask = df["HMM_State"].isna()
-        # df.loc[mask, "HMM_State"] = trend_hidden_states[mask]
-
+        # === 3) 只補上「尚未被填過」的 row ===
+        # 歷史語意不可回頭重寫！
         mask = df["HMM_State"].isna()
         df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
-        df = self.predict_market_states(df)
+
+        # === 4) Shadow DF：採用最新語意世界來挑 best combo ===
+        _shadow_df = df.copy()
+        _shadow_df["HMM_State"] = cycle_hidden_states
+
+        combo_states = self.select_profitable_states(_shadow_df)
+
+        # === 5) 只更新未設定的信號 ===
+        s = df["HMM_Signal"].isna()
+        if combo_states:
+            df.loc[s, "HMM_Signal"] = (
+                df.loc[s, "HMM_State"].isin(combo_states).astype(int)
+            )
+        else:
+            df.loc[s, "HMM_Signal"] = 0
+
         return df
 
     def _prepare_cycle_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
@@ -301,7 +341,7 @@ class TurtleScout(IStrategyScout):
         df[features] = df[features].fillna(method="bfill").fillna(method="ffill")
         return df[features].values
 
-    def predict_market_states(self, df: pd.DataFrame) -> pd.DataFrame:
+    def select_profitable_states(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         根據 HMMTrendSelector 選出「最值得做多的 HMM_State」
         並填入：
@@ -326,33 +366,62 @@ class TurtleScout(IStrategyScout):
         best_combo = selector.best_combos(top_n=1)
         combo_states = set(best_combo.iloc[0]["combo"])
 
-        print(selector.best_combos(top_n=1))
-
         if best_states.empty or best_states["trend_mu"].iloc[0] <= 0:
             # 找不到有正期望的 state，就不要亂打 HMM_Signal
-            return df
+            return set()
 
-        # Combo HMM State
-        s = df["HMM_Signal"].isna()
-        df.loc[s, "HMM_Signal"] = df.loc[s, "HMM_State"].isin(combo_states).astype(int)
-        return df
+        # print(selector.best_combos(top_n=1))
+        return combo_states
 
     def predict_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        線上預測 HMM，目前基於 cycle HMM（可自由切換 hybrid）
+        本函式做兩件事：
+            1) 僅在 HMM_State 為 NaN 的 row 上補上預測值（避免覆蓋歷史）
+            2) 用 Shadow Copy 重新評估所有 state，挑出最佳 state combo 並設定當前信號
+
+        設計理念：
+            「交易過程中，HMM 會多次 reset，state 語意會變動」
+            因此：
+            - 真實 df：維持 backtest 過程的「一致性歷史語意」
+            - Shadow df：允許使用全部資料重新推論當前最佳狀態
+            - 只將「結果中的信號」回寫到真實 df
+            - 避免因為覆寫舊 state 而產生前視偏差 (look-ahead bias)
+        """
+
+        # === 1) Trend HMM 預測 (目前不更新主 df，只保留參考 ===
         X = self._prepare_trend_hmm_features(df)
         X = self.trend_scaler.transform(X)
         trend_hidden_states = self.trend_hmm_model.predict(X)
 
+        # === 2) Cycle HMM 預測：本次實際使用 ===
         Y = self._prepare_cycle_hmm_features(df)
         Y = self.cycle_scaler.transform(Y)
         cycle_hidden_states = self.cycle_hmm_model.predict(Y)
 
-        # mask = df["HMM_State"].isna()
-        # df.loc[mask, "HMM_State"] = trend_hidden_states[mask]
-
+        # === 3) 僅在 HMM_State 為 NaN 時補寫預測結果 ===
+        #    讓回測的歷史 state 不會被重算覆寫
         mask = df["HMM_State"].isna()
         df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
 
-        df = self.predict_market_states(df)
+        # === 4) Shadow DF：完整新預測，不覆蓋主 df ===
+        #    用於「當下最佳 HMM combo」選擇，不污染歷史語意
+        _shadow_df = df.copy()
+        _shadow_df["HMM_State"] = cycle_hidden_states
+
+        # === 5) 用 Shadow DF 做策略最佳狀態決策 ===
+        combo_states = self.select_profitable_states(_shadow_df)
+
+        # === 6) 僅在「未決定過信號」的 row 上更新 HMM_Signal ===
+        #    避免 refit 後回頭修改歷史訊號，導致回測失真
+        s = df["HMM_Signal"].isna()
+        if combo_states:
+            df.loc[s, "HMM_Signal"] = (
+                df.loc[s, "HMM_State"].isin(combo_states).astype(int)
+            )
+        else:
+            df.loc[s, "HMM_Signal"] = 0
+
         return df
 
     def adjust_exit_price_by_slope(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -426,12 +495,15 @@ class TurtleScout(IStrategyScout):
         # 第二部分：重算买卖信号与利润指标
         # 定位重新计算的起始点, 利用 sell 列缺失的第一个索引
         resume_idx = base_df.sell.isna().idxmax()
-        calc_df = base_df.loc[resume_idx:].copy()
+        # calc_df = base_df.loc[resume_idx:].copy()
+        calc_df = base_df.copy()
 
         # 买入信号：对 buy 缺失行, 赋值 Close 并调用自定义买入信号函数
         s_buy = calc_df.buy.isna()
         calc_df.loc[s_buy, "buy"] = calc_df.Close
-        calc_df.loc[s_buy, "BuySignal"] = self.buy_signal_func(calc_df, self.params)
+        calc_df.loc[s_buy, "BuySignal"] = self.buy_signal_func(calc_df, self.params)[
+            s_buy
+        ]
 
         # 卖出信号：满足已有买入信号且当日 Low 小于 exit_price 的情况
         s_sell = calc_df.buy.notna() & (calc_df.Kalman < calc_df.exit_price)
@@ -567,8 +639,8 @@ def buy_signal_from_mosaic_strategy(df, params):
     high_noise = regime_noise > regime_mean * 1.1
 
     # === Buy score（你原本的設計，保留）===
-    buy_score = 1.25 * cond_force_pos + 1.25 * cond_force_stable
-    # buy_score = 1.0 * cond_structure + 0.5 * cond_force_pos + 0.5 * cond_force_stable
+    # buy_score = 1.25 * cond_force_pos + 1.25 * cond_force_stable
+    buy_score = 1.0 * cond_structure + 0.5 * cond_force_pos + 0.5 * cond_force_stable
 
     # === Regime-adaptive threshold ===
     threshold = (
@@ -576,7 +648,11 @@ def buy_signal_from_mosaic_strategy(df, params):
         + 1.5 * mid_noise  # 世界普通：至少 1.5 分
         + 2.0 * high_noise  # 世界混亂：幾乎要全對
     )
-
+    print(
+        f"low_noise: {low_noise.iloc[-1]}, mid_noise: {mid_noise.iloc[-1]}, high_noise: {high_noise.iloc[-1]}, regime_noise: {regime_noise.iloc[-1]}, regime_mean: {regime_mean.iloc[-1]} {regime_noise[-20:]}"
+    )
+    print(regime_noise.isna().sum())
+    print(f"{buy_score.iloc[-1]} >= {threshold.iloc[-1]}")
     return buy_score >= threshold
 
 
