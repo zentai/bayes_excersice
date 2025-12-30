@@ -97,18 +97,8 @@ class TurtleScout(IStrategyScout):
         # Set the buy_signal_func, default to the simple_turtle_strategy if none is provided
         self.buy_signal_func = buy_signal_func or self._simple_turtle_strategy
 
-        self.trend_scaler = StandardScaler()
-        self.trend_hmm_model = GaussianHMM(
-            n_components=self.params.hmm_split,
-            covariance_type="full",
-            n_iter=4000,
-            random_state=42,
-            init_params="",  # ❗不要覆蓋你的手動初始化
-            params="mcst",  # 訓練時仍可更新 mean/cov/start/trans
-        )
-
-        self.cycle_scaler = StandardScaler()
-        self.cycle_hmm_model = GaussianHMM(
+        self.scaler = StandardScaler()
+        self.hmm_model = GaussianHMM(
             n_components=self.params.hmm_split,
             covariance_type="full",
             n_iter=4000,
@@ -131,8 +121,8 @@ class TurtleScout(IStrategyScout):
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
         df = self._calc_ATR(df)
         df = self.calc_kalman(df)
-        df = self.train_hmm(df)
         df = self._calc_profit(df)
+        df = self.train_hmm(df)  # HMM_Signal must based on Profits
         return df
 
     def calc_kalman(self, df):
@@ -155,7 +145,6 @@ class TurtleScout(IStrategyScout):
 
             obs_close = float(df.loc[i, "Close"])
             obs_force = float(df.loc[i, "force_proxy"])
-
             self.kalman_state, self.kalman_Cov, diag = mosaic_step(
                 state=self.kalman_state,
                 cov=self.kalman_Cov,
@@ -210,16 +199,7 @@ class TurtleScout(IStrategyScout):
 
         # === 1) Trend HMM retrain ===
         if reset:
-            self.trend_hmm_model = GaussianHMM(
-                n_components=self.params.hmm_split,
-                covariance_type="full",
-                n_iter=4000,
-                random_state=42,
-                init_params="",  # ❗不要覆蓋你的手動初始化
-                params="mcst",  # 訓練時仍可更新 mean/cov/start/trans
-            )
-
-            self.cycle_hmm_model = GaussianHMM(
+            self.hmm_model = GaussianHMM(
                 n_components=self.params.hmm_split,
                 covariance_type="full",
                 n_iter=4000,
@@ -231,31 +211,27 @@ class TurtleScout(IStrategyScout):
             mask = df["HMM_State"].isna()  # 僅限當前要補的 row（新資料）
             df.loc[mask, "HMM_Epoch"] = df["HMM_Epoch"].max() + 1
 
-        X = self._prepare_trend_hmm_features(df)
-        self.trend_scaler.fit(X)
-        X = self.trend_scaler.transform(X)
+        if self.params.hmm_model == "trend":
+            X = self._prepare_trend_hmm_features(df)
+        else:
+            X = self._prepare_cycle_hmm_features(df)
 
-        self.trend_hmm_model.fit(X)
-        trend_hidden_states = self.trend_hmm_model.predict(X)
+        self.scaler.fit(X)
+        X = self.scaler.transform(X)
 
-        # === 2) Cycle HMM retrain (本次實際使用) ===
-        Y = self._prepare_cycle_hmm_features(df)
-        self.cycle_scaler.fit(Y)
-        Y = self.cycle_scaler.transform(Y)
-        self.cycle_hmm_model.fit(Y)
-        cycle_hidden_states = self.cycle_hmm_model.predict(Y)
+        self.hmm_model.fit(X)
+        hidden_states = self.hmm_model.predict(X)
 
         # === 3) 只補上「尚未被填過」的 row ===
         # 歷史語意不可回頭重寫！
         mask = df["HMM_State"].isna()
-        df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
+        df.loc[mask, "HMM_State"] = hidden_states[mask]
 
         # === 4) Shadow DF：採用最新語意世界來挑 best combo ===
         _shadow_df = df.copy()
-        _shadow_df["HMM_State"] = cycle_hidden_states
+        _shadow_df["HMM_State"] = hidden_states
 
         combo_states = self.select_profitable_states(_shadow_df)
-
         # === 5) 只更新未設定的信號 ===
         s = df["HMM_Signal"].isna()
         if combo_states:
@@ -271,6 +247,7 @@ class TurtleScout(IStrategyScout):
         CycleHMM feature set
         - 專注於偏離、回歸動力、結構穩定度
         """
+        print(f"Working with Cycle HMM Feature")
 
         # --- 偏離程度 ---
         df["gap"] = df["Close"] - df["c_center"]
@@ -286,15 +263,32 @@ class TurtleScout(IStrategyScout):
         df["z_mix"] = df["m_z_mix"]
 
         features = [
-            "gap_norm",
             "gap_speed",
             "gap_accel",
-            "z_center",
             "regime_noise",
             "z_mix",
+            "z_center",
+            "gap_norm",
         ]
 
         df[features] = df[features].fillna(method="bfill").fillna(method="ffill")
+
+        # # === Debug Block ===
+        # Y = df[features].values
+        # bad_mask = ~np.isfinite(Y)
+
+        # if bad_mask.any():
+        #     rows, cols = np.where(bad_mask)
+        #     print("⚠️ CycleHMM Feature Data Issue Detected:")
+        #     for r, c in zip(rows[:10], cols[:10]):  # 限制输出10条避免爆屏
+        #         print(f" - Row {r}, Feature: {features[c]}, Value: {Y[r, c]}")
+        #     print(f"Total bad entries: {bad_mask.sum()}")
+        #     print(f"Columns summary:")
+        #     for i, f in enumerate(features):
+        #         cnt = bad_mask[:, i].sum()
+        #         if cnt:
+        #             print(f"   {f}: {cnt} bad values")
+
         return df[features].values
 
     def _prepare_trend_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
@@ -310,7 +304,7 @@ class TurtleScout(IStrategyScout):
             - RCS             : Resonance Consensus Strength（共識強度）
             - dd_proxy        : 價格自身推得的局部回撤比例
         """
-
+        print(f"Working with Trend HMM Feature")
         ATR_sample = self.params.ATR_sample
         ZERO = 1e-9
 
@@ -385,12 +379,11 @@ class TurtleScout(IStrategyScout):
         best_combo = selector.best_combos(top_n=1)
         combo_states = set(best_combo.iloc[0]["combo"])
 
-        # print(selector.best_combos(top_n=1))
         if best_states.empty or best_states["trend_mu"].iloc[0] <= 0:
-            # 找不到有正期望的 state，就不要亂打 HMM_Signal
+            print("# 找不到有正期望的 state，就不要亂打 HMM_Signal")
             return set()
 
-        # print(selector.best_combos(top_n=1))
+        print(selector.best_combos(top_n=1))
         return combo_states
 
     def predict_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -410,27 +403,26 @@ class TurtleScout(IStrategyScout):
         """
 
         # === 1) Trend HMM 預測 (目前不更新主 df，只保留參考 ===
-        X = self._prepare_trend_hmm_features(df)
-        X = self.trend_scaler.transform(X)
-        trend_hidden_states = self.trend_hmm_model.predict(X)
+        if self.params.hmm_model == "trend":
+            X = self._prepare_trend_hmm_features(df)
+        else:
+            X = self._prepare_cycle_hmm_features(df)
+
+        X = self.scaler.transform(X)
+        hidden_states = self.hmm_model.predict(X)
 
         # === 2) Cycle HMM 預測：本次實際使用 ===
-        Y = self._prepare_cycle_hmm_features(df)
-        Y = self.cycle_scaler.transform(Y)
-        cycle_hidden_states = self.cycle_hmm_model.predict(Y)
 
         # === 3) 僅在 HMM_State 為 NaN 時補寫預測結果 ===
         #    讓回測的歷史 state 不會被重算覆寫
-        mask = df["HMM_State"].isna()
-        df.loc[mask, "HMM_State"] = trend_hidden_states[mask]
 
-        # mask = df["HMM_State"].isna()
-        # df.loc[mask, "HMM_State"] = cycle_hidden_states[mask]
+        mask = df["HMM_State"].isna()
+        df.loc[mask, "HMM_State"] = hidden_states[mask]
 
         # === 4) Shadow DF：完整新預測，不覆蓋主 df ===
         #    用於「當下最佳 HMM combo」選擇，不污染歷史語意
         _shadow_df = df.copy()
-        _shadow_df["HMM_State"] = cycle_hidden_states
+        _shadow_df["HMM_State"] = hidden_states
 
         # === 5) 用 Shadow DF 做策略最佳狀態決策 ===
         combo_states = self.select_profitable_states(_shadow_df)
@@ -444,7 +436,6 @@ class TurtleScout(IStrategyScout):
             )
         else:
             df.loc[s, "HMM_Signal"] = 0
-
         return df
 
     def adjust_exit_price_by_slope(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -612,7 +603,6 @@ class TurtleScout(IStrategyScout):
         base_df = self.calc_kalman(base_df)
         base_df = self.calc_bocpd(base_df)
         if base_df.iloc[-1].bocpd_runlen_mode == 0:
-            print("HMM RESET !!! " + "*" * 20)
             base_df = self.train_hmm(base_df, reset=True)
         else:
             base_df = self.predict_hmm(base_df)
@@ -637,44 +627,32 @@ def emv_cross_strategy(df, params, short_windows=5, long_windws=60):
     return (df.Kalman > df.ema_short) & (df.ema_short > df.ema_long)
 
 
-def buy_signal_from_mosaic_strategy(df, params):
-    """
-    BuySignal = 結構位置 + 力學轉折（threshold 隨 regime 調整）
-    假設 HMM 已在外層 gate 過
-    """
+def buy_signal_from_mosaic_strategy(df: pd.DataFrame, params) -> pd.DataFrame:
 
-    window = params.ATR_sample
+    mask = df["BuySignal"].isna()
 
-    # === 結構條件 ===
-    cond_structure = df.c_z_center < -1.0
+    # === A) 感知市場換擋 ===
+    noise_up = df["m_regime_noise_level"].diff() > 0.6
+    noise_drop = df["m_regime_noise_level"] < 2.0
 
-    # === 力學條件 ===
-    cond_force_pos = df.m_force_trend > 0
-    cond_force_stable = df.m_force_trend.rolling(window).quantile(0.3) > 0
+    # === B) 力量確認 ===
+    trend_ok = df["m_force_trend"].rolling(3).mean() > 0
+    bias_ok = df["m_force_bias"] > 0
 
-    # === 世界狀態（regime noise）===
-    regime_noise = df.m_regime_noise_level
-    regime_mean = regime_noise.rolling(window).mean()
+    # === C) 價格確認 ===
+    # 近7根新高視為突破
+    price_up = df["Close"] > df["Close"].rolling(7).max().shift(1)
 
-    # === regime 分段（低 / 中 / 高噪音）===
-    low_noise = regime_noise < regime_mean * 0.9
-    mid_noise = (regime_noise >= regime_mean * 0.9) & (
-        regime_noise <= regime_mean * 1.1
-    )
-    high_noise = regime_noise > regime_mean * 1.1
+    # Phase Shift → Confirm → Entry
+    # buy_cond = (
+    #     noise_up.shift(1).fillna(False) & noise_drop & trend_ok & bias_ok & price_up
+    # )
+    buy_cond = noise_drop & trend_ok & bias_ok & price_up
 
-    # === Buy score（你原本的設計，保留）===
-    # buy_score = 1.25 * cond_force_pos + 1.25 * cond_force_stable
-    buy_score = 1.0 * cond_structure + 0.5 * cond_force_pos + 0.5 * cond_force_stable
+    df.loc[mask & buy_cond, "BuySignal"] = 1
+    df.loc[mask & ~buy_cond, "BuySignal"] = 0
 
-    # === Regime-adaptive threshold ===
-    threshold = (
-        1.0 * low_noise  # 世界乾淨：一個強理由就可以
-        + 1.5 * mid_noise  # 世界普通：至少 1.5 分
-        + 2.0 * high_noise  # 世界混亂：幾乎要全對
-    )
-    print(f"{buy_score.iloc[-1]} >= {threshold.iloc[-1]}")
-    return buy_score >= threshold
+    return df
 
 
 import numpy as np

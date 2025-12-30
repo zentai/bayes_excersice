@@ -144,16 +144,21 @@ class CycleStateAdapter:
     ):
         x = state["cycle_center"]
 
+        # 異常偏離強度
         obs_noise = abs(state["z_price"])
         z_freeze = self.params.get("z_freeze", None)
 
+        # === JUMP-AWARE 模式切換 ===
+        # 小偏離 → 均值回歸 (mean-revert mode)
+        # 大偏離 → 直接躍遷 (jump mode, regime shift)
         if z_freeze is not None and obs_noise > z_freeze:
+            # 直接跟價格 → 世界觀更新
             return {
-                "state": {"cycle_center": x},
-                "P": P,
+                "state": {"cycle_center": obs_close},
+                "P": P,  # 保持原先不確定性
                 "innov": 0.0,
                 "S": np.inf,
-                "frozen": True,
+                "frozen": True,  # froze = 表示進入 jump mode
             }
 
         drift = ctx.get("cycle_drift", 0.0)
@@ -214,7 +219,7 @@ class MosaicForceAdapter:
         )
 
         rho = float(self.params.get("force_trend_rho", 0.97))
-        phi = float(self.params.get("force_proxy_phi", 0.90))
+        phi = float(self.params.get("force_proxy_phi", 0.95))
 
         F = np.array(
             [
@@ -423,7 +428,6 @@ def step_cycle(state, cov, diagnostics, obs_close, cycle_model: CycleStateAdapte
         "regime_noise_level": state["regime_noise_level"],
         "z_price": diagnostics["z_price"],
     }
-
     ctx["cycle_drift"] = build_cycle_drift_from_mosaic(state, cycle_model.params)
 
     cycle_out = cycle_model.step(
@@ -522,12 +526,12 @@ def update_regime_noise_level_from_z(
     z_mix = w_price * z_price + w_force * z_force
 
     base = params.get("base", 1.0)
-    gain = params.get("gain", 0.8)
+    gain = params.get("gain", 0.3)
 
     # only react when surprise > 1σ (soft)
     target = base + gain * np.log1p(max(0.0, z_mix - 1.0))
 
-    beta = params.get("regime_smooth", 0.05)
+    beta = params.get("regime_smooth", 0.15)
     new_regime = (1 - beta) * float(prev_regime_noise_level) + beta * float(target)
 
     lo, hi = params.get("clip", (0.2, 5.0))
@@ -585,20 +589,47 @@ def build_kalman_params():
 def prepare_mosaic_input(df):
     """
     df 至少包含: Open, High, Low, Close, Vol
+    ForceProxy v2 (三因子融合):
+      - CoreForce:   ΔClose * Vol
+      - Efficiency:  ΔClose / max(Vol, eps)
+      - Cumulative:  OBV-like sign(ΔClose) * Vol 累积
     """
 
     df = df.copy()
+    eps = 1e-12
+    w = 200  # 可调
 
-    rng = (df["High"] - df["Low"]).replace(0, np.nan)
-    hl_ret = (df["Close"] - df["Open"]) / rng
-    pseudo_delta = hl_ret * df["Vol"]
+    # ΔClose: 推动方向 + 粗量级
+    d_close = df["Close"].diff().fillna(0.0)
 
-    # online-ish normalization (rolling proxy)
-    m = pseudo_delta.rolling(200).mean()
-    s = pseudo_delta.rolling(200).std().replace(0, 1.0)
+    # Core Force: 方向 × 资金量
+    core_force = d_close * df["Vol"]
 
-    df["force_proxy"] = ((pseudo_delta - m) / s).fillna(0.0)
+    # Efficiency: 性价比 = 推动 / 成本
+    eff = d_close / (df["Vol"].replace(0, eps))
 
+    # Cumulative: 趋势累积偏压
+    thr = df["Close"].pct_change().abs().rolling(w).median() * 0.5
+    cvd = (
+        (np.sign(d_close) * df["Vol"] * (abs(d_close) > thr))
+        .rolling(w, min_periods=1)
+        .sum()
+    )
+
+    # Rolling Normalize (online-ish)
+
+    def z_roll(x):
+        m = x.rolling(w).mean()
+        s = x.rolling(w).std().replace(0, 1.0)
+        return ((x - m) / s).fillna(0.0)
+
+    df["force_core"] = z_roll(core_force)
+    df["force_eff"] = z_roll(eff)
+    df["force_cum"] = z_roll(cvd)
+
+    # ✨ Final Force Proxy 合成（简单平均，未来可加权）
+    df["force_proxy"] = (df["force_core"] + df["force_eff"] + df["force_cum"]) / 3.0
+    print(df["force_proxy"])
     return df
 
 

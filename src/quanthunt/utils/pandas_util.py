@@ -179,6 +179,7 @@ def build_strategy_param(overrides: dict = {}) -> StrategyParam:
         "stake_cap": 15,
         "symbol": Symbol("btcusdt"),
         "hmm_split": 4,
+        "hmm_model": "trend",
         "backtest": False,
         "debug_mode": [
             "statement",

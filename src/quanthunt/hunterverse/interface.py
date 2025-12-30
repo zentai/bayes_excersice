@@ -113,6 +113,7 @@ class StrategyParam:
     stake_cap: int = 50
     interval: str = "1min"
     hmm_split: int = 5
+    hmm_model: str = "trend"
     backtest: bool = False
     debug_mode: list = field(default_factory=list)
     load_deals: list = field(default_factory=list)
@@ -205,7 +206,7 @@ DEBUG_COL = [
     "m_pc",
     # "m_pt_speed",
     # "m_pt_accel",
-    # "m_force",
+    "m_force",
     # "m_force_trend",
     # "m_force_bias",
     # "m_z_price",
