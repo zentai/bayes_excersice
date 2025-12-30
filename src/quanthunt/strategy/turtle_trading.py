@@ -643,16 +643,18 @@ def buy_signal_from_mosaic_strategy(df, params):
     假設 HMM 已在外層 gate 過
     """
 
+    window = params.ATR_sample
+
     # === 結構條件 ===
     cond_structure = df.c_z_center < -1.0
 
     # === 力學條件 ===
     cond_force_pos = df.m_force_trend > 0
-    cond_force_stable = df.m_force_trend.rolling(20).quantile(0.3) > 0
+    cond_force_stable = df.m_force_trend.rolling(window).quantile(0.3) > 0
 
     # === 世界狀態（regime noise）===
     regime_noise = df.m_regime_noise_level
-    regime_mean = regime_noise.rolling(20).mean()
+    regime_mean = regime_noise.rolling(window).mean()
 
     # === regime 分段（低 / 中 / 高噪音）===
     low_noise = regime_noise < regime_mean * 0.9
@@ -671,10 +673,6 @@ def buy_signal_from_mosaic_strategy(df, params):
         + 1.5 * mid_noise  # 世界普通：至少 1.5 分
         + 2.0 * high_noise  # 世界混亂：幾乎要全對
     )
-    print(
-        f"low_noise: {low_noise.iloc[-1]}, mid_noise: {mid_noise.iloc[-1]}, high_noise: {high_noise.iloc[-1]}, regime_noise: {regime_noise.iloc[-1]}, regime_mean: {regime_mean.iloc[-1]} {regime_noise[-20:]}"
-    )
-    print(regime_noise.isna().sum())
     print(f"{buy_score.iloc[-1]} >= {threshold.iloc[-1]}")
     return buy_score >= threshold
 
