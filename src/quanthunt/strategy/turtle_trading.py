@@ -121,6 +121,7 @@ class TurtleScout(IStrategyScout):
         df = pandas_util.equip_fields(df, TURTLE_COLUMNS)
         df = self._calc_ATR(df)
         df = self.calc_kalman(df)
+        df = self.calc_bocpd(df)
         df = self._calc_profit(df)
         df = self.train_hmm(df)  # HMM_Signal must based on Profits
         return df

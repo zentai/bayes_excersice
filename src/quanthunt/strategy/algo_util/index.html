@@ -98,19 +98,19 @@
     <div class="controls">
       <label for="symbolSelect">Symbol:</label>
       <select id="symbolSelect">
-        <option value="BTC">BTC</option>
-        <option value="XRP">XRP</option>
-        <option value="ADA">ADA</option>
+        <option value="btcusdt">BTC</option>
+        <option value="xrpusdt">XRP</option>
+        <option value="adausdt">ADA</option>
       </select>
 
       <label for="intervalSelect">Interval:</label>
       <select id="intervalSelect">
-        <option value="1m">1m</option>
-        <option value="5m">5m</option>
-        <option value="15m">15m</option>
-        <option value="30m">30m</option>
-        <option value="1hr" selected>1hr</option>
-        <option value="4hr">4hr</option>
+        <option value="1min">1m</option>
+        <option value="5min">5m</option>
+        <option value="15min">15m</option>
+        <option value="30min">30m</option>
+        <option value="60min" selected>1hr</option>
+        <option value="4hour">4hr</option>
         <option value="1day">1day</option>
       </select>
 
@@ -131,7 +131,7 @@
   </div>
 
   <div class="chart-container">
-    <div class="chart-title">Regime / HMM Zone</div>
+    <div class="chart-title">Regime Zone</div>
     <div id="regime_chart" style="width: 100%; height: 80px;"></div>
   </div>
 
@@ -149,7 +149,7 @@
     const MQTT_URL = "ws://localhost:9010";
     const MAX_POINTS = 2000;
     const MAX_LOG_LINES = 50;
-    const LOG_VALUE_LEN = 20; // 每個 value 最多 6 chars
+    const LOG_VALUE_LEN = 20;
 
     const statusEl = document.getElementById("status");
     const symbolSelect = document.getElementById("symbolSelect");
@@ -227,28 +227,21 @@
       base: 0,
     });
 
-    // HMM signal: 使用 overlay area，只在 hmm_signal=1 時填值，其餘 null
-    const hmmAreaSeries = closeChart.addAreaSeries({
-      lineColor: "rgba(34, 197, 94, 0.0)",
-      topColor: "rgba(34, 197, 94, 0.15)",
-      bottomColor: "rgba(34, 197, 94, 0.0)",
-    });
-
     let closeData = [];
     let forceData = [];
     let regimeData = [];
-    let hmmData = [];
     let orderMarkers = [];
     let rawLogs = [];
+    let firstApply = true;
 
     function buildTopic(symbol, interval) {
+      console.log(`mkt/${symbol.toLowerCase()}/${interval}/k_channel`)
       return `mkt/${symbol.toLowerCase()}/${interval}/k_channel`;
     }
 
     function dateToUnixSeconds(dateStr) {
       const d = new Date(dateStr);
       if (isNaN(d.getTime())) {
-        console.warn("Invalid Date string:", dateStr);
         return Math.floor(Date.now() / 1000);
       }
       return Math.floor(d.getTime() / 1000);
@@ -273,8 +266,7 @@
       if (val === null || typeof val === "undefined") {
         s = "null";
       } else if (typeof val === "object") {
-        // order 只顯示 side 或簡短 json
-        if (val.side) {
+        if (val && val.side) {
           s = val.side;
         } else {
           s = JSON.stringify(val);
@@ -302,37 +294,33 @@
       closeData = [];
       forceData = [];
       regimeData = [];
-      hmmData = [];
       orderMarkers = [];
+      firstApply = true;
 
       closeSeries.setData([]);
       forceSeries.setData([]);
       regimeSeries.setData([]);
-      hmmAreaSeries.setData([]);
       closeSeries.setMarkers([]);
       rawLogs = [];
       rawLogEl.textContent = "";
+      updateRiskLight(0);
     }
 
     function pushPoint(row) {
-      // 對齊 Python 傳來的 JSON 欄位
       const t = dateToUnixSeconds(row.Date);
-      const close = row.Close;
-      const m_force = row.m_force;
-      const regime = row.regime ?? 0;
-      const hmm_signal = row.hmm_signal ?? 0;
-      const cp_prob = row.cp_prob ?? 0.0;
-      const risk = row.risk ?? 0.0;
+      const close = Number(row.Close);
+      const m_force = Number(row.m_force);
+      const regime = row.m_regime_noise_level ?? 0;
+      const cp_prob = row.bocpd_cp_prob ?? 0.0;
+      const risk = row.bocpd_risk ?? 0.0;
       const order = row.order || null;
 
-      // === ring buffer ===
+      // ring buffer
       if (closeData.length >= MAX_POINTS) {
         const removed = closeData.length - MAX_POINTS + 1;
         closeData = closeData.slice(removed);
         forceData = forceData.slice(removed);
         regimeData = regimeData.slice(removed);
-        hmmData = hmmData.slice(removed);
-
         const cutoffTime = closeData[0].time;
         orderMarkers = orderMarkers.filter(m => m.time >= cutoffTime);
       }
@@ -346,22 +334,14 @@
         : "rgba(248, 113, 113, 0.8)";
       forceData.push({ time: t, value: m_force, color: forceColor });
 
-      // Regime strip
+      // Regime strip：單純多/空/中性
       let regimeColor = "rgba(148, 163, 184, 0.8)"; // neutral
-      if (regime > 0) {
-        regimeColor = hmm_signal === 1
-          ? "rgba(74, 222, 128, 0.9)"   // up + hmm=1
-          : "rgba(34, 197, 94, 0.7)";   // up
+      if (regime > 1.15) {
+        regimeColor = "rgba(34, 197, 94, 0.8)";   // up
       } else if (regime < 0) {
-        regimeColor = "rgba(248, 113, 113, 0.9)";   // down
+        regimeColor = "rgba(248, 113, 113, 0.9)"; // down
       }
       regimeData.push({ time: t, value: regime, color: regimeColor });
-
-      // HMM zone area
-      hmmData.push({
-        time: t,
-        value: hmm_signal === 1 ? close : null,
-      });
 
       // Buy/Sell markers
       if (order && order.side) {
@@ -379,16 +359,15 @@
         }
       }
 
-      // 更新 risk 燈號（用最新 bar）
+      // risk light
       updateRiskLight(risk);
 
-      // Raw log（排序 + 截字）
+      // log
       appendRawLog({
         Date: row.Date,
         Close: close,
         m_force: m_force,
         regime: regime,
-        hmm_signal: hmm_signal,
         cp_prob: cp_prob,
         risk: risk,
         order: order,
@@ -396,17 +375,17 @@
     }
 
     function applyDataToSeries(isInitial = false) {
-        closeSeries.setData(closeData);
-        forceSeries.setData(forceData);
-        regimeSeries.setData(regimeData);
-        hmmAreaSeries.setData(hmmData);
-        closeSeries.setMarkers(orderMarkers);
+      closeSeries.setData(closeData);
+      forceSeries.setData(forceData);
+      regimeSeries.setData(regimeData);
+      closeSeries.setMarkers(orderMarkers);
 
-        if (isInitial) {
-            closeChart.timeScale().fitContent();
-            regimeChart.timeScale().fitContent();
-            forceChart.timeScale().fitContent();
-        }
+      if (isInitial || firstApply) {
+        closeChart.timeScale().fitContent();
+        regimeChart.timeScale().fitContent();
+        forceChart.timeScale().fitContent();
+        firstApply = false;
+      }
     }
 
     // MQTT events
@@ -421,7 +400,6 @@
 
     client.on("error", (err) => {
       statusEl.textContent = "MQTT error: " + err.message;
-      console.error("MQTT error:", err);
     });
 
     function switchStream(symbol, interval) {
@@ -456,23 +434,19 @@
     });
 
     client.on("message", (topic, message) => {
-        if (topic !== currentTopic) return;
+      if (topic !== currentTopic) return;
 
-        let data = JSON.parse(message.toString());
+      const data = JSON.parse(message.toString());
 
-        if (data.batch && Array.isArray(data.rows)) {
-            data.rows.forEach(row => pushPoint(row));
+      if (data.batch && Array.isArray(data.rows)) {
+        data.rows.forEach(row => pushPoint(row));
+        applyDataToSeries(true);
+        return;
+      }
 
-            // ---- 修正：延遲 fitContent ----
-            setTimeout(() => {
-                applyDataToSeries(true); // 標記為「初始fit」
-            }, 30);
-            return;
-        }
-
-        // --- 單筆更新 ---
-        pushPoint(data);
-        applyDataToSeries(false);
+      // 單筆更新
+      pushPoint(data);
+      applyDataToSeries(false);
     });
 
     function resizeCharts() {

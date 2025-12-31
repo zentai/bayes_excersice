@@ -18,7 +18,7 @@ from quanthunt.strategy.turtle_trading import (
     TurtleScout,
     buy_signal_from_mosaic_strategy,
 )
-from quanthunt.strategy.algo_util import ui
+from quanthunt.strategy.algo_util import mqtt_ui
 
 from quanthunt.engine.probabilistic_engine import BayesianEngine
 from quanthunt.utils import pandas_util
@@ -131,9 +131,10 @@ class HuntingStory:
                 is_trend_gone = hunter.strike_phase(
                     lastest_candlestick=last_candlestick
                 )
-                latest = self.base_df.iloc[-1]
-                ui.publish_update(
-                    latest.Date, latest.Close, latest.m_force
+
+                # publish_update(sym, interval, row)
+                mqtt_ui.publish_update(
+                    self.params.symbol.name, self.params.interval, self.base_df.iloc[-1]
                 )  # Send MQTT to web
                 if is_trend_gone:
                     from huobi.connection.subscribe_client import SubscribeClient
@@ -230,7 +231,7 @@ def start_journey(sp):
         debug_cols=debug_cols,
         report_cols=report_cols,
     )
-    ui.publish_sync(base_df)  # Send MQTT to web
+    mqtt_ui.publish_sync(sp.symbol.name, sp.interval, base_df)  # Send MQTT to web
     story.setup_dispatcher()
 
     story.pub_market_sensor()

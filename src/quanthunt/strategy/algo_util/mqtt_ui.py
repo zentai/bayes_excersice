@@ -27,10 +27,11 @@ def _row_to_payload(idx, row: pd.Series) -> dict:
     選擇欄位（若無則給預設值）：
         regime, hmm_signal, cp_prob, risk, order
     """
-    if hasattr(idx, "isoformat"):
-        date_str = idx.isoformat()
-    else:
-        date_str = str(idx)
+    # if hasattr(idx, "isoformat"):
+    #     date_str = idx.isoformat()
+    # else:
+    #     date_str = str(idx)
+    date_str = row["Date"].isoformat()
 
     def _get(name: str, default):
         return row[name] if name in row and pd.notna(row[name]) else default
@@ -39,13 +40,14 @@ def _row_to_payload(idx, row: pd.Series) -> dict:
         "Date": date_str,
         "Close": float(_get("Close", 0.0)),
         "m_force": float(_get("m_force", 0.0)),
-        "regime": int(_get("regime", 0)),
+        "m_regime_noise_level": float(_get("m_regime_noise_level", 0)),
         "hmm_signal": int(_get("hmm_signal", 0)),
-        "cp_prob": float(_get("cp_prob", 0.0)),
-        "risk": float(_get("risk", 0.0)),
+        "bocpd_cp_prob": float(_get("bocpd_cp_prob", 0.0)),
+        "bocpd_risk": float(_get("bocpd_risk", 0.0)),
     }
+    print(payload)
 
-    order_val: Optional[object] = _get("order", None)
+    order_val: Optional[object] = "Buy" if _get("BuySignal", None) else None
     if isinstance(order_val, dict):
         payload["order"] = order_val
     elif isinstance(order_val, str) and order_val:
@@ -87,7 +89,7 @@ def publish_sync(symbol: str, interval: str, df: pd.DataFrame):
         其他欄位同 _row_to_payload
     """
     topic = _build_topic(symbol, interval)
-
+    print(f"batch topic: {topic}")
     rows = []
     for idx, row in df.iterrows():
         rows.append(_row_to_payload(idx, row))
