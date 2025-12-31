@@ -629,7 +629,6 @@ def prepare_mosaic_input(df):
 
     # ✨ Final Force Proxy 合成（简单平均，未来可加权）
     df["force_proxy"] = (df["force_core"] + df["force_eff"] + df["force_cum"]) / 3.0
-    print(df["force_proxy"])
     return df
 
 

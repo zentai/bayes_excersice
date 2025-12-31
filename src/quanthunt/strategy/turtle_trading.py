@@ -383,7 +383,7 @@ class TurtleScout(IStrategyScout):
             print("# 找不到有正期望的 state，就不要亂打 HMM_Signal")
             return set()
 
-        print(selector.best_combos(top_n=1))
+        # print(selector.best_combos(top_n=1))
         return combo_states
 
     def predict_hmm(self, df: pd.DataFrame) -> pd.DataFrame:
