@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MOSAIC K Dashboard</title>
+
+  <!-- MQTT over WebSocket -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+  <!-- Lightweight Charts v3 -->
+  <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
+
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #020617;
+      color: #e5e7eb;
+      margin: 0;
+      padding: 12px;
+    }
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    select {
+      background: #020617;
+      color: #e5e7eb;
+      border: 1px solid #374151;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 13px;
+    }
+    #status {
+      font-size: 12px;
+      color: #9ca3af;
+    }
+    .risk-light {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+    }
+    .risk-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      opacity: 0.25;
+    }
+    #risk-green { background: #22c55e; }
+    #risk-yellow { background: #eab308; }
+    #risk-red { background: #ef4444; }
+
+    .chart-container {
+      border-radius: 8px;
+      background: #020617;
+      padding: 6px;
+      margin-bottom: 8px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    }
+    .chart-title {
+      font-size: 13px;
+      margin-bottom: 4px;
+      color: #9ca3af;
+    }
+    #raw-log-container {
+      border-radius: 8px;
+      background: #020617;
+      padding: 6px;
+      margin-top: 4px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    }
+    #raw-log-title {
+      font-size: 13px;
+      margin-bottom: 4px;
+      color: #9ca3af;
+    }
+    #raw-log {
+      height: 120px;
+      overflow-y: auto;
+      background: #020617;
+      border: 1px solid #1f2937;
+      padding: 4px;
+      font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <div class="controls">
+      <label for="symbolSelect">Symbol:</label>
+      <select id="symbolSelect">
+        <option value="BTC">BTC</option>
+        <option value="XRP">XRP</option>
+        <option value="ADA">ADA</option>
+      </select>
+
+      <label for="intervalSelect">Interval:</label>
+      <select id="intervalSelect">
+        <option value="1m">1m</option>
+        <option value="5m">5m</option>
+        <option value="15m">15m</option>
+        <option value="30m">30m</option>
+        <option value="1hr" selected>1hr</option>
+        <option value="4hr">4hr</option>
+        <option value="1day">1day</option>
+      </select>
+
+      <span id="status">Connecting...</span>
+    </div>
+
+    <div class="risk-light">
+      Risk:
+      <div class="risk-dot" id="risk-green"></div>
+      <div class="risk-dot" id="risk-yellow"></div>
+      <div class="risk-dot" id="risk-red"></div>
+    </div>
+  </div>
+
+  <div class="chart-container">
+    <div class="chart-title">Close + Orders</div>
+    <div id="close_chart" style="width: 100%; height: 260px;"></div>
+  </div>
+
+  <div class="chart-container">
+    <div class="chart-title">Regime / HMM Zone</div>
+    <div id="regime_chart" style="width: 100%; height: 80px;"></div>
+  </div>
+
+  <div class="chart-container">
+    <div class="chart-title">m_force</div>
+    <div id="force_chart" style="width: 100%; height: 200px;"></div>
+  </div>
+
+  <div id="raw-log-container">
+    <div id="raw-log-title">Raw JSON Log (last 50)</div>
+    <pre id="raw-log"></pre>
+  </div>
+
+  <script>
+    const MQTT_URL = "ws://localhost:9010";
+    const MAX_POINTS = 2000;
+    const MAX_LOG_LINES = 50;
+    const LOG_VALUE_LEN = 20; // 每個 value 最多 6 chars
+
+    const statusEl = document.getElementById("status");
+    const symbolSelect = document.getElementById("symbolSelect");
+    const intervalSelect = document.getElementById("intervalSelect");
+    const rawLogEl = document.getElementById("raw-log");
+
+    const riskGreen = document.getElementById("risk-green");
+    const riskYellow = document.getElementById("risk-yellow");
+    const riskRed = document.getElementById("risk-red");
+
+    let currentTopic = null;
+    let client = mqtt.connect(MQTT_URL);
+
+    // Chart setup
+    const closeChart = LightweightCharts.createChart(
+      document.getElementById("close_chart"),
+      {
+        width: document.getElementById("close_chart").clientWidth,
+        height: 260,
+        layout: { background: { color: "#020617" }, textColor: "#e5e7eb" },
+        grid: {
+          vertLines: { color: "#111827" },
+          horzLines: { color: "#111827" },
+        },
+        timeScale: { borderColor: "#1f2937" },
+        rightPriceScale: { borderColor: "#1f2937" },
+      }
+    );
+
+    const regimeChart = LightweightCharts.createChart(
+      document.getElementById("regime_chart"),
+      {
+        width: document.getElementById("regime_chart").clientWidth,
+        height: 80,
+        layout: { background: { color: "#020617" }, textColor: "#e5e7eb" },
+        grid: {
+          vertLines: { color: "#111827" },
+          horzLines: { color: "#111827" },
+        },
+        timeScale: { borderColor: "#1f2937" },
+        rightPriceScale: {
+          borderColor: "#1f2937",
+          visible: false,
+        },
+      }
+    );
+
+    const forceChart = LightweightCharts.createChart(
+      document.getElementById("force_chart"),
+      {
+        width: document.getElementById("force_chart").clientWidth,
+        height: 200,
+        layout: { background: { color: "#020617" }, textColor: "#e5e7eb" },
+        grid: {
+          vertLines: { color: "#111827" },
+          horzLines: { color: "#111827" },
+        },
+        timeScale: { borderColor: "#1f2937" },
+        rightPriceScale: { borderColor: "#1f2937" },
+      }
+    );
+
+    const closeSeries = closeChart.addLineSeries({
+      color: "rgba(96, 165, 250, 1)",
+      lineWidth: 2,
+    });
+
+    // Regime histogram strip
+    const regimeSeries = regimeChart.addHistogramSeries({
+      base: 0,
+    });
+
+    // m_force histogram
+    const forceSeries = forceChart.addHistogramSeries({
+      base: 0,
+    });
+
+    // HMM signal: 使用 overlay area，只在 hmm_signal=1 時填值，其餘 null
+    const hmmAreaSeries = closeChart.addAreaSeries({
+      lineColor: "rgba(34, 197, 94, 0.0)",
+      topColor: "rgba(34, 197, 94, 0.15)",
+      bottomColor: "rgba(34, 197, 94, 0.0)",
+    });
+
+    let closeData = [];
+    let forceData = [];
+    let regimeData = [];
+    let hmmData = [];
+    let orderMarkers = [];
+    let rawLogs = [];
+
+    function buildTopic(symbol, interval) {
+      return `mkt/${symbol.toLowerCase()}/${interval}/k_channel`;
+    }
+
+    function dateToUnixSeconds(dateStr) {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) {
+        console.warn("Invalid Date string:", dateStr);
+        return Math.floor(Date.now() / 1000);
+      }
+      return Math.floor(d.getTime() / 1000);
+    }
+
+    function updateRiskLight(risk) {
+      let g = 0.2, y = 0.2, r = 0.2;
+      if (risk <= 0.33) {
+        g = 1.0;
+      } else if (risk <= 0.66) {
+        y = 1.0;
+      } else {
+        r = 1.0;
+      }
+      riskGreen.style.opacity = g;
+      riskYellow.style.opacity = y;
+      riskRed.style.opacity = r;
+    }
+
+    function trimVal(val, maxLen) {
+      let s;
+      if (val === null || typeof val === "undefined") {
+        s = "null";
+      } else if (typeof val === "object") {
+        // order 只顯示 side 或簡短 json
+        if (val.side) {
+          s = val.side;
+        } else {
+          s = JSON.stringify(val);
+        }
+      } else {
+        s = String(val);
+      }
+      if (s.length > maxLen) return s.slice(0, maxLen);
+      return s.padEnd(maxLen, " ");
+    }
+
+    function appendRawLog(obj) {
+      const keys = Object.keys(obj).sort();
+      const parts = keys.map(k => `${k}=${trimVal(obj[k], LOG_VALUE_LEN)}`);
+      const line = parts.join(" | ");
+      rawLogs.push(line);
+      if (rawLogs.length > MAX_LOG_LINES) {
+        rawLogs = rawLogs.slice(-MAX_LOG_LINES);
+      }
+      rawLogEl.textContent = rawLogs.join("\n");
+      rawLogEl.scrollTop = rawLogEl.scrollHeight;
+    }
+
+    function resetData() {
+      closeData = [];
+      forceData = [];
+      regimeData = [];
+      hmmData = [];
+      orderMarkers = [];
+
+      closeSeries.setData([]);
+      forceSeries.setData([]);
+      regimeSeries.setData([]);
+      hmmAreaSeries.setData([]);
+      closeSeries.setMarkers([]);
+      rawLogs = [];
+      rawLogEl.textContent = "";
+    }
+
+    function pushPoint(row) {
+      // 對齊 Python 傳來的 JSON 欄位
+      const t = dateToUnixSeconds(row.Date);
+      const close = row.Close;
+      const m_force = row.m_force;
+      const regime = row.regime ?? 0;
+      const hmm_signal = row.hmm_signal ?? 0;
+      const cp_prob = row.cp_prob ?? 0.0;
+      const risk = row.risk ?? 0.0;
+      const order = row.order || null;
+
+      // === ring buffer ===
+      if (closeData.length >= MAX_POINTS) {
+        const removed = closeData.length - MAX_POINTS + 1;
+        closeData = closeData.slice(removed);
+        forceData = forceData.slice(removed);
+        regimeData = regimeData.slice(removed);
+        hmmData = hmmData.slice(removed);
+
+        const cutoffTime = closeData[0].time;
+        orderMarkers = orderMarkers.filter(m => m.time >= cutoffTime);
+      }
+
+      // Close
+      closeData.push({ time: t, value: close });
+
+      // m_force
+      const forceColor = m_force >= 0
+        ? "rgba(52, 211, 153, 0.8)"
+        : "rgba(248, 113, 113, 0.8)";
+      forceData.push({ time: t, value: m_force, color: forceColor });
+
+      // Regime strip
+      let regimeColor = "rgba(148, 163, 184, 0.8)"; // neutral
+      if (regime > 0) {
+        regimeColor = hmm_signal === 1
+          ? "rgba(74, 222, 128, 0.9)"   // up + hmm=1
+          : "rgba(34, 197, 94, 0.7)";   // up
+      } else if (regime < 0) {
+        regimeColor = "rgba(248, 113, 113, 0.9)";   // down
+      }
+      regimeData.push({ time: t, value: regime, color: regimeColor });
+
+      // HMM zone area
+      hmmData.push({
+        time: t,
+        value: hmm_signal === 1 ? close : null,
+      });
+
+      // Buy/Sell markers
+      if (order && order.side) {
+        const side = String(order.side).toUpperCase();
+        if (side === "BUY" || side === "SELL") {
+          orderMarkers.push({
+            time: t,
+            position: side === "BUY" ? "belowBar" : "aboveBar",
+            color: side === "BUY"
+              ? "rgba(34, 197, 94, 1)"
+              : "rgba(239, 68, 68, 1)",
+            shape: side === "BUY" ? "arrowUp" : "arrowDown",
+            text: side === "BUY" ? "B" : "S",
+          });
+        }
+      }
+
+      // 更新 risk 燈號（用最新 bar）
+      updateRiskLight(risk);
+
+      // Raw log（排序 + 截字）
+      appendRawLog({
+        Date: row.Date,
+        Close: close,
+        m_force: m_force,
+        regime: regime,
+        hmm_signal: hmm_signal,
+        cp_prob: cp_prob,
+        risk: risk,
+        order: order,
+      });
+    }
+
+    function applyDataToSeries(isInitial = false) {
+        closeSeries.setData(closeData);
+        forceSeries.setData(forceData);
+        regimeSeries.setData(regimeData);
+        hmmAreaSeries.setData(hmmData);
+        closeSeries.setMarkers(orderMarkers);
+
+        if (isInitial) {
+            closeChart.timeScale().fitContent();
+            regimeChart.timeScale().fitContent();
+            forceChart.timeScale().fitContent();
+        }
+    }
+
+    // MQTT events
+    client.on("connect", () => {
+      statusEl.textContent = "Connected";
+      switchStream(symbolSelect.value, intervalSelect.value);
+    });
+
+    client.on("reconnect", () => {
+      statusEl.textContent = "Reconnecting...";
+    });
+
+    client.on("error", (err) => {
+      statusEl.textContent = "MQTT error: " + err.message;
+      console.error("MQTT error:", err);
+    });
+
+    function switchStream(symbol, interval) {
+      const newTopic = buildTopic(symbol, interval);
+      if (newTopic === currentTopic) return;
+
+      if (currentTopic) {
+        client.unsubscribe(currentTopic);
+      }
+      currentTopic = newTopic;
+      resetData();
+
+      if (client.connected) {
+        client.subscribe(currentTopic, (err) => {
+          if (err) {
+            statusEl.textContent = "Subscribe error: " + err.message;
+          } else {
+            statusEl.textContent = "Subscribed: " + currentTopic;
+          }
+        });
+      } else {
+        statusEl.textContent = "Waiting for MQTT connection...";
+      }
+    }
+
+    symbolSelect.addEventListener("change", () => {
+      switchStream(symbolSelect.value, intervalSelect.value);
+    });
+
+    intervalSelect.addEventListener("change", () => {
+      switchStream(symbolSelect.value, intervalSelect.value);
+    });
+
+    client.on("message", (topic, message) => {
+        if (topic !== currentTopic) return;
+
+        let data = JSON.parse(message.toString());
+
+        if (data.batch && Array.isArray(data.rows)) {
+            data.rows.forEach(row => pushPoint(row));
+
+            // ---- 修正：延遲 fitContent ----
+            setTimeout(() => {
+                applyDataToSeries(true); // 標記為「初始fit」
+            }, 30);
+            return;
+        }
+
+        // --- 單筆更新 ---
+        pushPoint(data);
+        applyDataToSeries(false);
+    });
+
+    function resizeCharts() {
+      const width = document.body.clientWidth - 24;
+      closeChart.applyOptions({ width });
+      regimeChart.applyOptions({ width });
+      forceChart.applyOptions({ width });
+    }
+
+    window.addEventListener("resize", resizeCharts);
+    resizeCharts();
+  </script>
+</body>
+</html>
