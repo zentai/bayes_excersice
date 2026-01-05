@@ -1,3 +1,7 @@
+import numpy as np
+import pandas as pd
+
+
 class CycleFeatureExtractor:
     def __init__(self, atr_window=60, bayes_window=20):
         self.atr_window = atr_window
@@ -108,42 +112,10 @@ class CycleHMM:
         # 假設 state 1 = 回升期（需你回測確認語義）
         return 1 if self.current_state == 1 else 0
 
-cfg = CycleKalmanConfig(
-    Q_base=1e-4,
-    R_base=1e-3,
-    use_fallback_vol=True,
-    w_fallback=0.1,   # 先小小用
-)
-
-ckf = CycleKalmanOnline(cfg)
-
-df["drift"] = rolling_logret_mean(df["close"], window=20)
-
-out_x = []
-out_K = []
-out_R = []
-for i in range(len(df)):
-    row = df.iloc[i]
-    res = ckf.update(
-        close=float(row["close"]),
-        drift=float(row["drift"]),
-        mosaic_force_err=float(row.get("mosaic_force_err", 0.0)),
-        mosaic_price_err=float(row.get("mosaic_price_err", 0.0)),
-        log_vol=float(row["log_vol"]) if "log_vol" in df.columns else None,
-        log_vol_global=float(row["log_vol_global"]) if "log_vol_global" in df.columns else None,
-        log_volat=float(row["log_volat"]) if "log_volat" in df.columns else None,
-        log_volat_global=float(row["log_volat_global"]) if "log_volat_global" in df.columns else None,
-    )
-    out_x.append(res["x"])
-    out_K.append(res["K"])
-    out_R.append(res["R_t"])
-
-df["cycle_state_price"] = out_x
-df["cycle_K"] = out_K
-df["cycle_Rt"] = out_R
 
 import numpy as np
 from dataclasses import dataclass
+
 
 # -------------------------
 # Config
@@ -154,15 +126,15 @@ class CycleKalmanConfig:
     R_base: float = 1e-3
 
     # R reacts FAST to instantaneous MOSAIC error
-    kR: float = 0.45          # strength for R scaling by |err|
-    err_clip: float = 3.0     # clip mosaic_err (z-like) to avoid explosions
+    kR: float = 0.45  # strength for R scaling by |err|
+    err_clip: float = 3.0  # clip mosaic_err (z-like) to avoid explosions
     R_min_scale: float = 0.2
     R_max_scale: float = 12.0
 
     # Q reacts SLOW to sustained error (EWMA / accumulator)
-    q_mode: str = "ewma"      # "ewma" or "accum"
-    kQ: float = 0.30          # strength for Q scaling by sustained error
-    q_floor: float = 0.0      # baseline sustained error floor
+    q_mode: str = "ewma"  # "ewma" or "accum"
+    kQ: float = 0.30  # strength for Q scaling by sustained error
+    q_floor: float = 0.0  # baseline sustained error floor
     Q_min_scale: float = 0.5
     Q_max_scale: float = 6.0
 
@@ -170,7 +142,7 @@ class CycleKalmanConfig:
     ewma_alpha: float = 0.06  # smaller = slower
     accum_beta: float = 0.02  # leak rate for accumulator
     accum_gain: float = 0.10  # how fast it accumulates on big error
-    q_trigger: float = 1.2    # only start increasing Q if sustained err > trigger
+    q_trigger: float = 1.2  # only start increasing Q if sustained err > trigger
 
     # optional drift (cycle stack)
     P0: float = 1.0
@@ -221,7 +193,9 @@ class CycleKalmanOnline:
 
         if c.q_mode == "accum":
             # leaky accumulator: grows when error large, leaks otherwise
-            self.err_accum = (1.0 - c.accum_beta) * self.err_accum + c.accum_gain * max(0.0, e_abs - c.q_floor)
+            self.err_accum = (1.0 - c.accum_beta) * self.err_accum + c.accum_gain * max(
+                0.0, e_abs - c.q_floor
+            )
             return float(self.err_accum)
 
         raise ValueError("q_mode must be 'ewma' or 'accum'")
@@ -253,8 +227,17 @@ class CycleKalmanOnline:
         # init
         if self.x is None:
             self.x = float(close)
-            return {"x": self.x, "P": self.P, "K": 0.0, "Q_t": c.Q_base, "R_t": c.R_base,
-                    "x_pred": self.x, "resid": 0.0, "e_abs": 0.0, "e_sust": 0.0}
+            return {
+                "x": self.x,
+                "P": self.P,
+                "K": 0.0,
+                "Q_t": c.Q_base,
+                "R_t": c.R_base,
+                "x_pred": self.x,
+                "resid": 0.0,
+                "e_abs": 0.0,
+                "e_sust": 0.0,
+            }
 
         # ---- prediction (cycle stack) ----
         x_pred = float(self.x * np.exp(drift))
@@ -297,19 +280,21 @@ if __name__ == "__main__":
     import pandas as pd
 
     # Suppose df has: close, drift, mosaic_err
-    df = pd.DataFrame({
-        "close": [100, 101, 105, 104, 103, 120, 119, 118],
-        "drift": [0, 0.001, 0.001, 0, 0, 0.0, 0.0, 0.0],
-        # mosaic_err (z-like): spikes when structure looks wrong
-        "mosaic_err": [0.2, 0.3, 2.0, 1.5, 0.8, 3.5, 2.8, 1.0],
-    })
+    df = pd.DataFrame(
+        {
+            "Close": [100, 101, 105, 104, 103, 120, 119, 118],
+            "drift": [0, 0.001, 0.001, 0, 0, 0.0, 0.0, 0.0],
+            # mosaic_err (z-like): spikes when structure looks wrong
+            "mosaic_err": [0.2, 0.3, 2.0, 1.5, 0.8, 3.5, 2.8, 1.0],
+        }
+    )
 
     cfg = CycleKalmanConfig(q_mode="ewma")
     ckf = CycleKalmanOnline(cfg)
 
     xs, Ks, Qs, Rs = [], [], [], []
     for _, r in df.iterrows():
-        out = ckf.update(float(r["close"]), float(r["drift"]), float(r["mosaic_err"]))
+        out = ckf.update(float(r["Close"]), float(r["drift"]), float(r["mosaic_err"]))
         xs.append(out["x"])
         Ks.append(out["K"])
         Qs.append(out["Q_t"])
@@ -322,17 +307,58 @@ if __name__ == "__main__":
 
     print(df)
 
+
 def rolling_logret_mean(close: pd.Series, window: int = 20) -> pd.Series:
     lr = np.log(close).diff()
     return lr.rolling(window).mean().fillna(0.0)
 
+
 def main():
-    cycle_hmm = CycleHMM(
-        n_states=4, atr_window=60, bayes_window=20, kalman_params={...}
+    cfg = CycleKalmanConfig(
+        Q_base=1e-4,
+        R_base=1e-3,
+        use_fallback_vol=True,
+        w_fallback=0.1,  # 先小小用
     )
 
-    cycle_hmm.partial_fit(df_chunk)  # online 更新
-    state = cycle_hmm.current_state  # 目前 phase
-    prob = cycle_hmm.state_prob  # state posterior
-    signal = cycle_hmm.phase_signal  # 是否允許「週期型進場」
+    ckf = CycleKalmanOnline(cfg)
 
+    df["drift"] = rolling_logret_mean(df["Close"], window=20)
+
+    out_x = []
+    out_K = []
+    out_R = []
+    for i in range(len(df)):
+        row = df.iloc[i]
+        res = ckf.update(
+            close=float(row["Close"]),
+            drift=float(row["drift"]),
+            mosaic_force_err=float(row.get("mosaic_force_err", 0.0)),
+            mosaic_price_err=float(row.get("mosaic_price_err", 0.0)),
+            log_vol=float(row["log_vol"]) if "log_vol" in df.columns else None,
+            log_vol_global=(
+                float(row["log_vol_global"]) if "log_vol_global" in df.columns else None
+            ),
+            log_volat=float(row["log_volat"]) if "log_volat" in df.columns else None,
+            log_volat_global=(
+                float(row["log_volat_global"])
+                if "log_volat_global" in df.columns
+                else None
+            ),
+        )
+        out_x.append(res["x"])
+        out_K.append(res["K"])
+        out_R.append(res["R_t"])
+
+    df["cycle_state_price"] = out_x
+    df["cycle_K"] = out_K
+    df["cycle_Rt"] = out_R
+
+    # cycle_hmm = CycleHMM(
+    #     n_states=4, atr_window=60, bayes_window=20, kalman_params={...}
+    # )
+
+    # cycle_hmm.partial_fit(df_chunk)  # online 更新
+    # state = cycle_hmm.current_state  # 目前 phase
+    # prob = cycle_hmm.state_prob  # state posterior
+    # signal = cycle_hmm.phase_signal  # 是否允許「週期型進場」
