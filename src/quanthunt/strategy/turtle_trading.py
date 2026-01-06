@@ -22,6 +22,7 @@ from quanthunt.strategy.algo_util.kalman import (
     MosaicForceAdapter,
     MosaicPriceAdapter,
     CycleStateAdapter,
+    update_liquidity_wall,
 )
 from quanthunt.strategy.algo_util.bocpdz import (
     BOCPDGaussianG0,
@@ -76,6 +77,12 @@ TURTLE_COLUMNS = [
     "m_regime_noise_level",
     "c_center",
     "c_z_center",
+    "c_width",
+    "c_upper",
+    "c_lower",
+    "z_dist",
+    "impedance",
+    "market_phase",
     # BOCPD G0+P1
     "bocpd_phase",
     "bocpd_cp_prob",
@@ -122,6 +129,7 @@ class TurtleScout(IStrategyScout):
         df = self._calc_ATR(df)
         df = self.calc_kalman(df)
         df = self.calc_bocpd(df)
+        df = update_liquidity_wall(df)
         df = self._calc_profit(df)
         df = self.train_hmm(df)  # HMM_Signal must based on Profits
         return df
@@ -168,6 +176,7 @@ class TurtleScout(IStrategyScout):
             df.loc[i, "m_force_bias"] = self.kalman_state["force_proxy_bias"]
 
             df.loc[i, "m_z_price"] = diag["z_price"]
+            df.loc[i, "m_p_price"] = self.kalman_Cov["P_price"][0, 0]
             df.loc[i, "m_z_force"] = diag["z_force"]
             df.loc[i, "m_z_mix"] = diag["z_mix"]
             df.loc[i, "m_regime_noise_level"] = self.kalman_state["regime_noise_level"]
@@ -603,6 +612,7 @@ class TurtleScout(IStrategyScout):
         base_df = self._calc_ATR(base_df)
         base_df = self.calc_kalman(base_df)
         base_df = self.calc_bocpd(base_df)
+        base_df = update_liquidity_wall(base_df)
         if base_df.iloc[-1].bocpd_runlen_mode == 0:
             base_df = self.train_hmm(base_df, reset=True)
         else:

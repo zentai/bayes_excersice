@@ -632,6 +632,127 @@ def prepare_mosaic_input(df):
     return df
 
 
+import numpy as np
+import pandas as pd
+
+
+def update_liquidity_wall(df):
+    """
+    Symmetric liquidity wall (research version, pandas-first)
+
+    Goal:
+    - Observe whether liquidity exhaustion boundary exists
+    - NOT trading logic
+
+    Key ideas:
+    - Wall anchored at c_center
+    - Width from price state uncertainty (P_price), not price movement
+    - Wall must be slower than price
+    """
+
+    # ====== tunable constants (edit freely) ======
+    K_STATE = 2.0  # how many sigma = natural reachable radius
+    NOISE_MIN = 0.8
+    NOISE_MAX = 1.5
+    ATR_FLOOR = 0.8  # ATR is safety fuse only
+    WALL_ALPHA = 0.05  # wall inertia (must be slow)
+
+    # ====== ensure columns exist ======
+    for col in ["c_width", "c_upper", "c_lower", "z_dist"]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    # ====== decide which rows need update ======
+    # rule: if c_width is NaN, we consider this row "not computed yet"
+    need_update = df["c_width"].isna()
+
+    if not need_update.any():
+        return df  # nothing to do
+
+    # ====== core inputs ======
+    c_center = df["c_center"]
+    P_price = df["m_p_price"]
+    noise = df["m_regime_noise_level"].clip(NOISE_MIN, NOISE_MAX)
+    atr = df["ATR"]
+
+    # ====== step 1: base width from state uncertainty ======
+    # prior, not posterior
+    base_width = K_STATE * np.sqrt(P_price.clip(lower=1e-12))
+
+    # ====== step 2: regime modulation (bounded, gentle) ======
+    width_structural = base_width * noise
+
+    # ====== step 3: ATR as safety floor ======
+    width_raw = np.maximum(width_structural, ATR_FLOOR * atr)
+
+    # ====== step 4: wall inertia (EWMA, but ONLY where needed) ======
+    # We cannot pure-vectorize this part because it is recursive.
+    # But we keep it minimal and readable.
+
+    c_width = df["c_width"].copy()
+
+    for i in df.index[need_update]:
+        if i == df.index[0]:
+            c_width.at[i] = width_raw.at[i]
+            continue
+
+        prev = c_width.at[i - 1]
+        if np.isfinite(prev):
+            c_width.at[i] = (1 - WALL_ALPHA) * prev + WALL_ALPHA * width_raw.at[i]
+        else:
+            c_width.at[i] = width_raw.at[i]
+
+    df["c_width"] = c_width
+
+    # ====== step 5: symmetric wall ======
+    df.loc[need_update, "c_upper"] = c_center + df["c_width"]
+    df.loc[need_update, "c_lower"] = c_center - df["c_width"]
+
+    # ====== step 6: normalized distance (this is what we actually look at) ======
+    df.loc[need_update, "z_dist"] = (df["Close"] - c_center) / df["c_width"]
+
+    # force / speed 的絕對值（避免正負干擾）
+    df.loc[need_update, "force_abs"] = df["m_force_trend"].abs()
+    df.loc[need_update, "speed_abs"] = df["m_pt_speed"].abs()
+
+    # 市場阻抗（你前面其實已經在用這個概念）
+    df.loc[need_update, "impedance"] = df["force_abs"] / (df["speed_abs"] + 1e-6)
+
+    Z_CORE = 0.5  # 靠近 c_center
+    Z_EXHAUST = 1.5  # 接近邊界
+
+    FORCE_Q = df["force_abs"].quantile(0.7)
+    SPEED_Q = df["speed_abs"].quantile(0.7)
+    IMPEDANCE_Q = df["impedance"].quantile(0.7)
+
+    df.loc[need_update, "market_phase"] = 0
+
+    mask_inertia_core = (
+        (df["z_dist"].abs() < Z_CORE)
+        & (df["force_abs"] > FORCE_Q)
+        & (df["speed_abs"] < SPEED_Q)
+    )
+
+    df.loc[mask_inertia_core, "market_phase"] = 1
+
+    mask_exhaustion_push = (
+        (df["z_dist"].abs() >= Z_EXHAUST)
+        & (df["force_abs"] > FORCE_Q)
+        & (df["impedance"] > IMPEDANCE_Q)
+    )
+
+    df.loc[mask_exhaustion_push, "market_phase"] = -1
+
+    mask_vacuum_break = (
+        (df["z_dist"].abs() >= Z_EXHAUST)
+        & (df["speed_abs"] > SPEED_Q)
+        & (df["force_abs"] <= FORCE_Q)
+    )
+
+    df.loc[mask_vacuum_break, "market_phase"] = 2
+    return df
+
+
 if __name__ == "__main__":
     # =========================================================
     # Simple sanity test for MOSAIC
