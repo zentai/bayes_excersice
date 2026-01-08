@@ -167,6 +167,7 @@ class HuntingStory:
                 print(self.hunter[target_key].review_mission(self.base_df))
         if "statement_to_csv" in self.params.debug_mode:
             csv_path = f"{config.reports_dir}/{self.params}.csv"
+            self.base_df["symbol"] = self.params.symbol.name
             self.base_df[self.report_cols].to_csv(csv_path, index=False)
             print(f"CSV created: {csv_path}")
 

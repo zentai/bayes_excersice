@@ -40,6 +40,8 @@ def _row_to_payload(idx, row: pd.Series) -> dict:
         "Date": date_str,
         "Close": float(_get("Close", 0.0)),
         "m_force": float(_get("m_force", 0.0)),
+        "m_force_trend": float(_get("m_force_trend", 0.0)),
+        "m_pt_speed": float(_get("m_pt_speed", 0.0)),
         "m_regime_noise_level": float(_get("m_regime_noise_level", 0)),
         "hmm_signal": int(_get("hmm_signal", 0)),
         "bocpd_cp_prob": float(_get("bocpd_cp_prob", 0.0)),

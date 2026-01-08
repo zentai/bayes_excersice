@@ -197,6 +197,14 @@
       }
     );
 
+    regimeChart.applyOptions({
+      handleScroll: false,
+      handleScale: false,
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Hidden,
+      },
+    });
+
     const forceChart = LightweightCharts.createChart(
       document.getElementById("force_chart"),
       {
@@ -212,6 +220,25 @@
       }
     );
 
+    forceChart.applyOptions({
+      handleScroll: false,
+      handleScale: false,
+    });
+
+    forceChart.priceScale('left').applyOptions({
+      scaleMargins: {
+        top: 0.15,
+        bottom: 0.15,
+      },
+    });
+
+    forceChart.priceScale('right').applyOptions({
+      scaleMargins: {
+        top: 0.15,
+        bottom: 0.15,
+      },
+    });
+
     const closeSeries = closeChart.addLineSeries({
       color: "rgba(96, 165, 250, 1)",
       lineWidth: 2,
@@ -224,15 +251,45 @@
 
     // m_force histogram
     const forceSeries = forceChart.addHistogramSeries({
+      priceScaleId: "left",
       base: 0,
     });
 
+    const ptSpeedSeries = forceChart.addHistogramSeries({
+      priceScaleId: "right",
+      base: 0,
+    });
+
+    const forceTrendSeries = forceChart.addLineSeries({
+      priceScaleId: "right",
+      color: "rgba(96, 165, 250, 1)", // 藍線
+      lineWidth: 2,
+    });
+
+    // closeChart.timeScale().fitContent();
+    // const range = closeChart.timeScale().getVisibleLogicalRange();
+    // regimeChart.timeScale().setVisibleLogicalRange(range);
+    // forceChart.timeScale().setVisibleLogicalRange(range);
+    syncFromMaster(closeChart, [regimeChart, forceChart]);
+
     let closeData = [];
     let forceData = [];
+    let ptSpeedData = [];
+    let forceTrendData = [];
     let regimeData = [];
     let orderMarkers = [];
     let rawLogs = [];
     let firstApply = true;
+
+    function syncFromMaster(masterChart, slaveCharts) {
+      masterChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (!range) return;
+        slaveCharts.forEach(c => {
+          c.timeScale().setVisibleLogicalRange(range);
+        });
+      });
+    }
+
 
     function buildTopic(symbol, interval) {
       console.log(`mkt/${symbol.toLowerCase()}/${interval}/k_channel`)
@@ -293,12 +350,16 @@
     function resetData() {
       closeData = [];
       forceData = [];
+      ptSpeedData = [];
+      forceTrendData = [];
       regimeData = [];
       orderMarkers = [];
       firstApply = true;
 
       closeSeries.setData([]);
       forceSeries.setData([]);
+      ptSpeedSeries.setData([]);
+      forceTrendSeries.setData([]);
       regimeSeries.setData([]);
       closeSeries.setMarkers([]);
       rawLogs = [];
@@ -314,6 +375,8 @@
       const cp_prob = row.bocpd_cp_prob ?? 0.0;
       const risk = row.bocpd_risk ?? 0.0;
       const order = row.order || null;
+      const m_pt_speed = Number(row.m_pt_speed);
+      const m_force_trend = Number(row.m_force_trend);
 
       // ring buffer
       if (closeData.length >= MAX_POINTS) {
@@ -342,6 +405,21 @@
         regimeColor = "rgba(248, 113, 113, 0.9)"; // down
       }
       regimeData.push({ time: t, value: regime, color: regimeColor });
+
+      const speedColor = m_pt_speed >= 0
+        ? "rgba(34, 197, 94, 0.8)"
+        : "rgba(239, 68, 68, 0.8)";
+
+      ptSpeedData.push({
+        time: t,
+        value: m_pt_speed,
+        color: speedColor,
+      });
+
+      forceTrendData.push({
+        time: t,
+        value: m_force_trend,
+      });
 
       // Buy/Sell markers
       if (order && order.side) {
@@ -377,6 +455,8 @@
     function applyDataToSeries(isInitial = false) {
       closeSeries.setData(closeData);
       forceSeries.setData(forceData);
+      ptSpeedSeries.setData(ptSpeedData);
+      forceTrendSeries.setData(forceTrendData);
       regimeSeries.setData(regimeData);
       closeSeries.setMarkers(orderMarkers);
 
