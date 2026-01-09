@@ -303,66 +303,81 @@ class TurtleScout(IStrategyScout):
 
     def _prepare_trend_hmm_features(self, df: pd.DataFrame) -> np.ndarray:
         """
-        HMM 特徵工程（V4 行為 + 結構 + 趨勢方向版）
+        Trend-HMM feature set
+        目的：描述「價格是否容易被推動（低阻力）」而非方向預測
 
-        結構類：
-            - trend_norm      : 趨勢強弱（Kalman - EMA_long）/ ATR
-            - TR_norm         : 波動強弱（ATR / ATR均值）的 log 比
-            - slope_norm      : Kalman 斜率 / ATR（真正的趨勢方向）
-
-        行為類：
-            - RCS             : Resonance Consensus Strength（共識強度）
-            - dd_proxy        : 價格自身推得的局部回撤比例
+        使用的核心概念：
+        1. mobility level        : 價格速度 / 推動力（阻力倒數）
+        2. mobility persistence  : 低阻力是否持續存在
+        3. regime stability      : 當前 regime 的噪音穩定度
         """
-        print(f"Working with Trend HMM Feature")
+
         ATR_sample = self.params.ATR_sample
         ZERO = 1e-9
 
-        # ========== 行為因子（RCS） ==========
-        _momentum_factor = (df.High - df.Close) / (df.TR + ZERO)
-        _res_strength = df.TR * df.Vol * _momentum_factor
+        # -------------------------------------------------
+        # 1) 即時 mobility proxy（阻力倒數）
+        #    price speed / force trend
+        # -------------------------------------------------
+        mobility_raw = df["m_pt_speed"].abs() / (df["m_force_trend"].abs() + ZERO)
+        mobility_raw = mobility_raw.replace([np.inf, -np.inf], np.nan).bfill()
 
-        _consensus_strength = (df.Kalman / df.Close).clip(0.1, 10) * df.Vol
-        _consensus_norm = (
-            _consensus_strength / _consensus_strength.rolling(window=ATR_sample).mean()
+        # -------------------------------------------------
+        # 2) mobility level（阻力水位）
+        #    rolling median = robust online estimate
+        # -------------------------------------------------
+        price_mobility_level = (
+            mobility_raw.rolling(window=ATR_sample, min_periods=ATR_sample)
+            .median()
+            .ffill()
         )
 
-        df["RCS"] = _res_strength * _consensus_norm
+        # -------------------------------------------------
+        # 3) 高 mobility 狀態（低阻力區）
+        #    用 rolling quantile 而非固定 threshold
+        # -------------------------------------------------
+        rolling_q = price_mobility_level.rolling(
+            window=ATR_sample, min_periods=ATR_sample
+        ).quantile(0.6)
 
-        # === EMA（保留，雖然目前沒直接用在 score）===
-        idx = df.ema_short.isna()
-        df.loc[idx, "ema_short"] = df.Close.ewm(span=5, adjust=False).mean()
-        df.loc[idx, "ema_long"] = df.Close.ewm(span=60, adjust=False).mean()
+        high_mobility_flag = price_mobility_level > rolling_q
 
-        # ========== 結構因子 ==========
-        # 趨勢強弱（Kalman - EMA_long）
-        df["trend"] = df.Kalman - df["ema_long"]
-        df["trend_norm"] = df.trend / (df.ATR + ZERO)
-
-        # 波動強弱（ATR 相對於自身歷史均值）
-        df["TR_norm"] = np.log(
-            df.ATR + ZERO / (df.ATR.rolling(window=ATR_sample).mean() + ZERO)
+        # -------------------------------------------------
+        # 4) mobility persistence
+        #    低阻力是否「持續存在」，避免 single-bar noise
+        # -------------------------------------------------
+        mobility_persistence = (
+            high_mobility_flag.rolling(window=ATR_sample, min_periods=ATR_sample)
+            .mean()
+            .ffill()
         )
 
-        # **新增：趨勢方向（Kalman 斜率）**
-        df["slope_norm"] = df.m_pt_speed.diff() / (df.ATR + ZERO)
+        # -------------------------------------------------
+        # 5) regime stability
+        #    來自 cycle / regime 模組的噪音指標
+        # -------------------------------------------------
+        regime_stability = df["m_regime_noise_level"].ffill()
 
-        # ========== 新增：趨勢持續性 / 偏態 / 回撤 Proxy ==========
-        # 3) 局部 Drawdown proxy
-        roll_max = df["Close"].cummax()
-        df["dd_proxy"] = (roll_max - df["Close"]) / (roll_max + ZERO)
+        # -------------------------------------------------
+        # 6) 組合特徵（不做 normalization，交給 HMM）
+        # -------------------------------------------------
+        features = np.column_stack(
+            [
+                price_mobility_level.values,
+                mobility_persistence.values,
+                regime_stability.values,
+            ]
+        )
 
-        # --- Final features ---
-        features = [
-            "trend_norm",
-            "slope_norm",
-            "RCS",
-            "TR_norm",
-            "dd_proxy",
-        ]
+        # safety
+        features = np.nan_to_num(
+            features,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
 
-        df[features] = df[features].fillna(method="bfill").fillna(method="ffill")
-        return df[features].values
+        return features
 
     def select_profitable_states(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -638,30 +653,72 @@ def emv_cross_strategy(df, params, short_windows=5, long_windws=60):
     return (df.Kalman > df.ema_short) & (df.ema_short > df.ema_long)
 
 
-def buy_signal_from_mosaic_strategy(df: pd.DataFrame, params) -> pd.DataFrame:
+def buy_signal_from_mosaic_strategy(
+    df: pd.DataFrame,
+    params,
+) -> pd.DataFrame:
+    """
+    BuySignal（Entry timing）
+    設計原則：
+    - 不預測方向，只確認「是否值得嘗試進場」
+    - 與 HMM 解耦（HMM 決定 regime，這裡只看當下結構）
+    """
 
+    df = df.copy()
+
+    # 只填一次，避免重覆覆蓋
     mask = df["BuySignal"].isna()
 
-    # === A) 感知市場換擋 ===
-    noise_up = df["m_regime_noise_level"].diff() > 0.6
-    noise_drop = df["m_regime_noise_level"] < 2.0
+    # =====================================================
+    # A) 結構條件：市場是否「順著推」
+    # =====================================================
 
-    # === B) 力量確認 ===
-    trend_ok = df["m_force_trend"].rolling(3).mean() > 0
+    # force trend 必須為正（但用 rolling mean，避免單點噪音）
+    trend_ok = df["m_force_trend"].rolling(3, min_periods=3).mean() > 0
+
+    # bias 是結構傾向（不是速度）
     bias_ok = df["m_force_bias"] > 0
 
-    # === C) 價格確認 ===
-    # 近7根新高視為突破
-    price_up = df["Close"] > df["Close"].rolling(7).max().shift(1)
+    # =====================================================
+    # B) 價格確認：不是亂拉
+    # =====================================================
 
-    # Phase Shift → Confirm → Entry
-    # buy_cond = (
-    #     noise_up.shift(1).fillna(False) & noise_drop & trend_ok & bias_ok & price_up
-    # )
-    buy_cond = noise_drop & trend_ok & bias_ok & price_up
+    # 突破近端高點（不看未來）
+    price_up = df["Close"] > df["Close"].rolling(7, min_periods=7).max().shift(1)
+
+    # =====================================================
+    # C) 噪音過濾（避免假突破）
+    # =====================================================
+
+    # regime noise 必須在可接受範圍
+    noise_threshold = (
+        df["m_regime_noise_level"]
+        .rolling(window=params.ATR_sample, min_periods=params.ATR_sample)
+        .quantile(0.7)
+    )
+
+    noise_ok = df["m_regime_noise_level"] < noise_threshold
+
+    # =====================================================
+    # 最終 Buy 條件
+    # =====================================================
+
+    buy_cond = trend_ok & bias_ok & price_up & noise_ok
 
     df.loc[mask & buy_cond, "BuySignal"] = 1
     df.loc[mask & ~buy_cond, "BuySignal"] = 0
+
+    # =====================================================
+    # BuySignal Type（可選，用來 debug）
+    # =====================================================
+
+    df["BuySignal_type"] = 0
+
+    df.loc[mask & buy_cond & price_up, "BuySignal_type"] = 1  # 結構確認突破
+
+    df.loc[mask & buy_cond & ~price_up, "BuySignal_type"] = (
+        2  # 結構 OK，但價格未完全確認（保留）
+    )
 
     return df
 

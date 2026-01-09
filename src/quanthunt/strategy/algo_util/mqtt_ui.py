@@ -47,7 +47,6 @@ def _row_to_payload(idx, row: pd.Series) -> dict:
         "bocpd_cp_prob": float(_get("bocpd_cp_prob", 0.0)),
         "bocpd_risk": float(_get("bocpd_risk", 0.0)),
     }
-    print(payload)
 
     order_val: Optional[object] = "Buy" if _get("BuySignal", None) else None
     if isinstance(order_val, dict):
@@ -70,7 +69,6 @@ def publish_update(symbol: str, interval: str, row: pd.Series):
         row     : DataFrame 的單一 row（含 Date index）
     """
     topic = _build_topic(symbol, interval)
-    print(topic)
     payload = _row_to_payload(row.name, row)
 
     publish.single(
