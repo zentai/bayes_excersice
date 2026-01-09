@@ -49,6 +49,8 @@ def _row_to_payload(idx, row: pd.Series) -> dict:
     }
 
     order_val: Optional[object] = "Buy" if _get("BuySignal", None) else None
+    if _get("ShortSignal", None):
+        order_val = "Short"
     if isinstance(order_val, dict):
         payload["order"] = order_val
     elif isinstance(order_val, str) and order_val:

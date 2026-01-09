@@ -424,7 +424,7 @@
       // Buy/Sell markers
       if (order && order.side) {
         const side = String(order.side).toUpperCase();
-        if (side === "BUY" || side === "SELL") {
+        if (side === "BUY" || side === "SHORT") {
           orderMarkers.push({
             time: t,
             position: side === "BUY" ? "belowBar" : "aboveBar",

@@ -16,6 +16,20 @@ def clip01(x: float) -> float:
     return float(np.clip(x, 0.0, 1.0))
 
 
+def compute_hazard_eff(
+    base_hazard: float,
+    surp_ewma: float,
+    k: float = 1.5,
+    cap: float = 5.0,
+):
+    """
+    世界越怪，我越預期可能變盤
+    """
+    scale = 1.0 + k * max(0.0, surp_ewma - 1.0)
+    scale = min(scale, cap)
+    return base_hazard * scale
+
+
 @dataclass(frozen=True)
 class BOCPDOutputs:
     cp_prob: float
@@ -531,10 +545,26 @@ class DualBOCPDWrapper:
         ):
             out_g0, out_p1 = self._last_out_g0, self._last_out_p1
             phase = 4
+            print(
+                f"[BOCPD] idx={idx} FREEZE phase4 -> reuse last outputs (cp={self._last_out_g0.cp_prob:.6f}) x={x:.4f}"
+            )
         else:
             out_g0, out_p1 = self.dual.update(x)
             phase = self.fsm.update(out_g0, out_p1, hazard_g0=self.dual.g0.hazard)
             self._last_out_g0, self._last_out_p1 = out_g0, out_p1
+
+        # debug
+        cp = out_g0.cp_prob
+        hz = self.dual.g0.hazard
+        print(
+            f"[BOCPD] idx={idx} phase={phase} x={x:.4f} cp={cp:.6f} hazard={hz:.6f} cp_excess={self.fsm._cp_excess(
+            out_g0.cp_prob, self.dual.g0.hazard, out_g0.surprise_ewma
+        ):.3f} surpEWMA={out_g0.surprise_ewma:.3f} runMean={out_g0.run_length_mean:.1f} runMode={out_g0.run_length_mode}"
+        )
+        if int(idx) % 200 == 0:
+            print(
+                f"[BOCPD] idx={idx} x={x:.4f} (check scale) z_clip={self.dual.g0.z_clip} ewma_a={self.dual.g0.ewma_alpha}"
+            )
 
         # write snapshot
         df.at[idx, "bocpd_phase"] = phase
@@ -548,8 +578,8 @@ class DualBOCPDWrapper:
         df.at[idx, "bocpd_shock"] = out_p1.shock_score
 
         df.at[idx, "bocpd_surpEWMA"] = out_g0.surprise_ewma
-        df.at[idx, "bocpd_cp_excess"] = float(out_g0.cp_prob) / max(
-            self.dual.g0.hazard, 1e-12
+        df.at[idx, "bocpd_cp_excess"] = self.fsm._cp_excess(
+            out_g0.cp_prob, self.dual.g0.hazard, out_g0.surprise_ewma
         )
 
     def run_online(self, df):
@@ -557,6 +587,18 @@ class DualBOCPDWrapper:
         Convenience: run from first to last row once.
         Assumes df grows over time; safe for backfill.
         """
+        # Debug
+        print(
+            "[BOCPD] start run_online",
+            "fsm_t=",
+            self.fsm._t,
+            "fsm_phase=",
+            self.fsm.phase,
+            "g0_t=",
+            self.dual.g0._t,
+            "lenR=",
+            len(self.dual.g0.log_R),
+        )
         for idx in df.index:
             self.update_df_row(df, idx)
 
@@ -615,9 +657,13 @@ class BOCPDPhaseFSM:
         # reset mode state
         self._in_reset_cooldown = 0
 
-    def _cp_excess(self, cp_prob: float, hazard: float) -> float:
-        hazard = max(float(hazard), 1e-12)
-        return float(cp_prob) / hazard
+    def _cp_excess(self, cp_prob, hazard, surprise_ewma):
+        # base = cp_prob / max(hazard, 1e-12)
+        # boost = np.exp(surprise_ewma - 1.0)  # 1.0 是你可調的「正常驚訝度」
+        # return base * boost
+        alpha = 2.0
+        s0 = 1.0
+        return cp_prob * (1.0 + alpha * max(0.0, surprise_ewma - s0))
 
     def update(self, out_g0, out_p1, hazard_g0: float) -> int:
         """
@@ -661,7 +707,12 @@ class BOCPDPhaseFSM:
             self.phase = 2
 
         # ---- G0 drives Pre-CP / Confirmed CP ----
-        cp_excess = self._cp_excess(out_g0.cp_prob, hazard_g0)
+        hazard_eff = compute_hazard_eff(
+            base_hazard=hazard_g0,
+            surp_ewma=out_g0.surprise_ewma,
+            k=1.5,
+        )
+        cp_excess = self._cp_excess(out_g0.cp_prob, hazard_eff, out_g0.surprise_ewma)
 
         # Optional: require "stress" evidence besides cp_excess
         stress_pre = True

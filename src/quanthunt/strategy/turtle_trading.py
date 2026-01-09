@@ -51,6 +51,7 @@ TURTLE_COLUMNS = [
     "time_cost",
     "Matured",
     "BuySignal",
+    "ShortSignal",
     "P/L",
     "ema_short",
     "ema_long",
@@ -543,6 +544,9 @@ class TurtleScout(IStrategyScout):
         calc_df.loc[s_buy, "BuySignal"] = self.buy_signal_func(calc_df, self.params)[
             s_buy
         ]
+        calc_df.loc[s_buy, "ShortSignal"] = short_signal_from_mosaic_strategy(
+            calc_df, self.params
+        )[s_buy]
 
         # 卖出信号：满足已有买入信号且当日 Low 小于 exit_price 的情况
         s_sell = calc_df.buy.notna() & (calc_df.Kalman < calc_df.exit_price)
@@ -717,6 +721,75 @@ def buy_signal_from_mosaic_strategy(
     df.loc[mask & buy_cond & price_up, "BuySignal_type"] = 1  # 結構確認突破
 
     df.loc[mask & buy_cond & ~price_up, "BuySignal_type"] = (
+        2  # 結構 OK，但價格未完全確認（保留）
+    )
+
+    return df
+
+
+def short_signal_from_mosaic_strategy(
+    df: pd.DataFrame,
+    params,
+) -> pd.DataFrame:
+    """
+    ShortSignal（做空 Entry timing）
+    設計原則：
+    - 不預測方向，只確認「是否值得嘗試做空」
+    - 與 HMM 解耦（HMM 決定 regime，這裡只看當下結構）
+    """
+
+    df = df.copy()
+
+    # 只填一次，避免重覆覆蓋
+    mask = df["ShortSignal"].isna()
+
+    # =====================================================
+    # A) 結構條件：市場是否「被往下壓」
+    # =====================================================
+
+    # force trend 必須為負（rolling mean 抑制單點噪音）
+    trend_ok = df["m_force_trend"].rolling(3, min_periods=3).mean() < 0
+
+    # bias 是結構傾向（不是速度）
+    bias_ok = df["m_force_bias"] < 0
+
+    # =====================================================
+    # B) 價格確認：不是假跌
+    # =====================================================
+
+    # 跌破近端低點（不看未來）
+    price_down = df["Close"] < df["Close"].rolling(7, min_periods=7).min().shift(1)
+
+    # =====================================================
+    # C) 噪音過濾（避免假跌破）
+    # =====================================================
+
+    noise_threshold = (
+        df["m_regime_noise_level"]
+        .rolling(window=params.ATR_sample, min_periods=params.ATR_sample)
+        .quantile(0.7)
+    )
+
+    noise_ok = df["m_regime_noise_level"] < noise_threshold
+
+    # =====================================================
+    # 最終 Short 條件
+    # =====================================================
+
+    short_cond = trend_ok & bias_ok & price_down & noise_ok
+
+    df.loc[mask & short_cond, "ShortSignal"] = 1
+    df.loc[mask & ~short_cond, "ShortSignal"] = 0
+
+    # =====================================================
+    # ShortSignal Type（debug 用）
+    # =====================================================
+
+    df["ShortSignal_type"] = 0
+
+    df.loc[mask & short_cond & price_down, "ShortSignal_type"] = 1  # 結構確認跌破
+
+    df.loc[mask & short_cond & ~price_down, "ShortSignal_type"] = (
         2  # 結構 OK，但價格未完全確認（保留）
     )
 
