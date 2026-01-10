@@ -92,6 +92,8 @@ TURTLE_COLUMNS = [
     "bocpd_risk",
     "bocpd_tail",
     "bocpd_shock",
+    "bocpd_surpEWMA",
+    "bocpd_cp_excess",
 ]
 
 

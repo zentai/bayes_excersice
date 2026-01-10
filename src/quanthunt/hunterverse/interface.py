@@ -201,7 +201,7 @@ DEBUG_COL = [
     # "loss_margin",
     # "Kalman",
     # "HMM_State",
-    "HMM_Epoch",
+    # "HMM_Epoch",
     "HMM_Signal",
     # MOSAIC model
     "m_pc",
@@ -214,19 +214,21 @@ DEBUG_COL = [
     # "m_z_force",
     # "m_z_mix",
     "m_regime_noise_level",
-    "c_center",
-    "c_width",
-    "c_upper",
-    "c_lower",
+    # "c_center",
+    # "c_width",
+    # "c_upper",
+    # "c_lower",
     # "c_z_center",
     # BOCPD
-    "bocpd_phase",
+    # "bocpd_phase",
     "bocpd_cp_prob",
     # "bocpd_runlen_mean",
-    "bocpd_runlen_mode",
+    # "bocpd_runlen_mode",
     # "bocpd_risk",
     # "bocpd_tail",
     # "bocpd_shock",
+    "bocpd_surpEWMA",
+    "bocpd_cp_excess",
 ]
 
 DUMP_COL = [
@@ -290,5 +292,7 @@ DUMP_COL = [
     "bocpd_risk",
     "bocpd_tail",
     "bocpd_shock",
+    "bocpd_surpEWMA",
+    "bocpd_cp_excess",
     "symbol",
 ]

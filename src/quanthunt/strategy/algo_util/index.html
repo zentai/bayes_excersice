@@ -162,6 +162,7 @@
 
     let currentTopic = null;
     let client = mqtt.connect(MQTT_URL);
+    let lastTime = null; // 幂等去重用
 
     // Chart setup
     const closeChart = LightweightCharts.createChart(
@@ -174,8 +175,24 @@
           vertLines: { color: "#111827" },
           horzLines: { color: "#111827" },
         },
-        timeScale: { borderColor: "#1f2937" },
+        timeScale: {
+          borderColor: "#1f2937",
+          timeVisible: true,      // ← 顯示 HH:mm
+          secondsVisible: false, // ← 1m / 5m / 15m 用 false
+        },
         rightPriceScale: { borderColor: "#1f2937" },
+        localization: {
+          timeFormatter: (timestamp) => {
+            const d = new Date(timestamp * 1000);
+            return d.toLocaleString("zh-TW", {
+              hour12: false,
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+          },
+        },
       }
     );
 
@@ -189,10 +206,26 @@
           vertLines: { color: "#111827" },
           horzLines: { color: "#111827" },
         },
-        timeScale: { borderColor: "#1f2937" },
+        timeScale: {
+          borderColor: "#1f2937",
+          timeVisible: true,      // ← 顯示 HH:mm
+          secondsVisible: false, // ← 1m / 5m / 15m 用 false
+        },
         rightPriceScale: {
           borderColor: "#1f2937",
           visible: false,
+        },
+        localization: {
+          timeFormatter: (timestamp) => {
+            const d = new Date(timestamp * 1000);
+            return d.toLocaleString("zh-TW", {
+              hour12: false,
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+          },
         },
       }
     );
@@ -215,8 +248,24 @@
           vertLines: { color: "#111827" },
           horzLines: { color: "#111827" },
         },
-        timeScale: { borderColor: "#1f2937" },
+        timeScale: {
+          borderColor: "#1f2937",
+          timeVisible: true,      // ← 顯示 HH:mm
+          secondsVisible: false, // ← 1m / 5m / 15m 用 false
+        },
         rightPriceScale: { borderColor: "#1f2937" },
+        localization: {
+          timeFormatter: (timestamp) => {
+            const d = new Date(timestamp * 1000);
+            return d.toLocaleString("zh-TW", {
+              hour12: false,
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+          },
+        },
       }
     );
 
@@ -369,88 +418,93 @@
 
     function pushPoint(row) {
       const t = dateToUnixSeconds(row.Date);
+
+      // =====================
+      // 1) 幂等去重（防 MQTT 重送）
+      // =====================
+      if (lastTime !== null && t <= lastTime) {
+        return;
+      }
+      lastTime = t;
+
       const close = Number(row.Close);
       const m_force = Number(row.m_force);
       const regime = row.m_regime_noise_level ?? 0;
-      const cp_prob = row.bocpd_cp_prob ?? 0.0;
       const risk = row.bocpd_risk ?? 0.0;
       const order = row.order || null;
       const m_pt_speed = Number(row.m_pt_speed);
       const m_force_trend = Number(row.m_force_trend);
 
-      // ring buffer
-      if (closeData.length >= MAX_POINTS) {
-        const removed = closeData.length - MAX_POINTS + 1;
-        closeData = closeData.slice(removed);
-        forceData = forceData.slice(removed);
-        regimeData = regimeData.slice(removed);
-        const cutoffTime = closeData[0].time;
-        orderMarkers = orderMarkers.filter(m => m.time >= cutoffTime);
-      }
-
-      // Close
+      // =====================
+      // 2) append（先加）
+      // =====================
       closeData.push({ time: t, value: close });
 
-      // m_force
-      const forceColor = m_force >= 0
-        ? "rgba(52, 211, 153, 0.8)"
-        : "rgba(248, 113, 113, 0.8)";
+      const forceColor =
+        m_force >= 0
+          ? "rgba(52, 211, 153, 0.8)"
+          : "rgba(248, 113, 113, 0.8)";
       forceData.push({ time: t, value: m_force, color: forceColor });
 
-      // Regime strip：單純多/空/中性
-      let regimeColor = "rgba(148, 163, 184, 0.8)"; // neutral
-      if (regime > 1.15) {
-        regimeColor = "rgba(34, 197, 94, 0.8)";   // up
-      } else if (regime < 0) {
-        regimeColor = "rgba(248, 113, 113, 0.9)"; // down
-      }
+      const speedColor =
+        m_pt_speed >= 0
+          ? "rgba(34, 197, 94, 0.8)"
+          : "rgba(239, 68, 68, 0.8)";
+      ptSpeedData.push({ time: t, value: m_pt_speed, color: speedColor });
+
+      forceTrendData.push({ time: t, value: m_force_trend });
+
+      let regimeColor = "rgba(148, 163, 184, 0.8)";
+      if (regime > 1.15) regimeColor = "rgba(34, 197, 94, 0.8)";
+      else if (regime < 0) regimeColor = "rgba(248, 113, 113, 0.9)";
       regimeData.push({ time: t, value: regime, color: regimeColor });
 
-      const speedColor = m_pt_speed >= 0
-        ? "rgba(34, 197, 94, 0.8)"
-        : "rgba(239, 68, 68, 0.8)";
+      // =====================
+      // 3) 裁切（再砍）
+      // =====================
+      if (closeData.length > MAX_POINTS) {
+        closeData = closeData.slice(-MAX_POINTS);
+        forceData = forceData.slice(-MAX_POINTS);
+        ptSpeedData = ptSpeedData.slice(-MAX_POINTS);
+        forceTrendData = forceTrendData.slice(-MAX_POINTS);
+        regimeData = regimeData.slice(-MAX_POINTS);
 
-      ptSpeedData.push({
-        time: t,
-        value: m_pt_speed,
-        color: speedColor,
-      });
+        const minTime = closeData[0].time;
+        orderMarkers = orderMarkers.filter(m => m.time >= minTime);
+      }
 
-      forceTrendData.push({
-        time: t,
-        value: m_force_trend,
-      });
-
-      // Buy/Sell markers
+      // =====================
+      // 4) markers
+      // =====================
       if (order && order.side) {
         const side = String(order.side).toUpperCase();
         if (side === "BUY" || side === "SHORT") {
           orderMarkers.push({
             time: t,
             position: side === "BUY" ? "belowBar" : "aboveBar",
-            color: side === "BUY"
-              ? "rgba(34, 197, 94, 1)"
-              : "rgba(239, 68, 68, 1)",
+            color:
+              side === "BUY"
+                ? "rgba(34, 197, 94, 1)"
+                : "rgba(239, 68, 68, 1)",
             shape: side === "BUY" ? "arrowUp" : "arrowDown",
             text: side === "BUY" ? "B" : "S",
           });
         }
       }
 
-      // risk light
-      updateRiskLight(risk);
+      // =====================
+      // 5) streaming 更新（⚠️关键）
+      // =====================
+      closeSeries.update({ time: t, value: close });
+      forceSeries.update({ time: t, value: m_force, color: forceColor });
+      ptSpeedSeries.update({ time: t, value: m_pt_speed, color: speedColor });
+      forceTrendSeries.update({ time: t, value: m_force_trend });
+      regimeSeries.update({ time: t, value: regime, color: regimeColor });
+      closeSeries.setMarkers(orderMarkers);
 
-      // log
-      appendRawLog({
-        Date: row.Date,
-        Close: close,
-        m_force: m_force,
-        regime: regime,
-        cp_prob: cp_prob,
-        risk: risk,
-        order: order,
-      });
+      updateRiskLight(risk);
     }
+
 
     function applyDataToSeries(isInitial = false) {
       closeSeries.setData(closeData);
@@ -518,16 +572,84 @@
 
       const data = JSON.parse(message.toString());
 
+      // ========= batch =========
       if (data.batch && Array.isArray(data.rows)) {
-        data.rows.forEach(row => pushPoint(row));
-        applyDataToSeries(true);
+        resetData();
+
+        data.rows.forEach(row => {
+          const t = dateToUnixSeconds(row.Date);
+          lastTime = t;
+
+          const close = Number(row.Close);
+          const m_force = Number(row.m_force);
+          const m_pt_speed = Number(row.m_pt_speed);
+          const m_force_trend = Number(row.m_force_trend);
+          const regime = row.m_regime_noise_level ?? 0;
+          const order = row.order || null;
+
+          // close
+          closeData.push({ time: t, value: close });
+
+          // m_force
+          const forceColor =
+            m_force >= 0
+              ? "rgba(52, 211, 153, 0.8)"
+              : "rgba(248, 113, 113, 0.8)";
+          forceData.push({ time: t, value: m_force, color: forceColor });
+
+          // pt speed
+          const speedColor =
+            m_pt_speed >= 0
+              ? "rgba(34, 197, 94, 0.8)"
+              : "rgba(239, 68, 68, 0.8)";
+          ptSpeedData.push({ time: t, value: m_pt_speed, color: speedColor });
+
+          // force trend
+          forceTrendData.push({ time: t, value: m_force_trend });
+
+          // regime
+          let regimeColor = "rgba(148, 163, 184, 0.8)";
+          if (regime > 1.15) regimeColor = "rgba(34, 197, 94, 0.8)";
+          else if (regime < 0) regimeColor = "rgba(248, 113, 113, 0.9)";
+          regimeData.push({ time: t, value: regime, color: regimeColor });
+
+          // markers
+          if (order && order.side) {
+            const side = String(order.side).toUpperCase();
+            if (side === "BUY" || side === "SHORT") {
+              orderMarkers.push({
+                time: t,
+                position: side === "BUY" ? "belowBar" : "aboveBar",
+                color:
+                  side === "BUY"
+                    ? "rgba(34, 197, 94, 1)"
+                    : "rgba(239, 68, 68, 1)",
+                shape: side === "BUY" ? "arrowUp" : "arrowDown",
+                text: side === "BUY" ? "B" : "S",
+              });
+            }
+          }
+        });
+
+        // 一次性灌入（完整语义）
+        closeSeries.setData(closeData);
+        forceSeries.setData(forceData);
+        ptSpeedSeries.setData(ptSpeedData);
+        forceTrendSeries.setData(forceTrendData);
+        regimeSeries.setData(regimeData);
+        closeSeries.setMarkers(orderMarkers);
+
+        closeChart.timeScale().fitContent();
+        regimeChart.timeScale().fitContent();
+        forceChart.timeScale().fitContent();
         return;
       }
 
-      // 單筆更新
+      // ========= realtime =========
       pushPoint(data);
-      applyDataToSeries(false);
     });
+
+
 
     function resizeCharts() {
       const width = document.body.clientWidth - 24;
