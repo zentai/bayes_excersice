@@ -545,9 +545,9 @@ class DualBOCPDWrapper:
         ):
             out_g0, out_p1 = self._last_out_g0, self._last_out_p1
             phase = 4
-            print(
-                f"[BOCPD] idx={idx} FREEZE phase4 -> reuse last outputs (cp={self._last_out_g0.cp_prob:.6f}) x={x:.4f}"
-            )
+            # print(
+            #     f"[BOCPD] idx={idx} FREEZE phase4 -> reuse last outputs (cp={self._last_out_g0.cp_prob:.6f}) x={x:.4f}"
+            # )
         else:
             out_g0, out_p1 = self.dual.update(x)
             phase = self.fsm.update(out_g0, out_p1, hazard_g0=self.dual.g0.hazard)
@@ -556,15 +556,14 @@ class DualBOCPDWrapper:
         # debug
         cp = out_g0.cp_prob
         hz = self.dual.g0.hazard
-        print(
-            f"[BOCPD] idx={idx} phase={phase} x={x:.4f} cp={cp:.6f} hazard={hz:.6f} cp_excess={self.fsm._cp_excess(
-            out_g0.cp_prob, self.dual.g0.hazard, out_g0.surprise_ewma
-        ):.3f} surpEWMA={out_g0.surprise_ewma:.3f} runMean={out_g0.run_length_mean:.1f} runMode={out_g0.run_length_mode}"
-        )
-        if int(idx) % 200 == 0:
-            print(
-                f"[BOCPD] idx={idx} x={x:.4f} (check scale) z_clip={self.dual.g0.z_clip} ewma_a={self.dual.g0.ewma_alpha}"
-            )
+        # print(
+        #     f"[BOCPD] idx={idx} phase={phase} x={x:.4f} cp={cp:.6f} hazard={hz:.6f} cp_excess={self.fsm._cp_excess(out_g0.cp_prob, self.dual.g0.hazard, out_g0.surprise_ewma):.3f} surpEWMA={out_g0.surprise_ewma:.3f} runMean={out_g0.run_length_mean:.1f} runMode={out_g0.run_length_mode}"
+        # )
+
+        # if int(idx) % 200 == 0:
+        #     print(
+        #         f"[BOCPD] idx={idx} x={x:.4f} (check scale) z_clip={self.dual.g0.z_clip} ewma_a={self.dual.g0.ewma_alpha}"
+        #     )
 
         # write snapshot
         df.at[idx, "bocpd_phase"] = phase

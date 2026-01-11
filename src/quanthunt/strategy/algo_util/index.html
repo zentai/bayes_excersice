@@ -293,6 +293,16 @@
       lineWidth: 2,
     });
 
+    const hmmBgSeries = closeChart.addAreaSeries({
+      priceScaleId: "", // ⭐ overlay，不吃價格軸
+      topColor: "rgba(59, 130, 246, 0.15)",   // 藍色背景
+      bottomColor: "rgba(59, 130, 246, 0.15)",
+      lineColor: "rgba(0,0,0,0)",
+      lineWidth: 0,
+      crosshairMarkerVisible: false,
+      lastValueVisible: false,
+    });
+
     // Regime histogram strip
     const regimeSeries = regimeChart.addHistogramSeries({
       base: 0,
@@ -322,6 +332,7 @@
     syncFromMaster(closeChart, [regimeChart, forceChart]);
 
     let closeData = [];
+    let hmmBgData = [];
     let forceData = [];
     let ptSpeedData = [];
     let forceTrendData = [];
@@ -428,6 +439,7 @@
       lastTime = t;
 
       const close = Number(row.Close);
+      const hmmSignal = Number(row.HMM_Signal ?? 0);
       const m_force = Number(row.m_force);
       const regime = row.m_regime_noise_level ?? 0;
       const risk = row.bocpd_risk ?? 0.0;
@@ -439,6 +451,23 @@
       // 2) append（先加）
       // =====================
       closeData.push({ time: t, value: close });
+
+      // 用 1 / null，当成时间遮罩
+      hmmBgData.push({
+        time: t,
+        value: hmmSignal === 1 ? 1 : null,
+      });
+
+      // 裁切要同步
+      if (hmmBgData.length > MAX_POINTS) {
+        hmmBgData = hmmBgData.slice(-MAX_POINTS);
+      }
+
+      // streaming 更新
+      hmmBgSeries.update({
+        time: t,
+        value: hmmSignal === 1 ? 1 : null,
+      });
 
       const forceColor =
         m_force >= 0
@@ -581,6 +610,7 @@
           lastTime = t;
 
           const close = Number(row.Close);
+          const hmmSignal = Number(row.HMM_Signal ?? 0);
           const m_force = Number(row.m_force);
           const m_pt_speed = Number(row.m_pt_speed);
           const m_force_trend = Number(row.m_force_trend);
@@ -590,6 +620,10 @@
           // close
           closeData.push({ time: t, value: close });
 
+          hmmBgData.push({
+            time: t,
+            value: hmmSignal === 1 ? 1 : null,
+          });
           // m_force
           const forceColor =
             m_force >= 0
@@ -633,6 +667,7 @@
 
         // 一次性灌入（完整语义）
         closeSeries.setData(closeData);
+        hmmBgSeries.setData(hmmBgData);
         forceSeries.setData(forceData);
         ptSpeedSeries.setData(ptSpeedData);
         forceTrendSeries.setData(forceTrendData);
