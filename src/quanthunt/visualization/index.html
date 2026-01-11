@@ -409,6 +409,7 @@
 
     function resetData() {
       closeData = [];
+      hmmBgData = [];
       forceData = [];
       ptSpeedData = [];
       forceTrendData = [];
@@ -417,6 +418,7 @@
       firstApply = true;
 
       closeSeries.setData([]);
+      hmmBgSeries.setData([]);
       forceSeries.setData([]);
       ptSpeedSeries.setData([]);
       forceTrendSeries.setData([]);
@@ -565,6 +567,13 @@
       statusEl.textContent = "MQTT error: " + err.message;
     });
 
+    function requestHistory(symbol, interval) {
+      const topic = `mkt/${symbol}/${interval}/request`;
+      client.publish(topic, JSON.stringify({
+        type: "sync",
+      }));
+    }
+
     function switchStream(symbol, interval) {
       const newTopic = buildTopic(symbol, interval);
       if (newTopic === currentTopic) return;
@@ -586,6 +595,7 @@
       } else {
         statusEl.textContent = "Waiting for MQTT connection...";
       }
+      requestHistory(symbol, interval)
     }
 
     symbolSelect.addEventListener("change", () => {

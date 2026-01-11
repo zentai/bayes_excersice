@@ -41,6 +41,10 @@ from quanthunt.tradingfirm.xtrader import (
     Huobi,
 )
 from quanthunt.config.core_config import config
+from quanthunt.visualization.trading_dashboard import (
+    build_mqtt_trading_dashboard,
+    TradingDashboard,
+)
 
 
 def hunter_pause(interval: str):
@@ -62,6 +66,7 @@ class HuntingStory:
     scout: IStrategyScout
     engine: IEngine
     hunter: Dict[str, IHunter]
+    dashboard: TradingDashboard
     base_df: pd.DataFrame
     debug_cols: str
     report_cols: str
@@ -133,9 +138,9 @@ class HuntingStory:
                 )
 
                 # publish_update(sym, interval, row)
-                mqtt_ui.publish_update(
-                    self.params.symbol.name, self.params.interval, self.base_df.iloc[-1]
-                )  # Send MQTT to web
+                self.dashboard.update(self.base_df)
+                self.dashboard.tick()
+
                 if is_trend_gone:
                     from huobi.connection.subscribe_client import SubscribeClient
 
@@ -222,19 +227,19 @@ def start_journey(sp):
     debug_cols = DEBUG_COL
     report_cols = DUMP_COL + sum([h.columns for h in hunter.values()], [])
 
+    mqtt_dashboard = build_mqtt_trading_dashboard(base_df, sp)
     story = HuntingStory(
         sp,
         sensor,
         scout,
         engine,
         hunter,
+        mqtt_dashboard,
         base_df,
         debug_cols=debug_cols,
         report_cols=report_cols,
     )
-    mqtt_ui.publish_sync(sp.symbol.name, sp.interval, base_df)  # Send MQTT to web
     story.setup_dispatcher()
-
     story.pub_market_sensor()
     # pub_thread = story.pub_market_sensor()
     # pub_thread.start()
