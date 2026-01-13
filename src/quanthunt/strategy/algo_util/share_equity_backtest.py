@@ -3,31 +3,36 @@ import numpy as np
 import pandas as pd
 
 # =====================
-# Config (請改成你的)
+# Config (改你的路徑/欄位)
 # =====================
 DATA_DIR = "/Users/zen/code/bayes_excersice/reports"
-OUT_DIR = "/Users/zen/code/bayes_excersice/reports/fundpool_replay"
+OUT_DIR = "/Users/zen/code/bayes_excersice/reports/fundpool_lease_replay"
 os.makedirs(OUT_DIR, exist_ok=True)
 
-# 必要欄位（依你目前檔案）
 DATE_COL = "Date"
+MATURED_COL = "Matured"
 SYMBOL_COL = "symbol"
 PROFIT_COL = "profit"
 BUY_COL = "BuySignal"
 HMM_COL = "HMM_Signal"
 
-# 候選條件：你目前最在意的 L4
+START = "2015-01-01"
+END = None  # None = 用資料最大時間
+
+# 每筆固定佔用資金
+STAKE = 100.0
+
+# 初始總資金（可調）
+INIT_CASH = 4700.0
+
+# 每個 entry time 最多嘗試採納幾筆（可調）
+K_PER_TICK = 3
+
+# 只挑 L4 候選
 CAND_COND = lambda df: (df[BUY_COL] == 1) & (df[HMM_COL] == 1)
 
-# 每天最多採納幾筆
-K_PER_DAY = 3
-
-# 回測區間（可調）
-START = "2015-01-01"
-END = None  # None = 用資料最大值
-
-# 規則用特徵（有就用，沒有就降級）
-FEATURE_PREF = ["m_regime_noise_level", "ATR"]  # 越小越好（先做 baseline）
+# 規則選擇用的特徵（越小越好，缺就降級 random）
+FEATURE_PREF = ["m_regime_noise_level", "ATR"]
 
 
 # =====================
@@ -46,64 +51,61 @@ def load_all_csv(folder):
 
 
 # =====================
-# Daily Candidate Pool
+# Prepare pool
 # =====================
-def build_candidate_pool(df: pd.DataFrame) -> pd.DataFrame:
+def build_pool(df: pd.DataFrame) -> pd.DataFrame:
     df = df.replace([np.inf, -np.inf], np.nan).copy()
 
-    # 日期
     df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors="coerce")
-    df = df.dropna(subset=[DATE_COL, SYMBOL_COL, PROFIT_COL, BUY_COL, HMM_COL])
+    df[MATURED_COL] = pd.to_datetime(df[MATURED_COL], errors="coerce")
 
-    # 篩區間
+    need = [DATE_COL, MATURED_COL, SYMBOL_COL, PROFIT_COL, BUY_COL, HMM_COL]
+    df = df.dropna(subset=need)
+
+    # 篩時間
     df = df.sort_values(DATE_COL)
     df = df[df[DATE_COL] >= pd.Timestamp(START)]
     if END is not None:
         df = df[df[DATE_COL] <= pd.Timestamp(END)]
 
-    # 候選池：符合條件的 row
+    # 只取候選池
     pool = df.loc[CAND_COND(df)].copy()
 
-    # 同一天同一 symbol 若有重複 row（例如資料重複），保留最後一筆
+    # 避免同一 entry 時刻同一 symbol 重複
     pool = pool.sort_values([DATE_COL]).drop_duplicates(
         [DATE_COL, SYMBOL_COL], keep="last"
     )
 
-    # 加上 day key
-    pool["day"] = pool[DATE_COL].dt.floor("D")
+    # 基本 sanity：exit 必須 >= entry（若有少數異常可選擇剔除）
+    pool = pool[pool[MATURED_COL] >= pool[DATE_COL]]
 
     return pool
 
 
 # =====================
-# Selection Rules
+# Selection
 # =====================
-def pick_random(day_df: pd.DataFrame, k: int, rng: np.random.Generator) -> pd.DataFrame:
-    if len(day_df) <= k:
-        return day_df
-    idx = rng.choice(day_df.index.values, size=k, replace=False)
-    return day_df.loc[idx]
+def pick_random(g: pd.DataFrame, k: int, rng: np.random.Generator) -> pd.DataFrame:
+    if len(g) <= k:
+        return g
+    idx = rng.choice(g.index.values, size=k, replace=False)
+    return g.loc[idx]
 
 
-def pick_rule(day_df: pd.DataFrame, k: int, feature_col: str) -> pd.DataFrame:
-    # 越小越好（先用 noise / ATR baseline）
-    # 若 feature 缺失太多，降級成隨機的效果（在外層處理）
-    sub = day_df.dropna(subset=[feature_col]).copy()
+def pick_rule(g: pd.DataFrame, k: int, feature_col: str) -> pd.DataFrame:
+    sub = g.dropna(subset=[feature_col]).copy()
     if sub.empty:
-        return day_df.head(0)  # 外層會 fallback
+        return g.head(0)
     sub = sub.sort_values(feature_col, ascending=True)
     return sub.head(k)
 
 
 # =====================
-# Fund Pool Replay
+# Lease-based Fund Pool Replay
 # =====================
-def replay(
-    pool: pd.DataFrame, selector: str, k_per_day: int, seed: int = 7
-) -> pd.DataFrame:
+def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int = 7):
     rng = np.random.default_rng(seed)
 
-    # 決定規則要用哪個 feature
     feature_col = None
     if selector == "rule":
         for c in FEATURE_PREF:
@@ -111,110 +113,175 @@ def replay(
                 feature_col = c
                 break
 
-    equity = 1.0
-    rows = []
+    # 事件時間軸：把所有 entry 時刻排序
+    times = pool[DATE_COL].sort_values().unique()
 
-    for day, g in pool.groupby("day", sort=True):
-        g = g.copy()
+    available_cash = float(INIT_CASH)
+    # active leases: list of dict(end, notional, profit, symbol, entry)
+    active = []
 
-        picked = None
-        if selector == "random":
-            picked = pick_random(g, k_per_day, rng)
-        elif selector == "rule":
-            if feature_col is None:
-                # 沒 feature 就退化成隨機
-                picked = pick_random(g, k_per_day, rng)
-            else:
-                picked = pick_rule(g, k_per_day, feature_col)
-                # 若因缺值導致沒選到，退化成隨機補滿
-                if len(picked) < min(k_per_day, len(g)):
-                    remain = g.drop(index=picked.index, errors="ignore")
-                    need = min(k_per_day - len(picked), len(remain))
-                    if need > 0:
-                        picked2 = pick_random(remain, need, rng)
-                        picked = pd.concat([picked, picked2], ignore_index=False)
+    records = []
+
+    # 為了快速釋放：每個時間點要釋放哪些 lease（用 dict bucket）
+    # 注意：同一個成熟時間可能有多筆 lease
+    # 這裡簡化：每次 tick 掃 active 一次（樣本大時可改 bucket）
+    for now in times:
+        now = pd.Timestamp(now)
+
+        # Phase 1: release matured leases (end <= now)
+        if active:
+            still_active = []
+            released = 0
+            released_cash = 0.0
+            for lease in active:
+                if lease["end"] <= now:
+                    payout = lease["notional"] * (1.0 + lease["profit"])
+                    available_cash += payout
+                    released += 1
+                    released_cash += payout
+                else:
+                    still_active.append(lease)
+            active = still_active
         else:
-            raise ValueError("selector must be 'random' or 'rule'")
+            released = 0
+            released_cash = 0.0
 
-        if picked is None or picked.empty:
-            # 當天不交易
-            rows.append(
+        # Phase 2: select candidates at this entry time
+        g = pool.loc[pool[DATE_COL] == now].copy()
+        n_candidates = len(g)
+
+        if n_candidates == 0:
+            equity = available_cash + sum(x["notional"] for x in active)
+            records.append(
                 {
-                    "day": day,
+                    "time": now,
                     "equity": equity,
-                    "n_candidates": len(g),
+                    "available_cash": available_cash,
+                    "active_leases": len(active),
+                    "released": released,
+                    "released_cash": released_cash,
+                    "n_candidates": 0,
                     "n_picked": 0,
-                    "day_ret": 0.0,
+                    "n_accepted": 0,
+                    "n_rejected_cash": 0,
                 }
             )
             continue
 
-        # 等權投入：當天報酬 = picked profit 平均
-        day_ret = float(np.nanmean(picked[PROFIT_COL].values))
-        equity *= 1.0 + day_ret
+        if selector == "random":
+            picked = pick_random(g, k_per_tick, rng)
+        elif selector == "rule":
+            if feature_col is None:
+                picked = pick_random(g, k_per_tick, rng)
+            else:
+                picked = pick_rule(g, k_per_tick, feature_col)
+                # 若因缺值選不滿，隨機補齊
+                need = min(k_per_tick, len(g)) - len(picked)
+                if need > 0:
+                    remain = g.drop(index=picked.index, errors="ignore")
+                    if len(remain) > 0:
+                        picked2 = pick_random(remain, min(need, len(remain)), rng)
+                        picked = pd.concat([picked, picked2], ignore_index=False)
+        else:
+            raise ValueError("selector must be 'random' or 'rule'")
 
-        rows.append(
+        n_picked = len(picked)
+        n_accepted = 0
+        n_rejected_cash = 0
+
+        # 依序嘗試採納（這裡就像 fund pool 批次裁決後逐筆 grant）
+        # 規則：每筆固定 STAKE，錢不夠就拒絕
+        for _, row in picked.sort_values(DATE_COL).iterrows():
+            if available_cash >= STAKE:
+                available_cash -= STAKE
+                active.append(
+                    {
+                        "entry": now,
+                        "end": pd.Timestamp(row[MATURED_COL]),
+                        "notional": float(STAKE),
+                        "profit": float(row[PROFIT_COL]),
+                        "symbol": row[SYMBOL_COL],
+                    }
+                )
+                n_accepted += 1
+            else:
+                n_rejected_cash += 1
+
+        # Phase 3: record equity (帳面=可用+鎖住本金；profit 等到 end 才進來)
+        equity = available_cash + sum(x["notional"] for x in active)
+        records.append(
             {
-                "day": day,
+                "time": now,
                 "equity": equity,
-                "n_candidates": int(len(g)),
-                "n_picked": int(len(picked)),
-                "day_ret": day_ret,
+                "available_cash": available_cash,
+                "active_leases": len(active),
+                "released": released,
+                "released_cash": released_cash,
+                "n_candidates": n_candidates,
+                "n_picked": n_picked,
+                "n_accepted": n_accepted,
+                "n_rejected_cash": n_rejected_cash,
             }
         )
 
-    out = pd.DataFrame(rows).sort_values("day")
-    out["drawdown"] = out["equity"] / out["equity"].cummax() - 1.0
-    return out
+    curve = pd.DataFrame(records).sort_values("time")
+
+    # Max drawdown on equity (帳面值)
+    curve["peak"] = curve["equity"].cummax()
+    curve["drawdown"] = curve["equity"] / curve["peak"] - 1.0
+    return curve, feature_col
 
 
-def summarize_curve(curve: pd.DataFrame) -> dict:
+def summarize(curve: pd.DataFrame) -> dict:
     if curve.empty:
-        return {"final_equity": 1.0, "max_dd": 0.0, "mean_day_ret": 0.0, "days": 0}
+        return {}
     return {
         "final_equity": float(curve["equity"].iloc[-1]),
         "max_dd": float(curve["drawdown"].min()),
-        "mean_day_ret": float(curve["day_ret"].mean()),
-        "days": int(len(curve)),
+        "min_cash": float(curve["available_cash"].min()),
+        "avg_active_leases": float(curve["active_leases"].mean()),
         "avg_candidates": float(curve["n_candidates"].mean()),
-        "avg_picked": float(curve["n_picked"].mean()),
+        "avg_accepted": float(curve["n_accepted"].mean()),
+        "cash_reject_rate": float((curve["n_rejected_cash"] > 0).mean()),
+        "ticks": int(len(curve)),
     }
 
 
 if __name__ == "__main__":
     df = load_all_csv(DATA_DIR)
-    pool = build_candidate_pool(df)
+    pool = build_pool(df)
 
     print(f"Pool rows (L4 candidates): {len(pool)}")
     print(f"Symbols in pool: {pool[SYMBOL_COL].nunique()}")
-    print(f"Days in pool: {pool['day'].nunique()}")
+    print(f"Time ticks in pool: {pool[DATE_COL].nunique()}")
+    print("Holding time (hours) summary:")
+    hold_hours = (pool[MATURED_COL] - pool[DATE_COL]).dt.total_seconds() / 3600.0
+    print(hold_hours.describe())
 
-    # Replay: Random baseline
-    curve_rand = replay(pool, selector="random", k_per_day=K_PER_DAY, seed=7)
-    s_rand = summarize_curve(curve_rand)
-    curve_rand.to_csv(os.path.join(OUT_DIR, "equity_random.csv"), index=False)
+    # Replay: random
+    curve_rand, feat_rand = replay_lease(
+        pool, selector="random", k_per_tick=K_PER_TICK, seed=7
+    )
+    curve_rand.to_csv(os.path.join(OUT_DIR, "equity_lease_random.csv"), index=False)
 
-    # Replay: Rule-based
-    curve_rule = replay(pool, selector="rule", k_per_day=K_PER_DAY, seed=7)
-    s_rule = summarize_curve(curve_rule)
-    curve_rule.to_csv(os.path.join(OUT_DIR, "equity_rule.csv"), index=False)
+    # Replay: rule
+    curve_rule, feat_rule = replay_lease(
+        pool, selector="rule", k_per_tick=K_PER_TICK, seed=7
+    )
+    curve_rule.to_csv(os.path.join(OUT_DIR, "equity_lease_rule.csv"), index=False)
 
-    # Summary
+    s_rand = summarize(curve_rand)
+    s_rule = summarize(curve_rule)
+
     summary = pd.DataFrame(
         [
-            {"selector": "random", **s_rand},
-            {"selector": "rule", **s_rule},
+            {"selector": "random", "rule_feature": feat_rand, **s_rand},
+            {"selector": "rule", "rule_feature": feat_rule, **s_rule},
         ]
     )
     summary.to_csv(os.path.join(OUT_DIR, "summary.csv"), index=False)
 
     print("\n=== Summary ===")
     print(summary)
-
-    # 額外：把每天候選數分佈輸出
-    daily_candidates = (
-        pool.groupby("day")[SYMBOL_COL].count().rename("n_candidates").reset_index()
-    )
-    daily_candidates.to_csv(os.path.join(OUT_DIR, "daily_candidates.csv"), index=False)
 
     print(f"\nDONE. Outputs in: {OUT_DIR}")
