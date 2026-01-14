@@ -5,7 +5,9 @@
 import numpy as np
 from dataclasses import dataclass
 from typing import Protocol, Dict, Any, Tuple, Optional
+from quanthunt.config.core_config import config
 
+ZERO = config.zero
 
 # ============================================================
 # Protocol definitions (interfaces)
@@ -313,7 +315,7 @@ class MosaicPriceAdapter:
         X_pred = F @ X
         P_pred = F @ P @ F.T + Q_t
 
-        y = np.array([np.log(float(obs_close))])
+        y = np.array([np.log(max(ZERO, float(obs_close)))])
         y_pred = H @ X_pred
         S = (H @ P_pred @ H.T).item() + R_t
         K = (P_pred @ H.T).flatten() / S
