@@ -1,5 +1,0 @@
-Time,id,symbol,type,state,filled_amount,filled_fees,filled_cash_amount,source
-2024-04-12 14:21:53.265,1045812645399186,propyusdt,buy-stop-limit,filled,6.5661,0.01116237,25.148163,api
-2024-04-12 14:25:27.098,1045812661618602,propyusdt,buy-stop-limit,filled,3.2347,0.00517552,12.421248,api
-2024-04-12 14:33:53.595,1045812737286530,propyusdt,buy-stop-limit,filled,2.6143,0.00444431,10.00701754,api
-2024-04-12 17:46:28.355,1045813978930365,propyusdt,sell-stop-limit,filled,12.3943,0.076839206508,45.19953324,api
