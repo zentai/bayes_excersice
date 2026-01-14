@@ -1727,24 +1727,11 @@ stocks_malaysia = {
     "9997.KL": "Pensonic Holdings Berhad",
 }
 
-# ===== Futures =====
-futures = {
-    "GC=F": "Gold Future",
-    "CL=F": "Crude Oil Future",
-    "HG=F": "Copper Future",
-    "ZN=F": "10Y US Treasury Note",
-    "SI=F": "Silver Future",
-    "NG=F": "Natural Gas Future",
-    "ZW=F": "Wheat Future",
-    "ZS=F": "Soybean Future",
-    "ZC=F": "Corn Future",
-    "ES=F": "S&P 500 Future",
-    "6E=F": "Euro FX Future",
-    "6J=F": "JPY FX Future",
-}
-
+# =========================
 # ===== US Stocks =====
+# =========================
 stocks_us = {
+    # --- Core Growth / Trend Amplifiers ---
     "MSFT": "Microsoft",
     "AAPL": "Apple",
     "GOOGL": "Alphabet (Google)",
@@ -1752,47 +1739,119 @@ stocks_us = {
     "AMZN": "Amazon",
     "NVDA": "NVIDIA",
     "TSLA": "Tesla",
+    # --- Financial / Rate Sensitive ---
     "JPM": "JPMorgan Chase",
     "BAC": "Bank of America",
+    # --- Defensive / Slow Trend ---
     "JNJ": "Johnson & Johnson",
     "PG": "Procter & Gamble",
+    "KO": "Coca-Cola",
+    "MCD": "McDonald's",
+    # --- Quality Tech ---
     "ADBE": "Adobe",
+    "NVO": "Novo Nordisk",
 }
 
+# =========================
 # ===== Index ETFs =====
+# =========================
 index_etfs = {
+    # --- US Core ---
     "SPY": "SPDR S&P 500 ETF",
     "VOO": "Vanguard S&P 500 ETF",
     "QQQ": "Invesco Nasdaq-100 ETF",
+    # --- Factor / High Volatility ---
+    "SPMO": "S&P 500 Momentum ETF",
+    "ARKK": "ARK Innovation ETF",
+    # --- Non-US / Regional ---
+    "EWJ": "iShares MSCI Japan ETF",
+    "EWG": "iShares MSCI Germany ETF",
+    "EEM": "iShares MSCI Emerging Markets ETF",
 }
 
+# =========================
+# ===== Bonds / Macro Anchors =====
+# =========================
+bonds_macro = {
+    "TLT": "20+ Year Treasury Bond ETF",
+    "IEF": "7-10 Year Treasury Bond ETF",
+    "SHY": "1-3 Year Treasury Bond ETF",
+    "TIP": "Treasury Inflation-Protected Securities ETF",
+    "LQD": "Investment Grade Corporate Bond ETF",
+}
+
+# =========================
+# ===== Futures / Commodities =====
+# =========================
+futures = {
+    # --- Energy ---
+    "CL=F": "Crude Oil",
+    # --- Precious Metals ---
+    "GC=F": "Gold",
+    "SI=F": "Silver",
+    # --- Industrial Metals ---
+    "HG=F": "Copper",
+    "ZN=F": "Zinc",
+    # --- Agriculture ---
+    "ZS=F": "Soybeans",
+    "ZW=F": "Wheat",
+    "ZC=F": "Corn",
+    # --- Equity Index ---
+    "ES=F": "S&P 500 E-mini Futures",
+    # --- FX Futures ---
+    "6E=F": "Euro FX Futures",
+    "6J=F": "Japanese Yen FX Futures",
+    "DX=F": "US Dollar Index Futures",
+}
+
+# =========================
 # ===== High Risk / Leveraged =====
+# =========================
 high_risk = {
     "SOXL": "Direxion Daily Semiconductor Bull 3X",
-    "ARKK": "ARK Innovation ETF",
 }
 
-# ===== HK / China ====
+# =========================
+# ===== China / HK =====
+# =========================
 china_hk = {
     "BABA": "Alibaba Group",
     "0700.HK": "Tencent Holdings",
+    "0981.HK": "SMIC",
+    "0763.HK": "ZTE",
 }
 
+# =========================
 # ===== FX / Crypto / SG =====
-fx_crypto_sg = {
-    "USD-SGD": "USD / SGD FX",
-    "G13.SI": "SGX Listed Stock (需確認名稱)",
-    "TON-USD": "Toncoin (Binance/HTX Symbol)",
+# =========================
+fx_crypto = {
+    # --- FX ---
+    "UUP": "US Dollar Index ETF",
+    # --- Crypto ---
+    "TON-USD": "Toncoin",
     "NEAR-USD": "NEAR Protocol",
+    "BTC-USD": "Bitcoin",
+    "ETH-USD": "ETH",
+    "XRP-USD": "XRP",
+    "ADA-USD": "ADA",
+    "SOL-USD": "SOL",
+    "LINK-USD": "Chainlink",
+    "ARB-USD": "Arbitrum",
+    "RNDR-USD": "Render GPU",
+    "HNT-USD": "Helium",
 }
 
+# =========================
+# ===== Merge All =====
+# =========================
 symbols_map = {}
-symbols_map.update(futures)
 symbols_map.update(stocks_us)
 symbols_map.update(index_etfs)
+symbols_map.update(bonds_macro)
+symbols_map.update(futures)
 symbols_map.update(high_risk)
 symbols_map.update(china_hk)
-symbols_map.update(fx_crypto_sg)
+symbols_map.update(fx_crypto)
 
 watching_list = list(symbols_map.keys())
 
@@ -1837,8 +1896,8 @@ def count_obv_cross(IMarketSensorImp, ccy, interval, sample, show=False):
     df = sensor.fetch(df)
     df = df.drop_duplicates().sort_values("Date")
     print(df.tail())
-    df.to_csv(f"{DATA_DIR}/{ccy}_cached.csv", index=False)
-    print(f"{DATA_DIR}/{ccy}_cached.csv")
+    df.to_csv(f"{DATA_DIR}/{ccy}.csv", index=False)
+    print(f"{DATA_DIR}/{ccy}.csv")
     # sp = StrategyParam(**params)
     # scout = TurtleScout(params=sp)
     # df = scout.train(df)
@@ -1850,6 +1909,9 @@ def count_obv_cross(IMarketSensorImp, ccy, interval, sample, show=False):
     # if show and df[-90:].OBV_UP.any():
     #     chart(df[-90:], ccy)
     # return len(df[df.OBV_UP])
+    import time
+
+    time.sleep(3)
     return 1
 
 
