@@ -31,7 +31,10 @@ from quanthunt.sensor.market_sensor import (
     YahooMarketSensor,
     LocalMarketSensor,
 )
-from quanthunt.strategy.turtle_trading import TurtleScout
+from quanthunt.strategy.turtle_trading import (
+    TurtleScout,
+    buy_signal_from_mosaic_strategy,
+)
 from quanthunt.hunterverse.interface import StrategyParam
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
@@ -1896,6 +1899,7 @@ def fast_scanning():
         if amount * close >= 10000000:
             # if vol >= 5000000:
             symbols.append(symbol)
+    print(f"Available: {len(symbols)}")
     return symbols
 
 
@@ -1916,6 +1920,7 @@ def download_data(IMarketSensorImp, ccy, interval, sample, show=False):
     camp = HuntingCamp(sp, IMarketSensorImp(symbol=sp.symbol, interval=interval))
     base_df = camp.update()
     camp.save(base_df)
+
     import time
 
     time.sleep(3)

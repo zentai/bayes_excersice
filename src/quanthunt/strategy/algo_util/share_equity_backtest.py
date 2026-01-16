@@ -3,12 +3,13 @@ import numpy as np
 import pandas as pd
 from quanthunt.config.core_config import config
 
-ZERO = config.zero
+from quanthunt.hunterverse.interface import ZERO
+
 # =====================
 # Config (改你的路徑/欄位)
 # =====================
-DATA_DIR = "/Users/Zen/Documents/code/bayes_excersice/reports"
-OUT_DIR = "/Users/Zen/Documents/code/bayes_excersice/reports/fundpool_lease_replay"
+DATA_DIR = "/Users/zen/Documents/code/bayes/reports/backtest"
+OUT_DIR = "/Users/zen/Documents/code/bayes/reports/backtest/fundpool_lease_replay"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 DATE_COL = "Date"
@@ -25,7 +26,7 @@ END = None  # None = 用資料最大時間
 STAKE = 100.0
 
 # 初始總資金（可調）
-INIT_CASH = 3000.0
+INIT_CASH = 5000.0
 
 # 每個 entry time 最多嘗試採納幾筆（可調）
 K_PER_TICK = 5
@@ -210,8 +211,7 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
             if feature_col is None:
                 picked = pick_random(g, k_per_tick, rng)
             else:
-                # picked = pick_rule(g, k_per_tick, feature_col)
-                picked = pick_rule(g, feature_col, 0.3, k_per_tick)
+                picked = pick_rule(g, feature_col, q=0.5, min_n=k_per_tick)
                 # 若因缺值選不滿，隨機補齊
                 need = min(k_per_tick, len(g)) - len(picked)
                 if need > 0:
