@@ -16,10 +16,11 @@ class YahooMarketSensor(IMarketSensor):
         self.symbol = symbol
         self.update_idx = 0
         self.test_df = None
+        self.interval = interval
         self.interval_sec = 0.01
 
     def scan(self, limits=None):
-        path = config.data_dir / f"{self.symbol}_cached.csv"
+        path = config.data_dir / f"{self.symbol}_{self.interval}.csv"
         today = datetime.date.today()
 
         if path.exists():
@@ -107,13 +108,14 @@ class LocalMarketSensor(IMarketSensor):
         self.update_idx = 0
         self.test_df = None
         self.interval_sec = 0.01
+        self.interval = interval
 
     def scan(self, limits):
-        df = pandas_util.load_symbols(self.symbol)
+        df = pandas_util.load_symbols(self.symbol, self.interval)
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.dropna(subset=["Date"])
         df = df.sort_values("Date")
-        length = len(df)
+        length = int(len(df) / 2)
         limits = min(length, limits)
         self.test_df = df[limits:]
         df = df[:limits]
@@ -127,9 +129,7 @@ class LocalMarketSensor(IMarketSensor):
         )
         new_data["Matured"] = pd.NaT
         self.update_idx += 1
-        df = pd.DataFrame([new_data], columns=self.test_df.columns)
-        df["Date"] = pd.to_datetime(df["Date"])
-        return df
+        return new_data
 
     def fetch(self, base_df):
         new_data = self.fetch_one()

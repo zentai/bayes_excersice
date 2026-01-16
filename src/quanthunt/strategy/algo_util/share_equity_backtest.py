@@ -1,12 +1,14 @@
 import os, glob
 import numpy as np
 import pandas as pd
+from quanthunt.config.core_config import config
 
+ZERO = config.zero
 # =====================
 # Config (改你的路徑/欄位)
 # =====================
-DATA_DIR = "/Users/zen/code/bayes_excersice/reports"
-OUT_DIR = "/Users/zen/code/bayes_excersice/reports/fundpool_lease_replay"
+DATA_DIR = "/Users/Zen/Documents/code/bayes_excersice/reports"
+OUT_DIR = "/Users/Zen/Documents/code/bayes_excersice/reports/fundpool_lease_replay"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 DATE_COL = "Date"
@@ -16,17 +18,17 @@ PROFIT_COL = "profit"
 BUY_COL = "BuySignal"
 HMM_COL = "HMM_Signal"
 
-START = "2015-01-01"
+START = "2026-01-01"
 END = None  # None = 用資料最大時間
 
 # 每筆固定佔用資金
 STAKE = 100.0
 
 # 初始總資金（可調）
-INIT_CASH = 4700.0
+INIT_CASH = 3000.0
 
 # 每個 entry time 最多嘗試採納幾筆（可調）
-K_PER_TICK = 3
+K_PER_TICK = 5
 
 # 只挑 L4 候選
 CAND_COND = lambda df: (df[BUY_COL] == 1) & (df[HMM_COL] == 1)
@@ -92,12 +94,40 @@ def pick_random(g: pd.DataFrame, k: int, rng: np.random.Generator) -> pd.DataFra
     return g.loc[idx]
 
 
-def pick_rule(g: pd.DataFrame, k: int, feature_col: str) -> pd.DataFrame:
+# def pick_rule(g: pd.DataFrame, k: int, feature_col: str) -> pd.DataFrame:
+#     sub = g.dropna(subset=[feature_col]).copy()
+#     if sub.empty:
+#         return g.head(0)
+#     sub = sub.sort_values(feature_col, ascending=True)
+#     return sub.head(k)
+
+
+def pick_rule(
+    g: pd.DataFrame,
+    feature_col: str,
+    q: float = 0.3,  # 取前 30%
+    min_n: int = 5,  # 樣本太少時的保護
+) -> pd.DataFrame:
     sub = g.dropna(subset=[feature_col]).copy()
-    if sub.empty:
+    n = len(sub)
+
+    if n == 0:
         return g.head(0)
-    sub = sub.sort_values(feature_col, ascending=True)
-    return sub.head(k)
+
+    # 樣本太少 → fallback：只取 noise 最小的 1 筆
+    if n < min_n:
+        return sub.sort_values(feature_col, ascending=True).head(1)
+
+    # 同日橫截面 percentile
+    thresh = np.percentile(sub[feature_col].values, q * 100)
+
+    picked = sub[sub[feature_col] <= thresh].copy()
+
+    # safety：至少保留 1 筆
+    if picked.empty:
+        picked = sub.sort_values(feature_col, ascending=True).head(1)
+
+    return picked.sort_values(feature_col, ascending=True)
 
 
 # =====================
@@ -121,6 +151,7 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
     active = []
 
     records = []
+    profits = []
 
     # 為了快速釋放：每個時間點要釋放哪些 lease（用 dict bucket）
     # 注意：同一個成熟時間可能有多筆 lease
@@ -139,6 +170,10 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
                     available_cash += payout
                     released += 1
                     released_cash += payout
+                    profits.append(lease["profit"])
+                    # print(
+                    #     f'[{lease["entry"]} - {lease["end"]}]: [{lease["symbol"]}] {payout:.2f} ({lease["profit"]:.3f})'
+                    # )
                 else:
                     still_active.append(lease)
             active = still_active
@@ -164,6 +199,7 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
                     "n_picked": 0,
                     "n_accepted": 0,
                     "n_rejected_cash": 0,
+                    "n_coverage": 0,
                 }
             )
             continue
@@ -174,7 +210,8 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
             if feature_col is None:
                 picked = pick_random(g, k_per_tick, rng)
             else:
-                picked = pick_rule(g, k_per_tick, feature_col)
+                # picked = pick_rule(g, k_per_tick, feature_col)
+                picked = pick_rule(g, feature_col, 0.3, k_per_tick)
                 # 若因缺值選不滿，隨機補齊
                 need = min(k_per_tick, len(g)) - len(picked)
                 if need > 0:
@@ -220,8 +257,14 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
                 "n_candidates": n_candidates,
                 "n_picked": n_picked,
                 "n_accepted": n_accepted,
-                "n_rejected_cash": n_rejected_cash,
+                "n_rejected_cash": n_rejected_cash / (n_candidates + ZERO),
+                "n_coverage": n_accepted / (n_candidates + ZERO),
             }
+        )
+
+    for lease in active:
+        print(
+            f'[{lease["entry"]} - {lease["end"]}]: [{lease["symbol"]}] {payout:.2f} ({lease["profit"]:.3f})'
         )
 
     curve = pd.DataFrame(records).sort_values("time")
@@ -229,6 +272,7 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
     # Max drawdown on equity (帳面值)
     curve["peak"] = curve["equity"].cummax()
     curve["drawdown"] = curve["equity"] / curve["peak"] - 1.0
+    curve["median_profit"] = np.median(profits)
     return curve, feature_col
 
 
@@ -243,6 +287,9 @@ def summarize(curve: pd.DataFrame) -> dict:
         "avg_candidates": float(curve["n_candidates"].mean()),
         "avg_accepted": float(curve["n_accepted"].mean()),
         "cash_reject_rate": float((curve["n_rejected_cash"] > 0).mean()),
+        "avg_coverage": float((curve["n_coverage"] > 0).mean()),
+        "daily_opportunity": float((curve["n_picked"] > 0).mean()),
+        "median_profit": float((curve["median_profit"]).mean()),
         "ticks": int(len(curve)),
     }
 

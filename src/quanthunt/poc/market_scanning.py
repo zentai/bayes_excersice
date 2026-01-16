@@ -4,50 +4,70 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import mplfinance as mpf
 import numpy as np
+from dotenv import load_dotenv
 from collections import Counter
+
 import seaborn as sns
+from quanthunt.story import start_journey
+from quanthunt.hunterverse.storage import HuntingCamp
+from quanthunt.strategy.turtle_trading import (
+    TurtleScout,
+    buy_signal_from_mosaic_strategy,
+)
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from huobi.client.market import MarketClient
 from huobi.client.generic import GenericClient
 from huobi.utils import *
 from huobi.constant import *
 from quanthunt.utils import pandas_util
-from quanthunt.hunterverse.interface import Symbol
+from quanthunt.hunterverse.interface import Symbol, DUMP_COL
 from config import config
-from quanthunt.sensor.market_sensor import HuobiMarketSensor, YahooMarketSensor
+from quanthunt.sensor.market_sensor import (
+    HuobiMarketSensor,
+    YahooMarketSensor,
+    LocalMarketSensor,
+)
 from quanthunt.strategy.turtle_trading import TurtleScout
 from quanthunt.hunterverse.interface import StrategyParam
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
+# Load API credentials from .env file
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
+api_key = os.getenv("API_KEY")
+secret_key = os.getenv("SECRET_KEY")
+
 # from .story import entry
-params = {
-    "ATR_sample": 60,
-    "bayes_windows": 20,
-    "lower_sample": 60,
-    "upper_sample": 60,
-    "hard_cutoff": 0.975,
-    "profit_loss_ratio": 3.0,
-    "atr_loss_margin": 1.0,
-    "surfing_level": 5,
-    "interval": "5min",
-    "funds": 15,
-    "stake_cap": 15,
-    "symbol": Symbol("btcusdt"),
-    "hmm_split": 4,
-    "backtest": False,
-    "debug_mode": [
-        "statement",
-        "statement_to_csv",
-        "mission_review",
-        "final_statement_to_csv",
-    ],
-    "load_deals": [],
-    "start_deal": "",
-    "api_key": None,
-    "secret_key": None,
-}
+# params = {
+#     "ATR_sample": 60,
+#     "bayes_windows": 20,
+#     "lower_sample": 60,
+#     "upper_sample": 60,
+#     "hard_cutoff": 0.975,
+#     "profit_loss_ratio": 3.0,
+#     "atr_loss_margin": 1.0,
+#     "surfing_level": 5,
+#     "interval": "5min",
+#     "funds": 15,
+#     "stake_cap": 15,
+#     "symbol": Symbol("btcusdt"),
+#     "hmm_split": 4,
+#     "backtest": False,
+#     "debug_mode": [
+#         "statement",
+#         "statement_to_csv",
+#         "mission_review",
+#         "final_statement_to_csv",
+#     ],
+#     "load_deals": [],
+#     "start_deal": "",
+#     "api_key": None,
+#     "secret_key": None,
+# }
 
 stocks_singapore = {
     "VNM.SI": "",
@@ -1873,46 +1893,33 @@ def fast_scanning():
         bidSize = obj.bidSize
         ask = obj.ask
         askSize = obj.askSize
-        # if (amount * close >= 10000000):
-        if vol >= 5000000:
+        if amount * close >= 10000000:
+            # if vol >= 5000000:
             symbols.append(symbol)
     return symbols
 
 
-def count_obv_cross(IMarketSensorImp, ccy, interval, sample, show=False):
-    params.update(
-        {
-            "interval": interval,
-            "funds": 100,
-            "stake_cap": 50,
-            "symbol": Symbol(ccy),
-        }
-    )
-    sensor = IMarketSensorImp(symbol=params.get("symbol"), interval=interval)
-    df = sensor.scan(sample)
-    if len(df) == 0:
-        print(f"{ccy} no data")
-        return 0
-    df = sensor.fetch(df)
-    df = df.drop_duplicates().sort_values("Date")
-    print(df.tail())
-    df.to_csv(f"{DATA_DIR}/{ccy}.csv", index=False)
-    print(f"{DATA_DIR}/{ccy}.csv")
-    # sp = StrategyParam(**params)
-    # scout = TurtleScout(params=sp)
-    # df = scout.train(df)
-    # df = scout.fetch(df)
-    # df = scout.market_recon(df)
-    # if df.iloc[-1].OBV_UP:
-    #     print("============= OBV UP ============")
-    # print(f"{ccy=}: {len(df[df.OBV_UP])}")
-    # if show and df[-90:].OBV_UP.any():
-    #     chart(df[-90:], ccy)
-    # return len(df[df.OBV_UP])
+def download_data(IMarketSensorImp, ccy, interval, sample, show=False):
+    overrides = {
+        "interval": interval,
+        "funds": 100,
+        "stake_cap": 100,
+        "symbol": Symbol(ccy),
+        "hmm_split": 4,
+        "api_key": api_key,
+        "secret_key": secret_key,
+        "atr_loss_margin": 1.2,
+        "hmm_model": "trend",
+    }
+
+    sp = pandas_util.build_strategy_param(overrides)
+    camp = HuntingCamp(sp, IMarketSensorImp(symbol=sp.symbol, interval=interval))
+    base_df = camp.update()
+    camp.save(base_df)
     import time
 
     time.sleep(3)
-    return 1
+    return base_df
 
 
 def chart(df, code):
@@ -1990,32 +1997,86 @@ def main(market, symbol, interval, show, backtest):
         sample = 365 * 20  # 20 years
     elif market == "crypto":
         sensor_cls = HuobiMarketSensor
-        symbols = [symbol] if symbol else fast_scanning()
+        # symbols = [symbol] if symbol else fast_scanning()
+        symbols = [
+            "dogeusdt",
+            "nftusdt",
+            "kiteusdt",
+            "bobbscusdt",
+            "linkusdt",
+            "trxusdt",
+            "ethusdt",
+            "btcusdt",
+            "wmtxusdt",
+            "xdcusdt",
+            "bchusdt",
+            "daiusdt",
+            "fartcoinusdt",
+            "chzusdt",
+            "apepeusdt",
+            "xlmusdt",
+            "usdcusdt",
+            "monadusdt",
+            "xrpusdt",
+            "xautusdt",
+            "adausdt",
+            "filusdt",
+            "ltcusdt",
+            "wbtusdt",
+            "bnbusdt",
+            "pepeusdt",
+            "suiusdt",
+            "hbarusdt",
+            "tonusdt",
+            "usdqusdt",
+            "solusdt",
+        ]
         sample = 240 * 3  # 3 years
 
+    from pprint import pprint
+
+    pprint(symbols)
     symbols_count = {
-        s: count_obv_cross(sensor_cls, s, interval, sample, show) for s in symbols
+        s: download_data(sensor_cls, s, interval, sample, show) for s in symbols
     }
 
     if backtest:
-        # 进行回测逻辑
-        # perform_backtest(symbols_count)
-        pass
-
-    c = Counter(symbols_count)
-    from pprint import pprint
-
-    pprint(c.most_common())
+        perform_backtest(symbols, interval)
 
 
-def perform_backtest(symbols_count):
+def perform_backtest(symbols, interval):
     result = {}
-    for code in symbols_count.keys():
+    for code in symbols:
+        print(f"GO [{code} {interval}]")
+        overrides = {
+            "interval": interval,
+            "funds": 100,
+            "stake_cap": 100,
+            "symbol": Symbol(code),
+            "hmm_split": 4,
+            "api_key": api_key,
+            "secret_key": secret_key,
+            "atr_loss_margin": 1.2,
+            "hmm_model": "trend",
+        }
+
+        sp = pandas_util.build_strategy_param(overrides)
+        sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
+        base_df = sensor.scan(1000)
+        scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
+        base_df = scout.train(base_df)
         try:
-            result[code] = entry(code, "1day", 100, 10.5)
+            while sensor.left():
+                base_df = sensor.fetch(base_df)
+                base_df = scout.market_recon(base_df)
+
+            csv_path = f"{config.reports_dir}/{sp}.csv"
+            base_df["symbol"] = code
+            base_df[DUMP_COL].to_csv(csv_path, index=False)
+            # base_df[int(len(base_df) / 2) :][DUMP_COL].to_csv(csv_path, index=False)
+            print(f"CSV created: {csv_path}")
         except Exception as e:
-            print(f"Back test error: {code}, {e}")
-    performance_review(result)
+            print(f"[{code}] not running correctly: {e}")
 
 
 def performance_review(backtest_results):

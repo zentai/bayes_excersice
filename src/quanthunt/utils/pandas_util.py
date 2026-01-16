@@ -85,9 +85,9 @@ def get_history_stick(symbol, sample=20, interval="1min"):
     return df.sort_values(by=["Date"]).reset_index(drop=True)
 
 
-def load_symbols(symbol):
+def load_symbols(symbol, interval):
     code = symbol.name  # "BTC-USD"
-    df = pd.read_csv(f"{DATA_DIR}/{code}_cached.csv")
+    df = pd.read_csv(f"{DATA_DIR}/{code}_{interval}.csv")
     # df = df.dropna()
     return df[["Date", "Open", "High", "Low", "Close", "Vol"]]
 

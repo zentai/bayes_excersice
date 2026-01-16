@@ -226,13 +226,13 @@ class BOCPDBase:
         tail_prob_k, shock_score, risk_level = self._risk_semantics(R, z_rms, scale_mix)
 
         if self.debug and (cp_prob > 0.05 or self._t % 200 == 0):
-            print(
-                f"[DBG {role}] t={self._t:4d} "
-                f"cp={cp_prob:.4f} mode_r={run_length_mode:4d} mean_r={run_length_mean:7.2f} "
-                f"surp={surprise:.3f} surpEWMA={self._surprise_ewma:.3f} z={z_mix:.2f} "
-                f"support={support}"
-            )
-
+            # print(
+            #     f"[DBG {role}] t={self._t:4d} "
+            #     f"cp={cp_prob:.4f} mode_r={run_length_mode:4d} mean_r={run_length_mean:7.2f} "
+            #     f"surp={surprise:.3f} surpEWMA={self._surprise_ewma:.3f} z={z_mix:.2f} "
+            #     f"support={support}"
+            # )
+            pass
         return BOCPDOutputs(
             cp_prob=cp_prob,
             run_length_mean=run_length_mean,
@@ -587,17 +587,17 @@ class DualBOCPDWrapper:
         Assumes df grows over time; safe for backfill.
         """
         # Debug
-        print(
-            "[BOCPD] start run_online",
-            "fsm_t=",
-            self.fsm._t,
-            "fsm_phase=",
-            self.fsm.phase,
-            "g0_t=",
-            self.dual.g0._t,
-            "lenR=",
-            len(self.dual.g0.log_R),
-        )
+        # print(
+        #     "[BOCPD] start run_online",
+        #     "fsm_t=",
+        #     self.fsm._t,
+        #     "fsm_phase=",
+        #     self.fsm.phase,
+        #     "g0_t=",
+        #     self.dual.g0._t,
+        #     "lenR=",
+        #     len(self.dual.g0.log_R),
+        # )
         for idx in df.index:
             self.update_df_row(df, idx)
 

@@ -61,13 +61,18 @@ class Symbol:
     price_prec: float = 4
 
     def __post_init__(self):
-        from huobi.client.generic import GenericClient
+        try:
+            from huobi.client.generic import GenericClient
 
-        client = GenericClient()
-        for item in client.get_exchange_symbols():
-            if item.symbol == self.name:
-                self.amount_prec = item.amount_precision
-                self.price_prec = item.price_precision
+            client = GenericClient()
+            for item in client.get_exchange_symbols():
+                if item.symbol == self.name:
+                    self.amount_prec = item.amount_precision
+                    self.price_prec = item.price_precision
+        except Exception as e:
+            print(f"network issues.")
+            amount_prec = 4
+            price_prec = 4
 
     def _round_down(self, number, prec):
         return round(
@@ -214,7 +219,7 @@ DEBUG_COL = [
     # "m_z_force",
     # "m_z_mix",
     "m_regime_noise_level",
-    # "c_center",
+    "c_center",
     # "c_width",
     # "c_upper",
     # "c_lower",
@@ -250,7 +255,7 @@ DUMP_COL = [
     # "ema_long",
     # "Stop_profit",
     # "exit_price",
-    # "Matured",
+    "Matured",
     # "time_cost",
     "buy",
     "sell",
