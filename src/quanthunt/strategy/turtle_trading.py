@@ -408,7 +408,7 @@ class TurtleScout(IStrategyScout):
         combo_states = set(best_combo.iloc[0]["combo"])
 
         if best_states.empty or best_states["trend_mu"].iloc[0] <= 0:
-            print("# 找不到有正期望的 state，就不要亂打 HMM_Signal")
+            # print("# 找不到有正期望的 state，就不要亂打 HMM_Signal")
             return set()
 
         # print(selector.best_combos(top_n=1))

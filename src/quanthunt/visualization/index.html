@@ -102,7 +102,10 @@
         <option value="nearusdt">NEAR</option>
         <option value="kitusdt">KIT</option>
         <option value="solusdt">sol</option>
+        <option value="fartcoinusdt">fartcoin</option>
+        <option value="bonkusdt">bonk</option>
         <option value="bnbusdt">bnb</option>
+        <option value="ltcusdt">ltc</option>
         <option value="xrpusdt">XRP</option>
         <option value="adausdt">ADA</option>
       </select>
@@ -287,8 +290,8 @@
 
     forceChart.priceScale('right').applyOptions({
       scaleMargins: {
-        top: 0.15,
-        bottom: 0.15,
+        top: 0.45,
+        bottom: 0.45,
       },
     });
 
@@ -318,14 +321,18 @@
       base: 0,
     });
 
-    const ptSpeedSeries = forceChart.addHistogramSeries({
+    // ===== pt_speed：反應（虛線、退場）=====
+    const ptSpeedSeries = forceChart.addLineSeries({
       priceScaleId: "right",
-      base: 0,
+      color: "rgba(96, 165, 250, 0.45)", // 同色但淡
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
     });
 
+    // ===== force_trend：主結構（實線）=====
     const forceTrendSeries = forceChart.addLineSeries({
       priceScaleId: "right",
-      color: "rgba(96, 165, 250, 1)", // 藍線
+      color: "rgba(96, 165, 250, 0.9)", // blue-400
       lineWidth: 2,
     });
 
@@ -344,6 +351,13 @@
     let orderMarkers = [];
     let rawLogs = [];
     let firstApply = true;
+
+    function getForceColor(v) {
+      // 只做方向提示
+      return v >= 0
+        ? "rgba(168, 85, 247, 0.25)"   // 淡紫（up force）
+        : "rgba(234, 179, 8, 0.25)";   // 淡橘（down force）
+    }
 
     function syncFromMaster(masterChart, slaveCharts) {
       masterChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
@@ -475,11 +489,8 @@
         value: hmmSignal === 1 ? 1 : null,
       });
 
-      const forceColor =
-        m_force >= 0
-          ? "rgba(52, 211, 153, 0.8)"
-          : "rgba(248, 113, 113, 0.8)";
-      forceData.push({ time: t, value: m_force, color: forceColor });
+      const forceColor = getForceColor(m_force);
+
 
       const speedColor =
         m_pt_speed >= 0
@@ -532,7 +543,7 @@
       // =====================
       closeSeries.update({ time: t, value: close });
       forceSeries.update({ time: t, value: m_force, color: forceColor });
-      ptSpeedSeries.update({ time: t, value: m_pt_speed, color: speedColor });
+      ptSpeedSeries.update({ time: t, value: m_pt_speed});
       forceTrendSeries.update({ time: t, value: m_force_trend });
       regimeSeries.update({ time: t, value: regime, color: regimeColor });
       closeSeries.setMarkers(orderMarkers);
@@ -650,7 +661,7 @@
             m_pt_speed >= 0
               ? "rgba(34, 197, 94, 0.8)"
               : "rgba(239, 68, 68, 0.8)";
-          ptSpeedData.push({ time: t, value: m_pt_speed, color: speedColor });
+          ptSpeedData.push({ time: t, value: m_pt_speed});
 
           // force trend
           forceTrendData.push({ time: t, value: m_force_trend });

@@ -2069,15 +2069,16 @@ def perform_backtest(symbols, interval):
         sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
         base_df = sensor.scan(1000)
         scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
-        base_df = scout.train(base_df)
         try:
+            base_df = scout.train(base_df)
             while sensor.left():
                 base_df = sensor.fetch(base_df)
                 base_df = scout.market_recon(base_df)
 
             csv_path = f"{config.reports_dir}/{sp}.csv"
             base_df["symbol"] = code
-            base_df[DUMP_COL].to_csv(csv_path, index=False)
+            cutting = len(sensor.test_df)
+            base_df[cutting:][DUMP_COL].to_csv(csv_path, index=False)
             # base_df[int(len(base_df) / 2) :][DUMP_COL].to_csv(csv_path, index=False)
             print(f"CSV created: {csv_path}")
         except Exception as e:
