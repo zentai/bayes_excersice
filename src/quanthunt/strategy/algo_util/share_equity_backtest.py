@@ -8,8 +8,8 @@ from quanthunt.hunterverse.interface import ZERO
 # =====================
 # Config (改你的路徑/欄位)
 # =====================
-DATA_DIR = "/Users/zen/Documents/code/bayes/reports/backtest"
-OUT_DIR = "/Users/zen/Documents/code/bayes/reports/backtest/fundpool_lease_replay"
+DATA_DIR = "/Users/zen/Documents/code/bayes/reports"
+OUT_DIR = "/Users/zen/Documents/code/bayes/reports/fundpool_lease_replay"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 DATE_COL = "Date"
@@ -19,7 +19,7 @@ PROFIT_COL = "profit"
 BUY_COL = "BuySignal"
 HMM_COL = "HMM_Signal"
 
-START = "2026-01-01"
+START = "2023-01-01"
 END = None  # None = 用資料最大時間
 
 # 每筆固定佔用資金
@@ -29,7 +29,7 @@ STAKE = 100.0
 INIT_CASH = 5000.0
 
 # 每個 entry time 最多嘗試採納幾筆（可調）
-K_PER_TICK = 5
+K_PER_TICK = 3
 
 # 只挑 L4 候選
 CAND_COND = lambda df: (df[BUY_COL] == 1) & (df[HMM_COL] == 1)
@@ -103,24 +103,97 @@ def pick_random(g: pd.DataFrame, k: int, rng: np.random.Generator) -> pd.DataFra
 #     return sub.head(k)
 
 
+# def pick_rule(
+#     g: pd.DataFrame,
+#     feature_col: str,
+#     q: float = 0.3,  # 取前 30%
+#     min_n: int = 5,  # 樣本太少時的保護
+# ) -> pd.DataFrame:
+#     sub = g.dropna(subset=[feature_col]).copy()
+#     n = len(sub)
+
+#     if n == 0:
+#         return g.head(0)
+
+#     # 樣本太少 → fallback：只取 noise 最小的 1 筆
+#     if n < min_n:
+#         return sub.sort_values(feature_col, ascending=True).head(1)
+
+#     # 同日橫截面 percentile
+#     thresh = np.percentile(sub[feature_col].values, q * 100)
+
+#     picked = sub[sub[feature_col] <= thresh].copy()
+
+#     # safety：至少保留 1 筆
+#     if picked.empty:
+#         picked = sub.sort_values(feature_col, ascending=True).head(1)
+
+
+#     return picked.sort_values(feature_col, ascending=True)
+def relative_hit_rate(picked, dropped):
+    if dropped.empty:
+        return np.nan
+
+    benchmark = dropped["profit"].median()
+    return (picked["profit"] > benchmark).mean()
+
+
+def pairwise_hit_rate(picked, dropped):
+    if picked.empty or dropped.empty:
+        return np.nan
+
+    return (
+        picked["profit"].values.reshape(-1, 1) > dropped["profit"].values.reshape(1, -1)
+    ).mean()
+
+
 def pick_rule(
     g: pd.DataFrame,
     feature_col: str,
     q: float = 0.3,  # 取前 30%
     min_n: int = 5,  # 樣本太少時的保護
+    debug: bool = True,  # ★ 新增：是否輸出 debug log
+    log_fn=print,  # ★ 新增：可注入 logger
 ) -> pd.DataFrame:
+
     sub = g.dropna(subset=[feature_col]).copy()
     n = len(sub)
 
     if n == 0:
         return g.head(0)
 
-    # 樣本太少 → fallback：只取 noise 最小的 1 筆
+    # ======================
+    # case 1：樣本太少
+    # ======================
     if n < min_n:
-        return sub.sort_values(feature_col, ascending=True).head(1)
+        picked = sub.sort_values(feature_col, ascending=True).head(1)
 
-    # 同日橫截面 percentile
-    thresh = np.percentile(sub[feature_col].values, q * 100)
+        # if debug:
+        #     # log_fn(f"[pick_rule] n < min_n ({n} < {min_n}), fallback to best-1")
+
+        #     dropped = sub.drop(picked.index)
+
+        #     picked_tbl = picked.assign(decision="PICK")[
+        #         ["decision", "symbol", "Date", "profit", "m_regime_noise_level"]
+        #     ]
+
+        #     dropped_tbl = dropped.assign(decision="DROP")[
+        #         ["decision", "symbol", "Date", "profit", "m_regime_noise_level"]
+        #     ]
+
+        #     log_tbl = pd.concat([picked_tbl, dropped_tbl], axis=0)
+
+        #     if not dropped_tbl.empty:
+        #         log_fn("\n . >>> . [decision table] . <<< .  ")
+        #         log_fn(log_tbl.to_string(index=False))
+
+        return picked
+
+    # ======================
+    # case 2：正常 percentile pick
+    # ======================
+    values = sub[feature_col].values
+    thresh = np.percentile(values, q * 100)
 
     picked = sub[sub[feature_col] <= thresh].copy()
 
@@ -128,6 +201,33 @@ def pick_rule(
     if picked.empty:
         picked = sub.sort_values(feature_col, ascending=True).head(1)
 
+    if debug:
+        # log_fn(f"[pick_rule] n < min_n ({n} < {min_n}), fallback to best-1")
+
+        dropped = sub.drop(picked.index)
+
+        picked_tbl = picked.assign(decision="PICK")[
+            ["decision", "symbol", "Date", "profit", "m_regime_noise_level"]
+        ]
+
+        dropped_tbl = dropped.assign(decision="DROP")[
+            ["decision", "symbol", "Date", "profit", "m_regime_noise_level"]
+        ]
+
+        log_tbl = pd.concat([picked_tbl, dropped_tbl], axis=0)
+
+        if not dropped_tbl.empty:
+            log_fn("\n . >>> . [decision table] . <<< .  ")
+            log_fn(log_tbl.to_string(index=False))
+
+            hr_pair = pairwise_hit_rate(picked, dropped)
+
+            log_fn(
+                f" . >>> . [group summary] "
+                f"n_pick={len(picked)}, "
+                f"n_drop={len(dropped)}, "
+                f"pairwise_hit={hr_pair:.3f}"
+            )
     return picked.sort_values(feature_col, ascending=True)
 
 
@@ -153,6 +253,7 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
 
     records = []
     profits = []
+    hit_stats = []
 
     # 為了快速釋放：每個時間點要釋放哪些 lease（用 dict bucket）
     # 注意：同一個成熟時間可能有多筆 lease
@@ -212,6 +313,22 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
                 picked = pick_random(g, k_per_tick, rng)
             else:
                 picked = pick_rule(g, feature_col, q=0.5, min_n=k_per_tick)
+                regime_val = g["m_regime_noise_level"].median()
+
+                # 驗證 pick 是否有效
+                dropped = g.drop(picked.index, errors="ignore")
+                hr_pair = pairwise_hit_rate(picked, dropped)
+                hit_stats.append(
+                    {
+                        "Date": now,
+                        "feature": feature_col,
+                        "pairwise_hit": hr_pair,
+                        "n_pick": len(picked),
+                        "n_drop": len(dropped),
+                        "n_candidates": len(g),
+                        "m_regime_noise_level": regime_val,  # ★ 加這個
+                    }
+                )
                 # 若因缺值選不滿，隨機補齊
                 need = min(k_per_tick, len(g)) - len(picked)
                 if need > 0:
@@ -262,10 +379,10 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
             }
         )
 
-    for lease in active:
-        print(
-            f'[{lease["entry"]} - {lease["end"]}]: [{lease["symbol"]}] {payout:.2f} ({lease["profit"]:.3f})'
-        )
+    # for lease in active:
+    #     print(
+    #         f'[{lease["entry"]} - {lease["end"]}]: [{lease["symbol"]}] {payout:.2f} ({lease["profit"]:.3f})'
+    #     )
 
     curve = pd.DataFrame(records).sort_values("time")
 
@@ -273,7 +390,7 @@ def replay_lease(pool: pd.DataFrame, selector: str, k_per_tick: int, seed: int =
     curve["peak"] = curve["equity"].cummax()
     curve["drawdown"] = curve["equity"] / curve["peak"] - 1.0
     curve["median_profit"] = np.median(profits)
-    return curve, feature_col
+    return curve, feature_col, pd.DataFrame(hit_stats)
 
 
 def summarize(curve: pd.DataFrame) -> dict:
@@ -306,15 +423,16 @@ if __name__ == "__main__":
     print(hold_hours.describe())
 
     # Replay: random
-    curve_rand, feat_rand = replay_lease(
+    curve_rand, feat_rand, hit_df = replay_lease(
         pool, selector="random", k_per_tick=K_PER_TICK, seed=7
     )
     curve_rand.to_csv(os.path.join(OUT_DIR, "equity_lease_random.csv"), index=False)
 
     # Replay: rule
-    curve_rule, feat_rule = replay_lease(
+    curve_rule, feat_rule, hit_df = replay_lease(
         pool, selector="rule", k_per_tick=K_PER_TICK, seed=7
     )
+    hit_df.to_csv(os.path.join(OUT_DIR, "hit_stats.csv"), index=False)
     curve_rule.to_csv(os.path.join(OUT_DIR, "equity_lease_rule.csv"), index=False)
 
     s_rand = summarize(curve_rand)
@@ -330,5 +448,13 @@ if __name__ == "__main__":
 
     print("\n=== Summary ===")
     print(summary)
+    hit_df["rolling_20"] = hit_df["pairwise_hit"].rolling(20, min_periods=10).mean()
+    hit_df["noise_bucket"] = pd.qcut(
+        hit_df["m_regime_noise_level"],
+        q=4,
+        labels=["low", "mid-low", "mid-high", "high"],
+    )
+    print(hit_df[-60:])
+    print(hit_df.groupby("noise_bucket")["pairwise_hit"].mean())
 
     print(f"\nDONE. Outputs in: {OUT_DIR}")
