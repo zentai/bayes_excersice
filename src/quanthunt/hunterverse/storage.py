@@ -1,3 +1,4 @@
+from re import DEBUG
 import numpy as np
 import pandas as pd
 from quanthunt.config.core_config import config
@@ -59,6 +60,7 @@ class HuntingCamp:
         if not update_df.empty:
             base_df = pd.concat([base_df, update_df], ignore_index=True)
 
+        print(f"{base_df[-3:]}")
         return base_df
 
     def save(self, df):
