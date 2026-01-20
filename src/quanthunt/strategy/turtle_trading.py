@@ -83,6 +83,8 @@ TURTLE_COLUMNS = [
     "c_lower",
     "z_dist",
     "impedance",
+    "srl_eff",
+    "z_srl",
     "market_phase",
     # BOCPD G0+P1
     "bocpd_phase",
@@ -186,6 +188,10 @@ class TurtleScout(IStrategyScout):
 
             df.loc[i, "c_center"] = self.kalman_state["cycle_center"]
             df.loc[i, "c_z_center"] = diag["z_cycle"]
+
+            # ---- SRL observer (world-consistency) ----
+            df.loc[i, "srl_eff"] = diag.get("srl_eff", np.nan)
+            df.loc[i, "z_srl"] = diag.get("z_srl", np.nan)
 
         return df
 

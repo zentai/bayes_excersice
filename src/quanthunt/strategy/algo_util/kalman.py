@@ -113,6 +113,9 @@ def init_kalman_state(init_pc: float = 1.0):
         "force_proxy_bias": 0.0,
         # Regime
         "regime_noise_level": 1.0,
+        # SRL
+        "srl_eff_mu": np.nan,
+        "srl_eff_sigma": np.nan,
     }
 
     cov = {
@@ -492,6 +495,21 @@ def mosaic_step(
     ctx = step_cycle(state, cov, diagnostics, obs_close, cycle_model, ctx)
 
     # =========================================================
+    # SRL (world-consistency check, observer only)
+    # =========================================================
+    eff, mu, sigma, z_srl = step_srl_online(
+        prev_mu=state.get("srl_eff_mu", np.nan),
+        prev_sigma=state.get("srl_eff_sigma", np.nan),
+        pt_speed=state["pt_speed"],
+        force_trend=state["force_imbalance_trend"],
+        tau=120,  # 依 timeframe 調
+    )
+
+    # update SRL memory (observer state)
+    state["srl_eff_mu"] = mu
+    state["srl_eff_sigma"] = sigma
+
+    # =========================================================
     # EXPORT snapshot
     # =========================================================
     diagnostics.update(
@@ -503,6 +521,9 @@ def mosaic_step(
             "force_imbalance_trend": state["force_imbalance_trend"],
             "regime_noise_level": state["regime_noise_level"],
             "cycle_center": state["cycle_center"],
+            # ---- SRL observer ----
+            "srl_eff": eff,
+            "z_srl": z_srl,
         }
     )
 
@@ -753,6 +774,40 @@ def update_liquidity_wall(df):
 
     df.loc[mask_vacuum_break, "market_phase"] = 2
     return df
+
+
+def step_srl_online(
+    prev_mu: float,
+    prev_sigma: float,
+    pt_speed: float,
+    force_trend: float,
+    tau: int = 100,
+    eps: float = 1e-8,
+):
+    """
+    One-step SRL update (online, no dataframe)
+    """
+
+    alpha = 2.0 / (tau + 1.0)
+
+    speed = abs(pt_speed)
+    force = abs(force_trend)
+
+    eff = speed / (force + eps)
+
+    # ---- init fallback ----
+    if not np.isfinite(prev_mu) or not np.isfinite(prev_sigma):
+        mu = eff
+        sigma = abs(eff) + eps
+    else:
+        mu = (1 - alpha) * prev_mu + alpha * eff
+        dev = abs(eff - mu)
+        sigma = (1 - alpha) * prev_sigma + alpha * dev
+        sigma = max(sigma, eps)
+
+    z_srl = (eff - mu) / sigma
+
+    return eff, mu, sigma, z_srl
 
 
 if __name__ == "__main__":

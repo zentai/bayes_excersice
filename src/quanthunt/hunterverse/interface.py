@@ -224,6 +224,8 @@ DEBUG_COL = [
     # "c_upper",
     # "c_lower",
     # "c_z_center",
+    "srl_eff",
+    "z_srl",
     # BOCPD
     # "bocpd_phase",
     "bocpd_cp_prob",
@@ -288,6 +290,8 @@ DUMP_COL = [
     "c_lower",
     "z_dist",
     "impedance",
+    "srl_eff",
+    "z_srl",
     "market_phase",
     # BOCPD
     "bocpd_phase",
