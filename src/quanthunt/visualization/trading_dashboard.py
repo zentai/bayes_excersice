@@ -31,6 +31,7 @@ def _row_to_payload(idx, row: pd.Series) -> dict:
     payload = {
         "Date": date_str,
         "Close": float(_get("Close", 0.0)),
+        "m_pc": float(_get("m_pc", 0.0)),
         "m_force": float(_get("m_force", 0.0)),
         "m_force_trend": float(_get("m_force_trend", 0.0)),
         "m_pt_speed": float(_get("m_pt_speed", 0.0)),
@@ -38,6 +39,8 @@ def _row_to_payload(idx, row: pd.Series) -> dict:
         "HMM_Signal": int(_get("HMM_Signal", 0)),
         "bocpd_cp_excess": float(_get("bocpd_cp_excess", 0.0)),
         "bocpd_risk": float(_get("bocpd_risk", 0.0)),
+        "z_srl": float(_get("z_srl", 0.0)),
+        "srl_eff": float(_get("srl_eff", 0.0)),
     }
 
     order_val: Optional[object] = "Buy" if _get("BuySignal", None) else None

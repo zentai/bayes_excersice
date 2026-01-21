@@ -282,6 +282,13 @@
       handleScale: false,
     });
 
+    forceChart.priceScale('').applyOptions({
+      scaleMargins: {
+        top: 0.1,
+        bottom: 0.6,
+      },
+    });
+
     forceChart.priceScale('left').applyOptions({
       scaleMargins: {
         top: 0.15,
@@ -316,27 +323,31 @@
       base: 0,
     });
 
+    // ===== SRL 动能块（主角）=====
+    const srlSeries = forceChart.addHistogramSeries({
+      priceScaleId: "",
+      base: 0,
+    });
+
     // m_force histogram
     const forceSeries = forceChart.addHistogramSeries({
       priceScaleId: "left",
       base: 0,
     });
 
-    // ===== pt_speed：反應（虛線、退場）=====
-    const ptSpeedSeries = forceChart.addLineSeries({
-      priceScaleId: "right",
-      color: "rgba(96, 165, 250, 0.45)", // 同色但淡
-      lineWidth: 1,
-      lineStyle: LightweightCharts.LineStyle.Dashed,
-    });
 
     // ===== force_trend：主結構（實線）=====
     const forceTrendSeries = forceChart.addLineSeries({
       priceScaleId: "right",
-      color: "rgba(96, 165, 250, 0.9)", // blue-400
-      lineWidth: 2,
+      color: "rgba(148,163,184,0.25)", // 灰、很淡
+      lineWidth: 1,
     });
 
+    forceTrendSeries.applyOptions({
+      lastValueVisible: false,
+      priceLineVisible: false,
+      lineStyle: LightweightCharts.LineStyle.Dotted,
+    });
     // closeChart.timeScale().fitContent();
     // const range = closeChart.timeScale().getVisibleLogicalRange();
     // regimeChart.timeScale().setVisibleLogicalRange(range);
@@ -346,12 +357,12 @@
     let closeData = [];
     let hmmBgData = [];
     let forceData = [];
-    let ptSpeedData = [];
     let forceTrendData = [];
     let regimeData = [];
     let orderMarkers = [];
     let rawLogs = [];
     let firstApply = true;
+    let srlData = [];
 
     function getForceColor(v) {
       // 只做方向提示
@@ -430,18 +441,18 @@
       closeData = [];
       hmmBgData = [];
       forceData = [];
-      ptSpeedData = [];
       forceTrendData = [];
       regimeData = [];
+      srlData = [];
       orderMarkers = [];
       firstApply = true;
 
       closeSeries.setData([]);
       hmmBgSeries.setData([]);
       forceSeries.setData([]);
-      ptSpeedSeries.setData([]);
       forceTrendSeries.setData([]);
       regimeSeries.setData([]);
+      srlSeries.setData([]);
       closeSeries.setMarkers([]);
       rawLogs = [];
       rawLogEl.textContent = "";
@@ -460,13 +471,37 @@
       lastTime = t;
 
       const close = Number(row.Close);
+      const m_pc = Number(row.m_pc ?? 0);
       const hmmSignal = Number(row.HMM_Signal ?? 0);
       const m_force = Number(row.m_force);
       const regime = row.m_regime_noise_level ?? 0;
       const risk = row.bocpd_risk ?? 0.0;
       const order = row.order || null;
-      const m_pt_speed = Number(row.m_pt_speed);
+      const z_srl = Number(row.z_srl ?? 0);
       const m_force_trend = Number(row.m_force_trend);
+
+      const FORCE_MIN = 0.01;      // 你可以调
+      const Z_SRL_ON = 2.0;       // 违规阈值
+
+      const force_ok = Math.abs(m_force_trend) >= FORCE_MIN;
+      const srl_on = force_ok && (Math.abs(z_srl) >= Z_SRL_ON);
+
+
+      let srlValue = null;
+      let srlColor = "rgba(0,0,0,0)";
+
+      if (srl_on) {
+        srlValue = 1;
+
+        if (m_force > 0) {
+          srlColor = "rgba(14,165,233,0.85)";   // 正向快车道
+        } else {
+          srlColor = "rgba(244,114,182,0.85)";   // 反向快车道
+        }
+      } else {
+        srlValue = null;
+      }
+
 
       // =====================
       // 2) append（先加）
@@ -490,15 +525,13 @@
         value: hmmSignal === 1 ? 1 : null,
       });
 
+      srlSeries.update({
+        time: t,
+        value: srlValue,
+        color: srlColor,
+      });
+
       const forceColor = getForceColor(m_force);
-
-
-      const speedColor =
-        m_pt_speed >= 0
-          ? "rgba(34, 197, 94, 0.8)"
-          : "rgba(239, 68, 68, 0.8)";
-      ptSpeedData.push({ time: t, value: m_pt_speed, color: speedColor });
-
       forceTrendData.push({ time: t, value: m_force_trend });
 
       let regimeColor = "rgba(148, 163, 184, 0.8)";
@@ -512,7 +545,6 @@
       if (closeData.length > MAX_POINTS) {
         closeData = closeData.slice(-MAX_POINTS);
         forceData = forceData.slice(-MAX_POINTS);
-        ptSpeedData = ptSpeedData.slice(-MAX_POINTS);
         forceTrendData = forceTrendData.slice(-MAX_POINTS);
         regimeData = regimeData.slice(-MAX_POINTS);
 
@@ -544,19 +576,24 @@
       // =====================
       closeSeries.update({ time: t, value: close });
       forceSeries.update({ time: t, value: m_force, color: forceColor });
-      ptSpeedSeries.update({ time: t, value: m_pt_speed});
       forceTrendSeries.update({ time: t, value: m_force_trend });
       regimeSeries.update({ time: t, value: regime, color: regimeColor });
       closeSeries.setMarkers(orderMarkers);
 
       updateRiskLight(risk);
+      appendRawLog({
+        Date: row.Date,
+        z_srl: z_srl,
+        m_force_trend: m_force_trend,
+        force_ok: force_ok,
+        srl_on: srl_on,
+      });
     }
 
 
     function applyDataToSeries(isInitial = false) {
       closeSeries.setData(closeData);
       forceSeries.setData(forceData);
-      ptSpeedSeries.setData(ptSpeedData);
       forceTrendSeries.setData(forceTrendData);
       regimeSeries.setData(regimeData);
       closeSeries.setMarkers(orderMarkers);
@@ -636,12 +673,44 @@
           lastTime = t;
 
           const close = Number(row.Close);
+          const m_pc = Number(row.m_pc ?? 0);
           const hmmSignal = Number(row.HMM_Signal ?? 0);
           const m_force = Number(row.m_force);
-          const m_pt_speed = Number(row.m_pt_speed);
+          const z_srl = Number(row.z_srl ?? 0);
           const m_force_trend = Number(row.m_force_trend);
           const regime = row.m_regime_noise_level ?? 0;
           const order = row.order || null;
+
+          const FORCE_MIN = 0.01;
+          const Z_SRL_ON = 2.0;
+
+          const force_ok = Math.abs(m_force_trend) >= FORCE_MIN;
+          const srl_on = force_ok && (Math.abs(z_srl) >= Z_SRL_ON);
+
+          let srlValue = null;
+          let srlColor = "rgba(0,0,0,0)";
+
+          if (srl_on) {
+            srlValue = 1;
+            srlColor =
+              m_force > 0
+                ? "rgba(14,165,233,0.85)"
+                : "rgba(244,114,182,0.85)";
+          }
+
+          srlData.push({
+            time: t,
+            value: srlValue,
+            color: srlColor,
+          });
+
+          // batch debug (只印前 3 筆就好)
+          if (srlData.length > 0) {
+            console.log(
+              `[SRL batch] t=${row.Date} z_srl=${z_srl.toFixed(5)} force_trend=${m_force_trend.toFixed(5)} ` +
+              `force_ok=${force_ok} srl_on=${srl_on}`
+            );
+          }
 
           // close
           closeData.push({ time: t, value: close });
@@ -656,13 +725,6 @@
               ? "rgba(52, 211, 153, 0.8)"
               : "rgba(248, 113, 113, 0.8)";
           forceData.push({ time: t, value: m_force, color: forceColor });
-
-          // pt speed
-          const speedColor =
-            m_pt_speed >= 0
-              ? "rgba(34, 197, 94, 0.8)"
-              : "rgba(239, 68, 68, 0.8)";
-          ptSpeedData.push({ time: t, value: m_pt_speed});
 
           // force trend
           forceTrendData.push({ time: t, value: m_force_trend });
@@ -695,7 +757,7 @@
         closeSeries.setData(closeData);
         hmmBgSeries.setData(hmmBgData);
         forceSeries.setData(forceData);
-        ptSpeedSeries.setData(ptSpeedData);
+        srlSeries.setData(srlData);
         forceTrendSeries.setData(forceTrendData);
         regimeSeries.setData(regimeData);
         closeSeries.setMarkers(orderMarkers);
