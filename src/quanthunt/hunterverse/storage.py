@@ -23,7 +23,6 @@ class HuntingCamp:
     def __init__(self, strategy_param, sensor):
         self.strategy_param = strategy_param
         self.sensor = sensor
-        # self.file_path = config.reports_dir / f"{strategy_param}.csv"
         self.file_path = (
             config.data_dir
             / f"{strategy_param.symbol.name}_{strategy_param.interval}.csv"
@@ -47,9 +46,6 @@ class HuntingCamp:
         - Return the merged DataFrame.
         """
         base_df = self.load()
-        # base_df["HMM_State"] = np.nan
-        # base_df["UP_State"] = np.nan
-        # base_df["HMM_Signal"] = np.nan
 
         # Always scan new market data
         update_df = self.sensor.scan(2000 if not self.strategy_param.backtest else 100)

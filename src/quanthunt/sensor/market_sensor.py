@@ -1,5 +1,6 @@
 import pandas as pd
-from quanthunt.hunterverse.interface import IMarketSensor
+from pathlib import Path
+from quanthunt.hunterverse.interface import IMarketSensor, StrategyParam
 from quanthunt.utils import pandas_util
 import yfinance as yf
 import datetime
@@ -169,3 +170,135 @@ class HuobiMarketSensor(IMarketSensor):
 
     def left(self):
         return 1
+
+
+class StateMarketSensor(IMarketSensor):
+    """
+    State-aware incremental market sensor.
+
+    Compare:
+    - report/<symbol>_<interval>.csv  (strategy-known world)
+    - data/<symbol>_<interval>.csv    (market truth)
+
+    Return only unseen rows (by Date).
+    """
+
+    def __init__(self, symbol: str, interval: str, sp: StrategyParam):
+        super().__init__(symbol, interval)
+
+        self.sp = sp
+        self.date_col = "Date"
+
+        # === directories from config ===
+        self.data_dir = Path(config.data_dir)
+        self.report_dir = Path(config.reports_dir)
+
+        self.data_path = self.data_dir / f"{symbol}_{interval}.csv"
+        self.report_path = self.report_dir / f"{sp}.csv"
+
+        self._new_df: pd.DataFrame | None = None
+
+    # -------------------------------------------------
+    # Public API (align with LocalMarketSensor)
+    # -------------------------------------------------
+
+    def scan(self) -> pd.DataFrame:
+        """
+        Load report as base_df (already calculated world).
+        """
+        if not self.report_path.exists():
+            self._prepare_diff()
+            return self._new_df
+
+        report_df = pd.read_csv(self.report_path)
+        report_df[self.date_col] = pd.to_datetime(
+            report_df[self.date_col], errors="coerce"
+        )
+        report_df = report_df.dropna(subset=[self.date_col])
+        report_df = report_df.sort_values(self.date_col)
+        return report_df
+
+    def fetch(self, base_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Merge unseen market data into base_df.
+
+        Rules:
+        - If report/base_df is empty → directly return new data
+        - If no new data → return base_df unchanged
+        - Otherwise → append new data to base_df
+        """
+        print(f"def fetch(self, base_df: pd.DataFrame) -> pd.DataFrame:")
+        if self._new_df is None:
+            print(f"if self._new_df is None:")
+            self._prepare_diff()
+
+        # 沒有新資料，世界不前進
+        if self._new_df.empty:
+            print(f"if self._new_df.empty:")
+            return base_df
+
+        # cold start：report 原本就沒有東西
+        if base_df.empty:
+            print(f"if base_df.empty:")
+            return self._new_df.copy()
+
+        # 正常情況：append 新資料
+        print(f"pd.concat([base_df, self._new_df], ignore_index=True)")
+        return pd.concat([base_df, self._new_df], ignore_index=True)
+
+    def left(self) -> int:
+        if self._new_df is None:
+            self._prepare_diff()
+
+        return len(self._new_df)
+
+    # -------------------------------------------------
+    # Internal
+    # -------------------------------------------------
+
+    def _prepare_diff(self):
+        """
+        Compute data - report difference by Date.
+        """
+        if not self.data_path.exists():
+            raise FileNotFoundError(
+                f"[StateMarketSensor] data file not found: {self.data_path}"
+            )
+
+        # --- load market truth ---
+        data_df = pd.read_csv(self.data_path)
+        data_df[self.date_col] = pd.to_datetime(data_df[self.date_col], errors="coerce")
+        data_df = data_df.dropna(subset=[self.date_col])
+        data_df = data_df.sort_values(self.date_col)
+
+        # --- cold start ---
+        if not self.report_path.exists():
+            self._new_df = data_df.reset_index(drop=True)
+            return
+
+        # --- load strategy-known world ---
+        report_df = pd.read_csv(self.report_path)
+        report_df[self.date_col] = pd.to_datetime(
+            report_df[self.date_col], errors="coerce"
+        )
+        report_df = report_df.dropna(subset=[self.date_col])
+        report_df = report_df.sort_values(self.date_col)
+
+        if report_df.empty:
+            self._new_df = data_df.reset_index(drop=True)
+            return
+
+        last_seen_date = report_df[self.date_col].max()
+        max_data_date = data_df[self.date_col].max()
+
+        # --- hard guard ---
+        if last_seen_date > max_data_date:
+            raise RuntimeError(
+                f"[StateMarketSensor] report ahead of data: "
+                f"report={last_seen_date}, data={max_data_date}"
+            )
+
+        # --- causal diff ---
+        new_df = data_df[data_df[self.date_col] > last_seen_date]
+
+        self._new_df = new_df.reset_index(drop=True)

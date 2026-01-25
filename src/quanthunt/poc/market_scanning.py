@@ -24,18 +24,17 @@ from huobi.client.generic import GenericClient
 from huobi.utils import *
 from huobi.constant import *
 from quanthunt.utils import pandas_util
-from quanthunt.hunterverse.interface import Symbol, DUMP_COL
+from quanthunt.hunterverse.interface import Symbol, DUMP_COL, StrategyParam
 from config import config
 from quanthunt.sensor.market_sensor import (
     HuobiMarketSensor,
     YahooMarketSensor,
-    LocalMarketSensor,
+    StateMarketSensor,
 )
 from quanthunt.strategy.turtle_trading import (
     TurtleScout,
     buy_signal_from_mosaic_strategy,
 )
-from quanthunt.hunterverse.interface import StrategyParam
 
 DATA_DIR, SRC_DIR, REPORTS_DIR = config.data_dir, config.src_dir, config.reports_dir
 
@@ -2005,36 +2004,36 @@ def main(market, symbol, interval, show, backtest):
         # symbols = [symbol] if symbol else fast_scanning()
         symbols = [
             "dogeusdt",
-            "nftusdt",
-            "kiteusdt",
-            "bobbscusdt",
-            "linkusdt",
-            "trxusdt",
-            "ethusdt",
-            "btcusdt",
-            "wmtxusdt",
-            "xdcusdt",
-            "bchusdt",
-            "daiusdt",
-            "fartcoinusdt",
-            "chzusdt",
-            "apepeusdt",
-            "xlmusdt",
-            "usdcusdt",
-            "monadusdt",
-            "xrpusdt",
-            "xautusdt",
-            "adausdt",
-            "filusdt",
-            "ltcusdt",
-            "wbtusdt",
-            "bnbusdt",
-            "pepeusdt",
-            "suiusdt",
-            "hbarusdt",
-            "tonusdt",
-            "usdqusdt",
-            "solusdt",
+            # "nftusdt",
+            # "kiteusdt",
+            # "bobbscusdt",
+            # "linkusdt",
+            # "trxusdt",
+            # "ethusdt",
+            # "btcusdt",
+            # "wmtxusdt",
+            # "xdcusdt",
+            # "bchusdt",
+            # "daiusdt",
+            # "fartcoinusdt",
+            # "chzusdt",
+            # "apepeusdt",
+            # "xlmusdt",
+            # "usdcusdt",
+            # "monadusdt",
+            # "xrpusdt",
+            # "xautusdt",
+            # "adausdt",
+            # "filusdt",
+            # "ltcusdt",
+            # "wbtusdt",
+            # "bnbusdt",
+            # "pepeusdt",
+            # "suiusdt",
+            # "hbarusdt",
+            # "tonusdt",
+            # "usdqusdt",
+            # "solusdt",
         ]
         sample = 240 * 3  # 3 years
 
@@ -2063,14 +2062,20 @@ def perform_backtest(symbols, interval):
             "secret_key": secret_key,
             "atr_loss_margin": 1.2,
             "hmm_model": "trend",
+            "task_id": "offline_update",
         }
 
         sp = pandas_util.build_strategy_param(overrides)
-        sensor = LocalMarketSensor(symbol=sp.symbol, interval=sp.interval)
-        base_df = sensor.scan(1000)
+        sensor = StateMarketSensor(symbol=sp.symbol, interval=sp.interval, sp=sp)
+        base_df = sensor.scan()
+        print(sensor)
+        print(f"head: {base_df.head()}")
         scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
         try:
+            print(f"tail: {base_df.tail()}")
+            print(f"left: {sensor.left()}")
             base_df = scout.train(base_df)
+
             while sensor.left():
                 base_df = sensor.fetch(base_df)
                 base_df = scout.market_recon(base_df)
