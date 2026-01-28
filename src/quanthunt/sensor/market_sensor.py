@@ -290,7 +290,7 @@ class StateMarketSensor(IMarketSensor):
 
         # --- causal diff ---
         new_df = data_df[data_df["Date"] > last_seen_date]
-        print("*" * 100)
-        print(new_df)
-        print("*" * 100)
+        # print("*" * 100)
+        # print(new_df)
+        # print("*" * 100)
         self._new_df = new_df.reset_index(drop=True)

@@ -2000,36 +2000,36 @@ def main(market, symbol, interval, show, backtest):
         # symbols = [symbol] if symbol else fast_scanning()
         symbols = [
             "dogeusdt",
-            # "nftusdt",
-            # "kiteusdt",
-            # "bobbscusdt",
-            # "linkusdt",
-            # "trxusdt",
-            # "ethusdt",
-            # "btcusdt",
-            # "wmtxusdt",
-            # "xdcusdt",
-            # "bchusdt",
-            # "daiusdt",
-            # "fartcoinusdt",
-            # "chzusdt",
-            # "apepeusdt",
-            # "xlmusdt",
-            # "usdcusdt",
-            # "monadusdt",
-            # "xrpusdt",
-            # "xautusdt",
-            # "adausdt",
-            # "filusdt",
-            # "ltcusdt",
-            # "wbtusdt",
-            # "bnbusdt",
-            # "pepeusdt",
-            # "suiusdt",
-            # "hbarusdt",
-            # "tonusdt",
-            # "usdqusdt",
-            # "solusdt",
+            "nftusdt",
+            "kiteusdt",
+            "bobbscusdt",
+            "linkusdt",
+            "trxusdt",
+            "ethusdt",
+            "btcusdt",
+            "wmtxusdt",
+            "xdcusdt",
+            "bchusdt",
+            "daiusdt",
+            "fartcoinusdt",
+            "chzusdt",
+            "apepeusdt",
+            "xlmusdt",
+            "usdcusdt",
+            "monadusdt",
+            "xrpusdt",
+            "xautusdt",
+            "adausdt",
+            "filusdt",
+            "ltcusdt",
+            "wbtusdt",
+            "bnbusdt",
+            "pepeusdt",
+            "suiusdt",
+            "hbarusdt",
+            "tonusdt",
+            "usdqusdt",
+            "solusdt",
         ]
         sample = 240 * 3  # 3 years
 
@@ -2045,7 +2045,7 @@ def main(market, symbol, interval, show, backtest):
 
 
 def perform_backtest(symbols, interval):
-    result = {}
+    signal_rows = []
     for code in symbols:
         print(f"GO [{code} {interval}]")
         overrides = {
@@ -2065,35 +2065,25 @@ def perform_backtest(symbols, interval):
         sensor = StateMarketSensor(symbol=sp.symbol, interval=sp.interval, sp=sp)
         base_df = sensor.scan()
         scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
-
-        base_df = scout.train(base_df)
-        base_df = sensor.fetch(base_df)
-        base_df = scout.market_recon(base_df)
-        csv_path = f"{config.reports_dir}/{sp}.csv"
-        base_df["symbol"] = code
-
-        # cutting = len(sensor.test_df)
-        # base_df[cutting:][DUMP_COL].to_csv(csv_path, index=False)
-        print(base_df[DEBUG_COL][-50:])
-        base_df[DUMP_COL].to_csv(csv_path, index=False)
-        # base_df[int(len(base_df) / 2) :][DUMP_COL].to_csv(csv_path, index=False)
-        print(f"CSV created: {csv_path}")
-
-        # try:
-        #     print(f"left: {sensor.left()}")
-        #     base_df = scout.train(base_df)
-        #     base_df = sensor.fetch(base_df)
-        #     base_df = scout.market_recon(base_df)
-        #     print(base_df[DUMP_COL].tail())
-        #     csv_path = f"{config.reports_dir}/{sp}.csv"
-        #     base_df["symbol"] = code
-        #     # cutting = len(sensor.test_df)
-        #     # base_df[cutting:][DUMP_COL].to_csv(csv_path, index=False)
-        #     base_df[DUMP_COL].to_csv(csv_path, index=False)
-        #     # base_df[int(len(base_df) / 2) :][DUMP_COL].to_csv(csv_path, index=False)
-        #     print(f"CSV created: {csv_path}")
-        # except Exception as e:
-        #     print(f"[{code}] not running correctly: {e}")
+        try:
+            base_df = scout.train(base_df)
+            base_df = sensor.fetch(base_df)
+            base_df = scout.market_recon(base_df)
+            print(base_df[DUMP_COL].tail())
+            csv_path = f"{config.reports_dir}/{sp}.csv"
+            base_df["symbol"] = code
+            base_df[DUMP_COL].to_csv(csv_path, index=False)
+            print(f"CSV created: {csv_path}")
+            last_row = base_df.iloc[-1]
+            if last_row["BuySignal"] == 1 and last_row["HMM_Signal"] == 1:
+                signal_rows.append(last_row)
+                print(base_df[DEBUG_COL][-50:])
+        except Exception as e:
+            print(f"[{code}] not running correctly: {e}")
+    signal_df = pd.DataFrame(signal_rows).reset_index(drop=True)
+    if not signal_df.empty:
+        print(signal_df[DEBUG_COL])
+    return signal_df
 
 
 def performance_review(backtest_results):
