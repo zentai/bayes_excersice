@@ -6,6 +6,9 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Protocol, Dict, Any, Tuple, Optional
 from quanthunt.config.core_config import config
+from quanthunt.hunterverse.interface import StrategyParam
+import json
+import os
 
 ZERO = config.zero
 
@@ -94,14 +97,76 @@ class BaseStateSpaceEngine:
 
 
 # ============================================================
-# kalman state initialization
+# kalman state helper
 # ============================================================
 
 
-def init_kalman_state(init_pc: float = 1.0):
-    if init_pc <= 0 or not np.isfinite(init_pc):
-        raise ValueError("init_pc must be positive")
+def _ndarray_to_list(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
+
+def _list_to_ndarray(obj):
+    if isinstance(obj, list):
+        return np.array(obj)
+    return obj
+
+
+def _serialize_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: _ndarray_to_list(v) for k, v in state.items()}
+
+
+def _deserialize_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: _list_to_ndarray(v) for k, v in state.items()}
+
+
+# ============================================================
+# core resolver
+# ============================================================
+
+
+def resolve_kalman_state(
+    *,
+    sp: StrategyParam,
+    init_pc: float,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Resolve kalman (state, cov) for this StrategyParams.
+
+    Priority:
+      1. load persisted state if exists
+      2. otherwise build fresh via init_kalman_state
+
+    Persistence path:
+      {config.data_dir}/kalman/{sp}.json
+    """
+
+    if init_pc <= 0 or not np.isfinite(init_pc):
+        raise ValueError("init_pc must be positive and finite")
+
+    kalman_dir = os.path.join(config.data_dir, "kalman")
+    os.makedirs(kalman_dir, exist_ok=True)
+
+    path = os.path.join(kalman_dir, f"{sp}.json")
+
+    # ---------- load ----------
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                payload = json.load(f)
+
+            state = _deserialize_state(payload["state"])
+            cov = {k: np.array(v) for k, v in payload["cov"].items()}
+            print(f"Kalman loaded: {path}")
+            return state, cov
+
+        except Exception as e:
+            # corrupted / incompatible → fall back to fresh
+            print(f"[kalman] failed to load state, rebuild fresh: {e}")
+
+    # ---------- fresh build ----------
+    print(f"Fresh Kalman created")
     state = {
         # Price subspace
         "pc": np.log(float(init_pc)),
@@ -124,6 +189,30 @@ def init_kalman_state(init_pc: float = 1.0):
     }
 
     return state, cov
+
+
+def save_kalman_state(
+    *,
+    sp: StrategyParam,
+    state: Dict[str, Any],
+    cov: Dict[str, Any],
+):
+    kalman_dir = os.path.join(config.data_dir, "kalman")
+    os.makedirs(kalman_dir, exist_ok=True)
+
+    path = os.path.join(kalman_dir, f"{sp}.json")
+
+    payload = {
+        "state": _serialize_state(state),
+        "cov": {k: v.tolist() for k, v in cov.items()},
+    }
+
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(payload, f)
+
+    os.replace(tmp, path)  # atomic
+    print(f"Kalman saved: {path}")
 
 
 # ============================================================

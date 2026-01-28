@@ -76,10 +76,11 @@ class HuntingStory:
         while self.sensor.left():
             try:
                 k = self.sensor.fetch_one()
-                dispatcher.send(signal="k_channel", message=k)
-                if self.stop_flag.is_set():
-                    print("Stop fetching market data... (stop flag is set)")
-                    break
+                if not k.empty:
+                    dispatcher.send(signal="k_channel", message=k)
+                    if self.stop_flag.is_set():
+                        print("Stop fetching market data... (stop flag is set)")
+                        break
                 hunter_pause(self.params.interval)
             except Exception as e:
                 print(f"Error in pub_market_sensor: {e}")

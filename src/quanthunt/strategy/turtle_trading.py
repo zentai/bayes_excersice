@@ -15,7 +15,8 @@ from quanthunt.strategy.algo_util.performance import (
     train_test_split_by_time,
 )
 from quanthunt.strategy.algo_util.kalman import (
-    init_kalman_state,
+    resolve_kalman_state,
+    save_kalman_state,
     mosaic_step,
     build_kalman_params,
     prepare_mosaic_input,
@@ -73,6 +74,7 @@ TURTLE_COLUMNS = [
     "m_force_trend",
     "m_force_bias",
     "m_z_price",
+    "m_p_price",
     "m_z_force",
     "m_z_mix",
     "m_regime_noise_level",
@@ -143,11 +145,14 @@ class TurtleScout(IStrategyScout):
         df = prepare_mosaic_input(df)
 
         # Initiallize Mosaic/Cycle Kalman filter
-        start_idx = df.index[df["m_pc"].isna()][0]
+        na_idx = df.index[df["m_pc"].isna()]
+        start_idx = 0 if len(na_idx) == 0 else na_idx[0]
         if not (self.kalman_state and self.kalman_Cov):
-            self.kalman_state, self.kalman_Cov = init_kalman_state(
-                init_pc=df.loc[start_idx, "Close"]
+            self.kalman_state, self.kalman_Cov = resolve_kalman_state(
+                sp=self.params,
+                init_pc=df.loc[start_idx, "Close"],
             )
+
             self.m_params, self.m_regime_params = build_kalman_params()
             self.m_force_model = MosaicForceAdapter(self.m_params["force"])
             self.m_price_model = MosaicPriceAdapter(self.m_params["price"])
@@ -193,6 +198,11 @@ class TurtleScout(IStrategyScout):
             df.loc[i, "srl_eff"] = diag.get("srl_eff", np.nan)
             df.loc[i, "z_srl"] = diag.get("z_srl", np.nan)
 
+        save_kalman_state(
+            sp=self.params,
+            state=self.kalman_state,
+            cov=self.kalman_Cov,
+        )
         return df
 
     def train_hmm(self, df: pd.DataFrame, reset=False) -> pd.DataFrame:
@@ -237,7 +247,6 @@ class TurtleScout(IStrategyScout):
 
         self.scaler.fit(X)
         X = self.scaler.transform(X)
-
         self.hmm_model.fit(X)
         hidden_states = self.hmm_model.predict(X)
 

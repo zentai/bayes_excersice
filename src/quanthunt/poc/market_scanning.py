@@ -24,7 +24,7 @@ from huobi.client.generic import GenericClient
 from huobi.utils import *
 from huobi.constant import *
 from quanthunt.utils import pandas_util
-from quanthunt.hunterverse.interface import Symbol, DUMP_COL, StrategyParam
+from quanthunt.hunterverse.interface import Symbol, DUMP_COL, DEBUG_COL, StrategyParam
 from config import config
 from quanthunt.sensor.market_sensor import (
     HuobiMarketSensor,
@@ -1919,10 +1919,6 @@ def download_data(IMarketSensorImp, ccy, interval, sample, show=False):
     camp = HuntingCamp(sp, IMarketSensorImp(symbol=sp.symbol, interval=interval))
     base_df = camp.update()
     camp.save(base_df)
-
-    import time
-
-    time.sleep(3)
     return base_df
 
 
@@ -2054,8 +2050,8 @@ def perform_backtest(symbols, interval):
         print(f"GO [{code} {interval}]")
         overrides = {
             "interval": interval,
-            "funds": 100,
-            "stake_cap": 100,
+            "funds": 1000.0,
+            "stake_cap": 100.0,
             "symbol": Symbol(code),
             "hmm_split": 4,
             "api_key": api_key,
@@ -2068,26 +2064,36 @@ def perform_backtest(symbols, interval):
         sp = pandas_util.build_strategy_param(overrides)
         sensor = StateMarketSensor(symbol=sp.symbol, interval=sp.interval, sp=sp)
         base_df = sensor.scan()
-        print(sensor)
-        print(f"head: {base_df.head()}")
         scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
-        try:
-            print(f"tail: {base_df.tail()}")
-            print(f"left: {sensor.left()}")
-            base_df = scout.train(base_df)
 
-            while sensor.left():
-                base_df = sensor.fetch(base_df)
-                base_df = scout.market_recon(base_df)
+        base_df = scout.train(base_df)
+        base_df = sensor.fetch(base_df)
+        base_df = scout.market_recon(base_df)
+        csv_path = f"{config.reports_dir}/{sp}.csv"
+        base_df["symbol"] = code
 
-            csv_path = f"{config.reports_dir}/{sp}.csv"
-            base_df["symbol"] = code
-            cutting = len(sensor.test_df)
-            base_df[cutting:][DUMP_COL].to_csv(csv_path, index=False)
-            # base_df[int(len(base_df) / 2) :][DUMP_COL].to_csv(csv_path, index=False)
-            print(f"CSV created: {csv_path}")
-        except Exception as e:
-            print(f"[{code}] not running correctly: {e}")
+        # cutting = len(sensor.test_df)
+        # base_df[cutting:][DUMP_COL].to_csv(csv_path, index=False)
+        print(base_df[DEBUG_COL][-50:])
+        base_df[DUMP_COL].to_csv(csv_path, index=False)
+        # base_df[int(len(base_df) / 2) :][DUMP_COL].to_csv(csv_path, index=False)
+        print(f"CSV created: {csv_path}")
+
+        # try:
+        #     print(f"left: {sensor.left()}")
+        #     base_df = scout.train(base_df)
+        #     base_df = sensor.fetch(base_df)
+        #     base_df = scout.market_recon(base_df)
+        #     print(base_df[DUMP_COL].tail())
+        #     csv_path = f"{config.reports_dir}/{sp}.csv"
+        #     base_df["symbol"] = code
+        #     # cutting = len(sensor.test_df)
+        #     # base_df[cutting:][DUMP_COL].to_csv(csv_path, index=False)
+        #     base_df[DUMP_COL].to_csv(csv_path, index=False)
+        #     # base_df[int(len(base_df) / 2) :][DUMP_COL].to_csv(csv_path, index=False)
+        #     print(f"CSV created: {csv_path}")
+        # except Exception as e:
+        #     print(f"[{code}] not running correctly: {e}")
 
 
 def performance_review(backtest_results):
@@ -2095,7 +2101,6 @@ def performance_review(backtest_results):
     df = pd.DataFrame(list(backtest_results.items()), columns=["Stock", "Return"])
     df.to_csv(f"{REPORTS_DIR}/backtest.csv", index=False)
     df = df[df.Return != 0]
-    print(df[:60])
 
     # 总体表现
     average_return = df["Return"].mean()

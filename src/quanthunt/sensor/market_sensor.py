@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from quanthunt.hunterverse.interface import IMarketSensor, StrategyParam
+from quanthunt.hunterverse.interface import IMarketSensor, StrategyParam, DEBUG_COL
 from quanthunt.utils import pandas_util
 import yfinance as yf
 import datetime
@@ -145,11 +145,16 @@ class LocalMarketSensor(IMarketSensor):
 
 
 class HuobiMarketSensor(IMarketSensor):
+    def __init__(self, symbol, interval):
+        super().__init__(symbol, interval)
+        self.last_published = None
+
     def scan(self, limits):
         df = pandas_util.load_symbols_from_huobi(self.symbol, limits, self.interval)
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.dropna(subset=["Date"])
-        return df[:-2]
+        self.last_published = df.iloc[-2].Date
+        return df[:-1]  # because the last raw still process
 
     def fetch_one(self):
         new_data = pandas_util.get_history_stick(
@@ -158,6 +163,8 @@ class HuobiMarketSensor(IMarketSensor):
         columns = new_data.columns
         new_data = new_data.iloc[1]
         new_data["Matured"] = pd.NaT
+        if self.last_published == new_data.Date:
+            return pd.DataFrame([], columns=columns)
         return pd.DataFrame([new_data], columns=columns)
 
     def fetch(self, base_df):
@@ -187,7 +194,6 @@ class StateMarketSensor(IMarketSensor):
         super().__init__(symbol, interval)
 
         self.sp = sp
-        self.date_col = "Date"
 
         # === directories from config ===
         self.data_dir = Path(config.data_dir)
@@ -211,11 +217,9 @@ class StateMarketSensor(IMarketSensor):
             return self._new_df
 
         report_df = pd.read_csv(self.report_path)
-        report_df[self.date_col] = pd.to_datetime(
-            report_df[self.date_col], errors="coerce"
-        )
-        report_df = report_df.dropna(subset=[self.date_col])
-        report_df = report_df.sort_values(self.date_col)
+        report_df["Date"] = pd.to_datetime(report_df["Date"], errors="coerce")
+        report_df = report_df.dropna(subset=["Date"])
+        report_df = report_df.sort_values("Date")
         return report_df
 
     def fetch(self, base_df: pd.DataFrame) -> pd.DataFrame:
@@ -227,23 +231,17 @@ class StateMarketSensor(IMarketSensor):
         - If no new data → return base_df unchanged
         - Otherwise → append new data to base_df
         """
-        print(f"def fetch(self, base_df: pd.DataFrame) -> pd.DataFrame:")
-        if self._new_df is None:
-            print(f"if self._new_df is None:")
-            self._prepare_diff()
+        self._prepare_diff(base_df)
 
         # 沒有新資料，世界不前進
         if self._new_df.empty:
-            print(f"if self._new_df.empty:")
             return base_df
 
         # cold start：report 原本就沒有東西
         if base_df.empty:
-            print(f"if base_df.empty:")
             return self._new_df.copy()
 
         # 正常情況：append 新資料
-        print(f"pd.concat([base_df, self._new_df], ignore_index=True)")
         return pd.concat([base_df, self._new_df], ignore_index=True)
 
     def left(self) -> int:
@@ -256,7 +254,7 @@ class StateMarketSensor(IMarketSensor):
     # Internal
     # -------------------------------------------------
 
-    def _prepare_diff(self):
+    def _prepare_diff(self, report_df=pd.DataFrame()):
         """
         Compute data - report difference by Date.
         """
@@ -267,29 +265,21 @@ class StateMarketSensor(IMarketSensor):
 
         # --- load market truth ---
         data_df = pd.read_csv(self.data_path)
-        data_df[self.date_col] = pd.to_datetime(data_df[self.date_col], errors="coerce")
-        data_df = data_df.dropna(subset=[self.date_col])
-        data_df = data_df.sort_values(self.date_col)
-
-        # --- cold start ---
-        if not self.report_path.exists():
-            self._new_df = data_df.reset_index(drop=True)
-            return
+        data_df["Date"] = pd.to_datetime(data_df["Date"], errors="coerce")
+        data_df = data_df.dropna(subset=["Date"])
+        data_df = data_df.sort_values("Date")
 
         # --- load strategy-known world ---
-        report_df = pd.read_csv(self.report_path)
-        report_df[self.date_col] = pd.to_datetime(
-            report_df[self.date_col], errors="coerce"
-        )
-        report_df = report_df.dropna(subset=[self.date_col])
-        report_df = report_df.sort_values(self.date_col)
-
         if report_df.empty:
             self._new_df = data_df.reset_index(drop=True)
             return
 
-        last_seen_date = report_df[self.date_col].max()
-        max_data_date = data_df[self.date_col].max()
+        report_df["Date"] = pd.to_datetime(report_df["Date"], errors="coerce")
+        report_df = report_df.dropna(subset=["Date"])
+        report_df = report_df.sort_values("Date")
+
+        last_seen_date = report_df["Date"].max()
+        max_data_date = data_df["Date"].max()
 
         # --- hard guard ---
         if last_seen_date > max_data_date:
@@ -299,6 +289,8 @@ class StateMarketSensor(IMarketSensor):
             )
 
         # --- causal diff ---
-        new_df = data_df[data_df[self.date_col] > last_seen_date]
-
+        new_df = data_df[data_df["Date"] > last_seen_date]
+        print("*" * 100)
+        print(new_df)
+        print("*" * 100)
         self._new_df = new_df.reset_index(drop=True)
