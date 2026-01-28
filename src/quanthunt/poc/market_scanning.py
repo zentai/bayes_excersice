@@ -14,6 +14,7 @@ from quanthunt.strategy.turtle_trading import (
     TurtleScout,
     buy_signal_from_mosaic_strategy,
 )
+from quanthunt.utils.telegram_helper import telegram_msg
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pathlib import Path
@@ -2041,7 +2042,13 @@ def main(market, symbol, interval, show, backtest):
     }
 
     if backtest:
-        perform_backtest(symbols, interval)
+        signal_df = perform_backtest(symbols, interval)
+        if not signal_df.empty:
+            telegram_msg(
+                signal_df[
+                    ["symbol", "BuySignal", "ShortSignal", "m_regime_noise_level"]
+                ].to_markdown()
+            )
 
 
 def perform_backtest(symbols, interval):
@@ -2064,25 +2071,32 @@ def perform_backtest(symbols, interval):
         sp = pandas_util.build_strategy_param(overrides)
         sensor = StateMarketSensor(symbol=sp.symbol, interval=sp.interval, sp=sp)
         base_df = sensor.scan()
+        base_df["symbol"] = code
         scout = TurtleScout(params=sp, buy_signal_func=buy_signal_from_mosaic_strategy)
         try:
             base_df = scout.train(base_df)
             base_df = sensor.fetch(base_df)
             base_df = scout.market_recon(base_df)
-            print(base_df[DUMP_COL].tail())
             csv_path = f"{config.reports_dir}/{sp}.csv"
-            base_df["symbol"] = code
             base_df[DUMP_COL].to_csv(csv_path, index=False)
             print(f"CSV created: {csv_path}")
             last_row = base_df.iloc[-1]
-            if last_row["BuySignal"] == 1 and last_row["HMM_Signal"] == 1:
+            if last_row["BuySignal"] == 1 and (
+                last_row["HMM_Signal"] == 1 or last_row["ShortSignal"] == 1
+            ):
+                last_row["symbol"] = code
                 signal_rows.append(last_row)
-                print(base_df[DEBUG_COL][-50:])
+                print(base_df[DEBUG_COL][-10:])
         except Exception as e:
             print(f"[{code}] not running correctly: {e}")
+        base_df["symbol"] = code
     signal_df = pd.DataFrame(signal_rows).reset_index(drop=True)
     if not signal_df.empty:
-        print(signal_df[DEBUG_COL])
+        print(
+            signal_df[
+                ["Date", "symbol", "BuySignal", "ShortSignal", "m_regime_noise_level"]
+            ].to_markdown()
+        )
     return signal_df
 
 
